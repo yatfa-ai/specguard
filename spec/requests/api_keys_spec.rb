@@ -60,24 +60,38 @@ RSpec.describe "Repository API keys (web)", type: :request do
   describe "revoking (DELETE /repositories/:id/api_keys/:key_id)" do
     let!(:ci_key) { repository.api_keys.create!(name: "CI") }
 
-    # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "revoke as owner", "behavior": "the owner's delete removes the key and redirects to the repository page", "layer": "request"}
-    it "revokes the key for the owner" do
+    # SPGD-804 made revocation a RETIREMENT: the row is retained and stamped `revoked_at` rather
+    # than destroyed, because a retained row is the artifact a refused presentation is attributed
+    # to (see `Api::BaseController#attribute_refused_revocation`) — a hard delete had left a
+    # 401ing pipeline reading "Not connected yet". These two examples pin the fork the way the
+    # deleted-row reading used to: the row survives, the token dies, and the redirect and notice
+    # are exactly what they always were.
+    #
+    # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "revoke as owner", "behavior": "the owner's delete retires the key — row retained, revoked_at stamped, token dead — and redirects to the repository page with the revocation notice", "layer": "request"}
+    it "retires the key for the owner, keeping the row" do
+      revoked_token = ci_key.raw_token
+
       expect {
         delete repository_api_key_path(repository, ci_key)
-      }.to change(ApiKey, :count).by(-1)
+      }.not_to change(ApiKey, :count)
 
       expect(response).to redirect_to(repository_path(repository))
+      expect(flash[:notice]).to eq("API key revoked.")
+      expect(ci_key.reload.revoked_at).to be_present
+      expect(ApiKey.authenticate(revoked_token)).to be_nil
     end
 
-    # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "revoke with keys.manage", "behavior": "a member holding view and keys.manage removes the key, the count dropping by one", "layer": "request"}
-    it "revokes the key for a member granted keys.manage" do
+    # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "revoke with keys.manage", "behavior": "a member holding view and keys.manage retires the key the same way — the count is unchanged and revoked_at is stamped", "layer": "request"}
+    it "retires the key for a member granted keys.manage" do
       member = create_user(github_uid: "9999", github_handle: "hubot")
       create_membership(repository: repository, user: member, permissions: %w[view keys.manage])
       sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
 
       expect {
         delete repository_api_key_path(repository, ci_key)
-      }.to change(ApiKey, :count).by(-1)
+      }.not_to change(ApiKey, :count)
+
+      expect(ci_key.reload).to be_revoked
     end
 
     # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "refuse view-only member", "behavior": "a member with only view gets 403 and the key survives", "layer": "request"}

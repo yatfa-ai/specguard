@@ -371,6 +371,10 @@ class MembershipsController < ApplicationController
     return {} unless repository_policy(repository).can?(:keys_manage)
     return {} if user_ids.empty?
 
-    repository.api_keys.where(created_by_user_id: user_ids).group(:created_by_user_id).count
+    # LIVE keys only (SPGD-804): a revoked row is retained, and counting it here would tell the
+    # owner — twice, on the page and in the revoke dialog — that a member "minted 3 keys" that
+    # keep authenticating when all 3 have been retired. The badge's premise is a key that will
+    # SURVIVE the membership revocation, and a revoked key is not one.
+    repository.api_keys.live.where(created_by_user_id: user_ids).group(:created_by_user_id).count
   end
 end

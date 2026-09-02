@@ -59,10 +59,13 @@
       it (the wire-up panel below, and the API keys table).
 
       Cost, precisely: nothing, for either viewer class. `@api_keys` is an Array — the controller
-      materialises it with `to_a` because the connection indicator derives two figures and the
-      stranded set from those same rows — so this is `Array#any?`, not a SELECT, however many
-      panels ask. It reads like a query and is not one, which is the only reason worth restating
-      that it is still asked once here rather than inline in both panels.
+      materialises it with `to_a` because the connection indicator derives its figures, the
+      stranded set and the revoked set from those same rows — so this is `Array#any?`, not a
+      SELECT, however many panels ask. It reads like a query and is not one, which is the only
+      reason worth restating that it is still asked once here rather than inline in both panels.
+      Since SPGD-804 the controller partitions that one loaded collection into live and revoked
+      rows, and `@api_keys` names the LIVE half: this question is "is there a key CI can
+      authenticate with", and a retired row must not answer it.
 
       SPGD-614 repriced this paragraph rather than editing around it. It used to describe `.any?`
       on an UNLOADED relation, where the question really was a round trip, and it priced a

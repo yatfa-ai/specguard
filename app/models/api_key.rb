@@ -29,11 +29,19 @@ class ApiKey < ApplicationRecord
 
   belongs_to :repository
 
-  # Who minted the key, recorded at create time — attribution is not recoverable afterwards, since
-  # revoking a key deletes the row outright. `optional` on purpose: a key outlives the person who
-  # minted it (see `User has_many :created_api_keys, dependent: :nullify`), and keys minted before
-  # this column existed, or through any non-UI path, legitimately have no creator.
+  # Who minted the key, recorded at create time — attribution outlives every later event on the row
+  # (see `revoke!`, which retires a key without deleting it). `optional` on purpose: a key outlives
+  # the person who minted it (see `User has_many :created_api_keys, dependent: :nullify`), and keys
+  # minted before this column existed, or through any non-UI path, legitimately have no creator.
   belongs_to :created_by_user, class_name: "User", optional: true
+
+  # The retirement split, named once and used everywhere a caller needs one side of it. NO
+  # `default_scope` — the distinction exists precisely so each reader can pick a side and say so,
+  # and a default would silently flip `authenticate`, `MembershipsController#keys_minted_by` and
+  # every future reader without any of them naming the choice. `revoked_at` is written by `revoke!`
+  # and never cleared: a revoked key cannot come back.
+  scope :live, -> { where(revoked_at: nil) }
+  scope :revoked, -> { where.not(revoked_at: nil) }
 
   # Populated by whichever request minted the current token — `create`, or `regenerate!`. `nil` on
   # every record loaded from the database.
@@ -50,10 +58,16 @@ class ApiKey < ApplicationRecord
 
   # Resolve a Bearer token to its key. O(1) on the unique digest index — the raw token is never
   # compared against anything, only its digest is looked up.
+  #
+  # `live` only, and that is the security half of the retirement: `revoke!` keeps the row (so a
+  # revoked token stays attributable), which means the row would otherwise keep resolving. The
+  # filter rides the same `find_by` — still one indexed read on the unique digest index, and still
+  # the ONLY resolution site for a repository credential (verified by grep: the sole caller is
+  # `Api::BaseController#authenticate_api_key!`).
   def self.authenticate(token)
     return nil if token.blank?
 
-    find_by(token_digest: digest(token))
+    live.find_by(token_digest: digest(token))
   end
 
   # Rotate this key in place: fresh token, same row. Name, `created_by_user`, `created_at` and
@@ -88,6 +102,53 @@ class ApiKey < ApplicationRecord
 
   def touch_last_used!
     update_column(:last_used_at, Time.current)
+  end
+
+  # Retire this key: the token stops authenticating, and the ROW STAYS. The replacement for the
+  # `destroy!` this method retired, and the reason it exists is attribution: a hard delete made a
+  # revoked token's 401 unreportable — `authenticate` resolving nothing leaves nothing to attach a
+  # record to, so a pipeline presenting the dead token read "Not connected yet" on a page that had
+  # no way to know why. Keeping the row keeps the artifact the failure path needs (see
+  # `Api::BaseController`, which stamps `last_refused_at` on exactly this row), and keeps the
+  # repository's key history truthful instead of amputated.
+  #
+  # `update_column` rather than `save!`, exactly as `touch_last_used!` does: revocation is a stamp
+  # on the row's existing state, not a validation event, and it must not be able to fail on a
+  # validation this gesture does not carry. Idempotent — a replayed DELETE re-stamps, which is
+  # unobservable, because the button is rendered only on live keys.
+  #
+  # `revoked_at` is never cleared by anything: there is no un-revoke, and a token that was retired
+  # once can never authenticate again (`authenticate` filters to `live`).
+  def revoke!
+    update_column(:revoked_at, Time.current)
+    self
+  end
+
+  # Whether THIS row has been retired. Read by every consumer that must see live keys only —
+  # `RepositoriesController#show`'s partition, `RepositoryOverview#serialized_credential_health`,
+  # the "minted N keys" badge — via the `live`/`revoked` scopes at the SQL layer and this predicate
+  # once the rows are loaded.
+  def revoked?
+    revoked_at.present?
+  end
+
+  # Whether a client is STILL PRESENTING this retired token — the platform has seen the digest it
+  # carries arrive and be refused since `revoke!` stamped the retirement.
+  #
+  # The epistemics are the same as `rotated_and_unused?`'s, read in the other direction: there is
+  # no ordering question here (a refusal can only be stamped on an already-revoked row, so the
+  # stamp always postdates the revocation) and there is no recovery — a revoked token never
+  # authenticates again, so the state has no window to clear and no threshold to cross. What the
+  # pair cannot prove is that a client is presenting the token AT THIS MOMENT: `last_refused_at` is
+  # the last time the platform saw it, so a pipeline that gave up hours ago reads the same as one
+  # presenting right now. Every surface that renders this state serves the recency beside it rather
+  # than letting the badge claim a present tense the data does not carry.
+  def revoked_and_still_presented?
+    revoked? && last_refused_at.present?
+  end
+
+  def touch_last_refused!
+    update_column(:last_refused_at, Time.current)
   end
 
   # WHETHER THIS KEY'S `last_used_at` WAS STAMPED BY A TOKEN THAT NO LONGER EXISTS — the key has

@@ -23,8 +23,11 @@ class Api::V1::IngestsController < Api::BaseController
     # placed below this line would not run. The row is written for the authenticated family only,
     # which is exactly what reaching this line means — `authenticate_api_key!` has already resolved
     # `current_repository`, and a request that failed to authenticate returned a 401 from the
-    # `before_action` without ever arriving here. A 401 therefore writes nothing, because there is
-    # no repository to attribute it to (see `IngestRejection`).
+    # `before_action` without ever arriving here. A 401 therefore writes nothing HERE — no
+    # repository to attribute a rejection to (see `IngestRejection`). It is no longer wholly silent
+    # either: since SPGD-804 the authentication failure path stamps `last_refused_at` on a row it
+    # owns (a retained, revoked `ApiKey`), which is how `credential_health` reports a revoked token
+    # still being presented — a credential fact, and none of this panel's business.
     #
     # The response is untouched by this: `render_bad_request` is handed the same `payload.errors`
     # it always was, and the recorder cannot change the status or the body — it reports its own

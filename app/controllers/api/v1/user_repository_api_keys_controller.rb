@@ -50,15 +50,19 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
   # `RecordNotFound` it raises is caught by `Api::BaseController` and rendered as this API's own
   # JSON, not Rails' public-exception page.
   #
-  # `destroy!` rather than `destroy`: the row is in hand and unlocked, so a failed destroy is a
-  # fault to raise on, not a state to answer 200 for. The web action uses the same call.
+  # A RETIREMENT, matching the web action (`ApiKeysController#destroy`, SPGD-804): `revoke!` stamps
+  # `revoked_at` and the row stays, so a revoked token stays attributable — a pipeline still
+  # presenting it is reportable by `credential_health` instead of reading "Not connected yet".
+  # Sharing one rule is the point of this controller: the two surfaces deliberately authorize the
+  # gesture identically, and a caller revoking over the API must get the same semantics as one
+  # clicking Revoke in a browser — including the observability the retained row buys.
   #
   # Revoking one key leaves the repository's others authenticating — that asymmetry is the whole
   # reason a caller mints a replacement before revoking, and the spec pins it.
   def destroy
     repository = current_repository(:keys_manage)
 
-    repository.api_keys.find(params[:id]).destroy!
+    repository.api_keys.find(params[:id]).revoke!
 
     head :no_content
   end
