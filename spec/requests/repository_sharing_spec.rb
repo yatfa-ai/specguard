@@ -159,7 +159,7 @@ RSpec.describe "Repository sharing", type: :request do
   describe "a member with 'keys.manage'" do
     before { sign_in_as_member(%w[view keys.manage]) }
 
-    # @intent: {"entity": "RepositoryMembership", "action": "mint and revoke key", "behavior": "POST adds one ApiKey row and the redirect reveals an sgk_ token, then DELETE drops the count back by one", "layer": "request"}
+    # @intent: {"entity": "RepositoryMembership", "action": "mint and revoke key", "behavior": "POST adds one ApiKey row and the redirect reveals an sgk_ token, then DELETE retires the key — the row stays, revoked_at stamped, so the live count drops back to zero", "layer": "request"}
     it "can create and revoke an API key on the shared repository" do
       expect {
         post repository_api_keys_path(repository)
@@ -168,9 +168,14 @@ RSpec.describe "Repository sharing", type: :request do
       follow_redirect!
       expect(response.body).to match(/sgk_[A-Za-z0-9_-]{20,}/)
 
+      # Revocation is a retirement (SPGD-804): the ROW stays, so the total count does not move —
+      # what moves is the LIVE count, the one every reader of these rows actually asks about.
       expect {
         delete repository_api_key_path(repository, repository.api_keys.last)
-      }.to change { repository.api_keys.count }.by(-1)
+      }.not_to change { repository.api_keys.count }
+
+      expect(repository.api_keys.last.reload).to be_revoked
+      expect(repository.api_keys.live.count).to eq(0)
     end
 
     # The positive control for the suppression above: the key count is gated on the permission, not

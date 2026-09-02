@@ -225,4 +225,80 @@ RSpec.describe ApiKey do
       expect(key(last_used_at: rotated_at, rotated_at: rotated_at)).to be_rotated_and_unused
     end
   end
+
+  # SPGD-804: revocation is a RETIREMENT. The row is retained and `revoked_at` stamps the instant
+  # the token was retired — the artifact a refused presentation is attributed to, and the reason a
+  # revoked token's 401 is reportable at all. The security half lives in `authenticate` and is
+  # pinned with its own example: retention must never read as resurrection.
+  describe "revocation" do
+    # @intent: { entity: "ApiKey", action: "retire a key", behavior: "revoke! stamps revoked_at and keeps the row, its name and its creator — a retirement, not a deletion", layer: "unit" }
+    it "retires without deleting: the row, its name and its attribution survive" do
+      creator = create_user(github_uid: "3003", github_handle: "minter")
+      api_key = repository.api_keys.create!(name: "CI", created_by_user: creator)
+
+      expect { api_key.revoke! }.not_to change(described_class, :count)
+
+      reloaded = described_class.find(api_key.id)
+      expect(reloaded.revoked_at).to be_present
+      expect(reloaded.name).to eq("CI")
+      expect(reloaded.created_by_user).to eq(creator)
+    end
+
+    # @intent: { entity: "ApiKey", action: "refuse a revoked token", behavior: "a revoked key's token never authenticates again — the security-critical half of retaining the row", layer: "unit" }
+    it "never authenticates a revoked token" do
+      api_key = repository.api_keys.create!
+      revoked_token = api_key.raw_token
+
+      api_key.revoke!
+
+      # Asserted through `authenticate` — the only caller-facing consequence — and reloaded, so a
+      # predicate that answered from stale in-memory state could not pass it.
+      expect(described_class.authenticate(revoked_token)).to be_nil
+      expect(described_class.find(api_key.id)).to be_revoked
+    end
+
+    # The retention does not leak into the resolution scopes: `live` and `revoked` partition the
+    # table, and every scoping consumer (the minted-count badge, the failure-path lookup) stands on
+    # exactly one side.
+    # @intent: { entity: "ApiKey", action: "partition live and revoked", behavior: "the live and revoked scopes split the table exactly, with no row in both and no row in neither", layer: "unit" }
+    it "partitions the table into live and revoked rows" do
+      live_key = repository.api_keys.create!
+      revoked_key = repository.api_keys.create!.tap(&:revoke!)
+
+      expect(repository.api_keys.live).to contain_exactly(live_key)
+      expect(repository.api_keys.revoked).to contain_exactly(revoked_key)
+    end
+
+    # @intent: { entity: "ApiKey", action: "attribute a refusal", behavior: "touch_last_refused! stamps last_refused_at, and revoked_and_still_presented? is false before it and true after", layer: "unit" }
+    it "reports a refused presentation only once one has been stamped" do
+      api_key = repository.api_keys.create!.tap(&:revoke!)
+
+      # A revoked key nobody has presented again is NOT a finding — nothing is synthesized for it.
+      expect(api_key).not_to be_revoked_and_still_presented
+
+      api_key.touch_last_refused!
+
+      expect(api_key.reload.last_refused_at).to be_present
+      expect(api_key).to be_revoked_and_still_presented
+    end
+
+    # @intent: { entity: "ApiKey", action: "keep predicates apart", behavior: "a live key never reads revoked-and-presented however often it is refused-stamped, and a revoked never-presented key never reads rotated-and-unused", layer: "unit" }
+    it "keeps the retirement predicates from crossing into each other's states" do
+      # A live key has no revocation to be "still presented" despite — `revoke!` is the only writer
+      # of `revoked_at`, so the pair is structurally ordered; this pins it.
+      live = repository.api_keys.create!.tap(&:touch_last_used!)
+      expect(live).not_to be_revoked_and_still_presented
+
+      # The rotated-AND-revoked key: both stamps present, and the newer fact wins — it reads
+      # revoked, and `rotated_and_unused?` must not fire for it on any live-keys surface.
+      both = repository.api_keys.create!.tap do |k|
+        k.touch_last_used!
+        k.regenerate!
+        k.revoke!
+      end
+      expect(both.reload).to be_revoked
+      expect(both.rotated_and_unused?).to be(true) # the predicate itself is unchanged...
+      expect(both.revoked_and_still_presented?).to be(false) # ...but no presentation is invented
+    end
+  end
 end

@@ -37,13 +37,21 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
   # ── The positive finding ────────────────────────────────────────────────────────────────────
   #
   # "No key is stranded" is an ANSWER, and one an agent cannot otherwise tell apart from "SpecGuard
-  # does not track that". The block is unconditional and its empty state is a real state.
+  # does not track that". The block is unconditional and its empty state is a real state. The same
+  # rule now covers SPGD-804's keys: `revoked_key_presented` and `presented_revoked_keys` are
+  # served on every response, negative included — a negative finding here is the answer "no revoked
+  # token is being presented", not an omission.
   describe "a repository with no rotated key" do
-    # @intent: { entity: "credential_health", action: "serve the empty state", behavior: "a repository with no rotated key gets the full block with rotated_and_unused false and an empty key list rather than an omitted block", layer: "request" }
+    # @intent: { entity: "credential_health", action: "serve the empty state", behavior: "a repository with no rotated or presented-revoked key gets the full block with both verdicts negative and both lists empty rather than an omitted block", layer: "request" }
     it "serves the block with a negative verdict rather than omitting it" do
       health = credential_health
 
-      expect(health).to eq("rotated_and_unused" => false, "keys" => [])
+      expect(health).to eq(
+        "rotated_and_unused" => false,
+        "keys" => [],
+        "revoked_key_presented" => false,
+        "presented_revoked_keys" => []
+      )
     end
 
     # @intent: { entity: "credential_health", action: "clear on first use", behavior: "one use of the replacement after a rotation clears the stranded verdict, with no window to expire and no threshold to cross", layer: "request" }
@@ -115,6 +123,87 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
       expect(row.keys).to match_array(%w[name rotated_at last_used_at])
       expect(response.body).not_to include(stranded.reload.token_digest)
       expect(response.body).not_to include(stranded.token_hint)
+    end
+  end
+
+  # ── The revoked-presentation finding (SPGD-804) ─────────────────────────────────────────────
+  #
+  # Rotation is the 401 the platform reports because it owns the row and stamped the retirement;
+  # revocation is now the same shape of fact. A revoked key is RETAINED (`ApiKey#revoke!`), and a
+  # refused presentation of its dead token stamps `last_refused_at` on it — so this block can
+  # report the one thing an agent polling with a working key could otherwise never learn: that a
+  # sibling pipeline is still presenting a token that cannot work.
+  #
+  # Every fixture here walks the REAL path: revoke through `revoke!`, present the dead token at
+  # this endpoint so the failure path stamps it, then read the block with the live key. A
+  # hand-written `last_refused_at` would leave these examples asserting against a state no
+  # production code path can produce — the same rule the rotation examples state for `regenerate!`.
+  describe "a revoked key still being presented" do
+    let!(:dead_key) { repository.api_keys.create!(name: "Old CI") }
+    let!(:dead_token) { dead_key.raw_token }
+
+    before do
+      dead_key.revoke!
+      # The presentation itself, through the real path: the dead token arrives, is refused, and
+      # stamps the row.
+      get "/api/v1/repository", headers: { "Authorization" => "Bearer #{dead_token}" }
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    # @intent: { entity: "credential_health", action: "report the presented revocation", behavior: "a revoked token presented and refused turns revoked_key_presented true and names the key with both stamps", layer: "request" }
+    it "reports the revoked key with its revocation and last refusal" do
+      health = credential_health
+
+      expect(health["revoked_key_presented"]).to be(true)
+      row = health["presented_revoked_keys"].first
+      expect(row["name"]).to eq("Old CI")
+      expect(row["revoked_at"]).to eq(dead_key.reload.revoked_at.iso8601)
+      expect(row["last_refused_at"]).to eq(dead_key.reload.last_refused_at.iso8601)
+    end
+
+    # The honesty bound, served as data: a revoked key that was never presented again is not a
+    # finding, and nothing may be synthesized for it. The block closes the REVOKED case of the
+    # 401s — a token that was never a key for this repository stays unattributable everywhere.
+    # @intent: { entity: "credential_health", action: "not invent a presentation", behavior: "a revoked but never-presented key adds nothing to the presented list — the finding requires an observed refused attempt", layer: "request" }
+    it "adds nothing for a key revoked and never presented again" do
+      repository.api_keys.create!(name: "Quiet").tap(&:revoke!)
+
+      health = credential_health
+
+      # `dead_key` WAS presented (the `before` block), so the verdict stays positive — but the
+      # never-presented key must not join the list, by name.
+      expect(health["revoked_key_presented"]).to be(true)
+      expect(health["presented_revoked_keys"].map { |row| row["name"] }).to eq(["Old CI"])
+    end
+
+    # The scoping the ticket pins: a key that was rotated AND THEN revoked must not be reported as
+    # merely stranded. The revocation is the newer fact; reporting the rotation would understate
+    # the state a client has to act on.
+    # @intent: { entity: "credential_health", action: "rank revocation over rotation", behavior: "a key rotated then revoked and still presented appears under presented_revoked_keys and never under the stranded keys list", layer: "request" }
+    it "reports a rotated-then-revoked key as revoked, not as stranded" do
+      both = repository.api_keys.create!(name: "Both").tap do |key|
+        key.touch_last_used!
+        key.regenerate!
+        key.revoke!
+      end
+      get "/api/v1/repository", headers: { "Authorization" => "Bearer #{both.raw_token}" }
+      expect(response).to have_http_status(:unauthorized)
+
+      health = credential_health
+
+      expect(health["presented_revoked_keys"].map { |row| row["name"] })
+        .to contain_exactly("Old CI", "Both")
+      expect(health["rotated_and_unused"]).to be(false)
+      expect(health["keys"]).to be_empty
+    end
+
+    # @intent: { entity: "credential_health", action: "withhold revoked token material", behavior: "a presented_revoked_keys row carries only name, revoked_at and last_refused_at, and no digest or hint appears anywhere in the response body", layer: "request" }
+    it "discloses no token material for the revoked key it names" do
+      row = credential_health["presented_revoked_keys"].first
+
+      expect(row.keys).to match_array(%w[name revoked_at last_refused_at])
+      expect(response.body).not_to include(dead_key.reload.token_digest)
+      expect(response.body).not_to include(dead_key.token_hint)
     end
   end
 

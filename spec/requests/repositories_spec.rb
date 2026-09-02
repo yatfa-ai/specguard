@@ -361,6 +361,151 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
+  # SPGD-804 made revocation a retirement, and the retirement is what makes this state observable:
+  # the row survives with `revoked_at` stamped, a refused presentation of the dead token stamps
+  # `last_refused_at` on it, and the page can name the fix instead of reading "Not connected yet"
+  # in neutral tone over a pipeline that is 401ing right now. Every fixture walks the REAL path —
+  # revoke, present the dead token at the API (which stamps through the actual failure path), then
+  # render the page — because a hand-written `last_refused_at` would leave these examples
+  # asserting against a state no production code path produces.
+  describe "the connection indicator after a revocation" do
+    def connect_panel = Capybara.string(response.body).find("#connection-indicator")
+
+    def connect_text = connect_panel.text.squish
+
+    let(:repository) { create_repository(user: @user) }
+
+    # Present the dead token so the platform records the refusal the page reports. Returns nothing;
+    # the stamp is the effect.
+    def present_revoked_token(token)
+      get "/api/v1/repository", headers: { "Authorization" => "Bearer #{token}" }
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    # @intent: {"entity": "ApiKey", "action": "name the revocation remedy", "behavior": "with every key revoked and the dead token still being presented, the indicator reads Revoked key still presented, dates the revocation and the last refusal, and names the fix — never Not connected yet", "layer": "request"}
+    it "names the revoked key and the fix instead of reading 'Not connected yet'" do
+      key = repository.api_keys.create!(name: "CI")
+      key.touch_last_used! # months of history, as the ticket's premise describes
+      revoked_token = key.raw_token
+      key.revoke!
+      present_revoked_token(revoked_token)
+
+      get repository_path(repository)
+
+      expect(connect_text).to include("Revoked key still presented")
+      expect(connect_text).to match(/A key you revoked .+ ago is still being presented/i)
+      expect(connect_text).to match(/last seen .+ ago/i)
+      expect(connect_text).to include("Update the secret wherever it is stored")
+      expect(connect_text).not_to include("Not connected yet")
+      # `:error`, on the refusing state's own rule — work is being destroyed, not merely absent.
+      expect(connect_panel).to have_css(".text-app-error")
+    end
+
+    # The honest bound: a revoked key the platform never saw presented again is NOT the state —
+    # nothing is synthesized. CI having gone quiet on top of the revocation falls to the
+    # not-connected branch, whose note must not claim a repository that was never wired up.
+    # @intent: {"entity": "ApiKey", "action": "not invent a presentation", "behavior": "a revoked key never presented again keeps Not connected yet with the no-active-key note rather than the revoked-presentation state", "layer": "request"}
+    it "does not invent a presentation for a key revoked and never presented again" do
+      repository.api_keys.create!(name: "CI").revoke!
+
+      get repository_path(repository)
+
+      expect(connect_text).to include("Not connected yet")
+      expect(connect_text).to include("No active API key has been used")
+      expect(connect_text).not_to include("Revoked key still presented")
+    end
+
+    # The ordering rule, exercised against the state the old order would report: a live key works,
+    # but a revoked token is still arriving from somewhere — that stale credential is the exact
+    # finding, and "Connected" would bury it.
+    # @intent: {"entity": "ApiKey", "action": "rank revoked over connected", "behavior": "with one live working key and one presented revoked key the indicator reports the revoked state and never Connected", "layer": "request"}
+    it "reports the presented revocation ahead of Connected, being the more specific state" do
+      keeper = repository.api_keys.create!(name: "Prod")
+      keeper.touch_last_used!
+      stale = repository.api_keys.create!(name: "Old CI")
+      stale_token = stale.raw_token
+      stale.revoke!
+      present_revoked_token(stale_token)
+
+      get repository_path(repository)
+
+      expect(keeper.reload).not_to be_revoked
+      expect(connect_text).to include("Revoked key still presented")
+      expect(connect_text).not_to include("Connected")
+    end
+
+    # Refusals on record predate the revocation problem and describe a pipeline that was at least
+    # getting in; a pipeline presenting a revoked token cannot complete a delivery at all. The
+    # revoked state is the newer, stronger fact, and the page must not send the owner to debug
+    # payloads while every request is dying at the door.
+    # @intent: {"entity": "ApiKey", "action": "rank revoked over refused", "behavior": "a refused delivery on record followed by a presented revocation renders the revoked state and never Deliveries refused", "layer": "request"}
+    it "keeps the presented revocation ahead of the refused deliveries" do
+      key = repository.api_keys.create!(name: "CI")
+      post "/api/v1/ingest",
+           params: { specs: [] }.to_json,
+           headers: { "Content-Type" => "application/json",
+                      "Authorization" => "Bearer #{key.raw_token}" }
+      revoked_token = key.raw_token
+      key.revoke!
+      present_revoked_token(revoked_token)
+
+      get repository_path(repository)
+
+      expect(connect_text).to include("Revoked key still presented")
+      expect(connect_text).not_to include("Deliveries refused")
+    end
+
+    # The plural shape, on the rotation branch's own rule: count the keys, date the OLDEST
+    # revocation (the only date true of all of them at once), and report the freshest refusal.
+    # @intent: {"entity": "ApiKey", "action": "date oldest revocation", "behavior": "with two presented revoked keys the indicator reads 2 keys you revoked, dates the oldest revocation and reports the freshest refusal", "layer": "request"}
+    it "counts the keys and dates the oldest revocation once more than one is presented" do
+      nightly = repository.api_keys.create!(name: "Nightly")
+      nightly.revoke!
+      nightly.update_columns(revoked_at: 5.days.ago, last_refused_at: 2.days.ago)
+      main = repository.api_keys.create!(name: "Main")
+      main.revoke!
+      main.update_columns(revoked_at: 1.minute.ago, last_refused_at: 30.seconds.ago)
+      # Both were "presented": the stamps are hand-placed here only to fix the AGES the assertions
+      # name, which the real failure path would write at Time.current. (The presentation path
+      # itself is exercised end to end in the examples above.)
+
+      get repository_path(repository)
+
+      expect(connect_text).to include("2 keys you revoked are still being presented")
+      expect(connect_text).to include(
+        "the first was revoked " \
+        "#{ActionController::Base.helpers.time_ago_in_words(nightly.reload.revoked_at)} ago"
+      )
+      expect(connect_text).to include(
+        "the latest attempt was seen " \
+        "#{ActionController::Base.helpers.time_ago_in_words(main.reload.last_refused_at)} ago"
+      )
+      # The oldest, not the newest: a reader with a five-day-dead pipeline must not be told the
+      # revocation was a minute ago.
+      expect(connect_text).not_to include("the first was revoked less than a minute ago")
+    end
+
+    # The keys table and the wire-up panel read the LIVE half of the partition. A revoked row must
+    # not render a second Revoke button, and the panel must not point CI at a credential that no
+    # longer authenticates — while the page as a whole still names what happened.
+    # @intent: {"entity": "ApiKey", "action": "gate the table on live keys", "behavior": "a revoked key renders no row in the keys table, the wire-up panel falls to its mint-a-key branch, and the count badge never appears", "layer": "request"}
+    it "lists only live keys in the table while the header reports the revocation" do
+      key = repository.api_keys.create!(name: "CI")
+      revoked_token = key.raw_token
+      key.revoke!
+      present_revoked_token(revoked_token)
+
+      get repository_path(repository)
+
+      # The header names the revocation (the state the examples above pin); what must NOT happen
+      # is the revoked row rendering in the table below it, offering a second Revoke on a key that
+      # is already retired.
+      expect(connect_text).to include("Revoked key still presented")
+      expect(response.body).not_to include(key.token_hint)
+      expect(response.body).to include("This repository has no API key yet")
+    end
+  end
+
   # @intent: {"entity": "ApiKey", "action": "offer name field", "behavior": "the keys panel posts an api_key name input and renders a Created column for each key row", "layer": "request"}
   it "offers a name field when minting a key, and shows when each key was created" do
     repository = register_repository
@@ -406,15 +551,20 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(ApiKey.last.name).to eq("Default CI Key")
   end
 
-  # @intent: {"entity": "ApiKey", "action": "revoke key", "behavior": "the delete removes exactly one ApiKey row", "layer": "request"}
+  # @intent: {"entity": "ApiKey", "action": "revoke key", "behavior": "the delete retires exactly one ApiKey row — the row survives with revoked_at stamped, so the count is unchanged and the live count drops by one", "layer": "request"}
   it "revokes an API key" do
     repository = register_repository
     post repository_api_keys_path(repository)
     api_key = ApiKey.last
 
+    # A retirement since SPGD-804: the row is retained and stamped, which is what makes a revoked
+    # token reportable; what the delete removes is the key's ability to authenticate.
     expect {
       delete repository_api_key_path(repository, api_key)
-    }.to change(ApiKey, :count).by(-1)
+    }.not_to change(ApiKey, :count)
+
+    expect(api_key.reload.revoked_at).to be_present
+    expect(repository.api_keys.live.count).to eq(0)
   end
 
   describe "recording who minted a key" do

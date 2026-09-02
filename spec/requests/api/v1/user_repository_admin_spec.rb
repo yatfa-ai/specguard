@@ -154,23 +154,31 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
   describe "DELETE /api/v1/repositories/:repository_id/api_keys/:id" do
     let!(:ci_key) { repository.api_keys.create!(name: "CI") }
 
-    # @intent: { entity: "api key", action: "revoke for the owner", behavior: "the owner revokes the named key and the row is gone with a 204", layer: "request" }
+    # @intent: { entity: "api key", action: "revoke for the owner", behavior: "the owner revokes the named key and the row is retired (retained, stamped revoked_at) with a 204", layer: "request" }
     it "revokes the named key for the owner and answers 204" do
+      revoked_token = ci_key.raw_token
+
       expect {
         delete revoke_path(ci_key), headers: bearer(owner_key.raw_token)
-      }.to change(ApiKey, :count).by(-1)
+      }.not_to change(ApiKey, :count)
 
       expect(response).to have_http_status(:no_content)
+      # Retirement, not deletion (SPGD-804): the row survives, stamped — and the dead token stops
+      # authenticating, asserted through `authenticate` because resolving a Bearer token is the
+      # only thing the row's survival would actually mean.
+      expect(ci_key.reload.revoked_at).to be_present
+      expect(ApiKey.authenticate(revoked_token)).to be_nil
     end
 
-    # @intent: { entity: "api key", action: "revoke for a member", behavior: "a member granted keys.manage revokes a key just as the owner does", layer: "request" }
+    # @intent: { entity: "api key", action: "revoke for a member", behavior: "a member granted keys.manage retires a key just as the owner does, the row retained and stamped", layer: "request" }
     it "revokes for a member granted keys.manage" do
       create_membership(repository: repository, user: member, permissions: %w[view keys.manage])
 
       delete revoke_path(ci_key), headers: bearer(member_key.raw_token)
 
       expect(response).to have_http_status(:no_content)
-      expect(ApiKey.exists?(ci_key.id)).to be(false)
+      expect(ApiKey.exists?(ci_key.id)).to be(true)
+      expect(ci_key.reload.revoked_at).to be_present
     end
 
     # @intent: { entity: "api key", action: "spare sibling keys", behavior: "revoking one key leaves the repository other keys still authenticating", layer: "request" }

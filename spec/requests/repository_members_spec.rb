@@ -973,12 +973,18 @@ RSpec.describe "Repository members", type: :request do
       expect(queries.size).to eq(1)
     end
 
-    # @intent: {"entity": "RepositoryMembership", "action": "count live keys only", "behavior": "after one of two keys is destroyed the page reports 1 API key minted and not 2", "layer": "request"}
+    # @intent: {"entity": "RepositoryMembership", "action": "count live keys only", "behavior": "after one of two keys is retired (row retained, revoked_at stamped) the page reports 1 API key minted and not 2", "layer": "request"}
     it "counts only keys that are still live, so a revoked key stops being reported" do
       key = repository.api_keys.create!(name: "CI — main", created_by_user: colleague)
       repository.api_keys.create!(name: "CI — release", created_by_user: colleague)
 
-      key.destroy!
+      # Retirement, not deletion (SPGD-804): the row SURVIVES — which is what makes this a real
+      # scoping test rather than a trivial one. A hard delete would empty the count by removing
+      # the row; the retained-but-revoked row is still in the table, and only the `live` scope
+      # keeps it out of the badge. The badge and the revoke dialog would otherwise advertise "2
+      # keys that keep authenticating" about a key that authenticates nothing.
+      key.revoke!
+      expect(key.reload.revoked_at).to be_present
 
       get repository_members_path(repository)
 
