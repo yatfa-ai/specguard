@@ -132,10 +132,41 @@ class Api::BaseController < ActionController::API
     return render_unauthorized unless token&.start_with?(credential::TOKEN_PREFIX)
 
     @current_api_key = credential.authenticate(token)
-    return render_unauthorized if @current_api_key.nil?
+    if @current_api_key.nil?
+      attribute_refused_revocation(token, credential)
+      return render_unauthorized
+    end
 
     bind_principal
     @current_api_key.touch_last_used!
+  end
+
+  # THE ONE 401 THE PLATFORM OWNS A ROW FOR — and the only write on the failure path.
+  #
+  # `authenticate` returning nil resolves no principal, so the 401 itself writes nothing and stays
+  # unattributable in general. A REVOKED repository key is the exception this method closes: the
+  # row still exists (`ApiKey#revoke!` retires rather than deletes), the digest still names it, and
+  # this platform stamped the instant the token was retired — so the refused presentation is a fact
+  # about a row this application owns, the same criterion `credential_health` already states for
+  # reporting a 401 it did not observe. Stamping `last_refused_at` is what lets the repository page
+  # and the agent API say "a key you revoked is still being presented" instead of "Not connected
+  # yet".
+  #
+  # COST, and the shape it is held to: at most ONE indexed read — the same unique digest index
+  # resolution uses, with `revoked_at` checked on the row it returns — plus, on a hit, the stamp.
+  # No write on a miss: an unknown token (never a key for anything) stays unattributable, and
+  # nothing is synthesized for it. A VALID presentation never reaches this method at all, so it
+  # still costs exactly the one resolving read the seam spec pins.
+  #
+  # `credential == ApiKey` is an explicit guard, not a reliance on the prefix check above: a
+  # `sgu_` token is refused before resolution on a user-key endpoint, but this method's contract
+  # is about the credential CLASS — `UserApiKey` has no revocation lifecycle (`revoked_at` is not
+  # its column) and must never be probed here. Stated rather than inherited, so a future change to
+  # the prefix discipline cannot silently widen this write path to the other table.
+  def attribute_refused_revocation(token, credential)
+    return unless credential == ApiKey
+
+    ApiKey.revoked.find_by(token_digest: ApiKey.digest(token))&.touch_last_refused!
   end
 
   # The one place the two credentials diverge after resolution. A `case` rather than a polymorphic

@@ -220,17 +220,35 @@ class RepositoriesController < ApplicationController
     # by the paired preload guard beside it. Separate guards because from here the paths differ.
     keys = @repository.api_keys.order(created_at: :desc)
     keys = keys.includes(:created_by_user) if repository_policy.can?(:keys_manage)
-    @api_keys = keys.to_a
+    all_keys = keys.to_a
+    # THE RETIREMENT SPLIT, taken in Ruby off the ONE SELECT above: live keys to everything that
+    # behaved as before, retired rows to their own collection. Partitioning here rather than adding
+    # a `WHERE revoked_at IS NULL` is what keeps this page on its pinned absolute query budget — a
+    # second SELECT for the revoked rows would fail it even where it cost no fresh round trip
+    # (query-cache hits are counted) — and it makes the split a decision the page can see rather
+    # than a default the reader has to remember. `@api_keys` stays the name every existing reader
+    # (the keys table, `has_api_keys`, `former_member?`'s rows) already asks, and every one of those
+    # readers is a LIVE-keys question: a revoked row's `last_used_at` describes a credential that
+    # no longer exists, its creator no longer holds a live credential, and the wire-up panel must
+    # not point CI at a repository with nothing that authenticates. SPGD-804 states each of these
+    # sites; none of them may silently change meaning because a row stopped being deleted.
+    @api_keys = all_keys.reject(&:revoked?)
+    @revoked_api_keys = all_keys.select(&:revoked?)
     # The keys whose `last_used_at` was stamped by a token that no longer exists: rotated, with
     # nothing having authenticated since. `ApiKey#rotated_and_unused?` carries the rule and both of
     # its nil cases. Read by the key list, which must not print an inherited "last used" age, and
-    # by the connection indicator in the page header.
+    # by the connection indicator in the page header. Read off the LIVE partition: a key that was
+    # rotated and THEN revoked is both, and the revocation is the newer and stronger fact — it
+    # belongs to the revoked state below, and `rotated_and_unused?` must not fire for it here.
     @rotated_unused_api_keys = @api_keys.select(&:rotated_and_unused?)
-    # DID ANYTHING EVER AUTHENTICATE — the newest use across every key, whichever token stamped it.
-    # `nil` means no key has ever been used at all, which is the only question this can answer and
-    # the one the "Not connected yet" branch asks. It must NOT be read as "the repository is
-    # reachable now": a rotation retires a token without touching its use, so this figure outlives
-    # the credential that produced it.
+    # DID ANYTHING EVER AUTHENTICATE — the newest use across every LIVE key, whichever token stamped
+    # it. Restricted to live rows since the retirement split: a revoked key's `last_used_at` is the
+    # history of a credential that no longer exists, and letting it answer here would render the
+    # "Key rotated, not yet in use" branch over a repository whose every key was revoked and nothing
+    # was ever rotated into disuse. `nil` means no live key has ever been used at all, which is the
+    # only question this can answer and the one the "Not connected yet" branch asks. It must NOT be
+    # read as "the repository is reachable now": a rotation retires a token without touching its
+    # use, so this figure outlives the credential that produced it.
     @last_api_request_at = @api_keys.filter_map(&:last_used_at).max
     # THE SAME FIGURE, RESTRICTED TO KEYS WHOSE `last_used_at` STILL DESCRIBES THE TOKEN THEY ARE
     # CARRYING NOW — the one the "Connected" stat may report, because it is the only one whose age
@@ -243,6 +261,14 @@ class RepositoriesController < ApplicationController
     # the difference between the two is what tells "nothing has ever connected" apart from
     # "something did, with a token that is gone".
     @last_live_api_request_at = (@api_keys - @rotated_unused_api_keys).filter_map(&:last_used_at).max
+    # THE RETIRED KEYS THE PLATFORM HAS SEEN BEING PRESENTED — a revoked token arriving and being
+    # refused stamps `last_refused_at` on the row it names (`Api::BaseController`'s failure path),
+    # and this is the set the connection indicator's revoked state is derived from. Restricted to
+    # rows that carry the stamp: a key revoked and never presented again is not a finding, and
+    # synthesizing one for it is exactly what the honest-bound rule forbids. The recency of the
+    # stamp travels with the row (`last_refused_at`), so the rendered state can date the last
+    # observed presentation rather than claim a present tense the data does not carry.
+    @presented_revoked_api_keys = @revoked_api_keys.select(&:revoked_and_still_presented?)
     # Every suite figure on the Overview panel is read off this one row — suite size, annotated
     # count, and the difference between them. `nil` is load-bearing and means *never ingested*,
     # which the panel renders as an empty state rather than as `0%`; a repository whose CI has
@@ -1031,6 +1057,12 @@ class RepositoriesController < ApplicationController
   # member minted (see `User has_many :created_api_keys, dependent: :nullify`), so this row is still
   # a live credential and this page is where the owner holds the lever.
   #
+  # The premise is "still a live credential", and it is the caller's to satisfy: the keys table
+  # feeds this badge from `@api_keys`, which `show` partitions to LIVE keys — a revoked key's
+  # creator is never flagged, because the premise is false for it (the row no longer
+  # authenticates; see `ApiKey#revoke!`). If a caller ever feeds this method revoked rows, the
+  # badge lies.
+  #
   # A `nil` creator is NOT this: it is a legacy key or a deleted account, and it reads "Unknown".
   # Conflating the two would have the page assert that a deleted user was revoked, which is false.
   def former_member?(user)
@@ -1151,6 +1183,11 @@ class RepositoriesController < ApplicationController
   # `latest_test_runs`. Scoped to the ids already on this page, so it never counts `api_keys`
   # globally.
   #
+  # LIVE keys only (SPGD-804): the badge deep-links to `#api-keys`, and the panel it lands on
+  # renders the live partition — a count that included retained revoked rows would advertise "4
+  # keys" over a table showing one, the same misreading `MembershipsController#keys_minted_by`
+  # was corrected for.
+  #
   # Counted for the whole page even though `key_count_visible?` withholds the badge from a
   # `view`-only member: the gate is on what is *rendered*, not on what is loaded, and narrowing the
   # query to visible ids would put a per-card decision back in front of it for no benefit. Nothing
@@ -1162,7 +1199,7 @@ class RepositoriesController < ApplicationController
       if repository_ids.empty?
         {}
       else
-        ApiKey.where(repository_id: repository_ids).group(:repository_id).count
+        ApiKey.live.where(repository_id: repository_ids).group(:repository_id).count
       end
     end
   end

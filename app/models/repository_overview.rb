@@ -442,11 +442,18 @@ class RepositoryOverview
   #
   # == The honesty bounds, none of them guessable from the keys
   #
-  # * ⚠️ **AUTHENTICATED-AND-REFUSED ONLY. A 401 IS UNATTRIBUTABLE AND IS NOT IMPLIED HERE.**
+  # * ⚠️ **AUTHENTICATED-AND-REFUSED ONLY. A 401 IS NOT IMPLIED HERE, WITH ONE NAMED EXCEPTION.**
   #   `ApiKey.authenticate` returning `nil` resolves no repository, so there is nothing to attribute
   #   a row to and none is written — `Api::V1::IngestsController` states that on the write path. A
-  #   client sending a revoked token sees `refusing: false` and always will. Replacing one false
-  #   claim with a second one is the failure mode this block exists to avoid.
+  #   client sending a revoked token sees `refusing: false` here, and that remains true: a refused
+  #   AUTHENTICATION never reaches the payload, so it is not a refused DELIVERY and this block may
+  #   not claim it. What changed (SPGD-804) is that the revoked case is no longer SILENT elsewhere:
+  #   `ApiKey#revoke!` retains the row, `Api::BaseController`'s failure path stamps the refused
+  #   presentation on it, and `credential_health.revoked_key_presented` reports it by name — the
+  #   "name the block that answers what this one cannot" convention `acceptance_reported_by`
+  #   follows. A 401 from a token that was never a key for this repository stays unattributable
+  #   everywhere, and nothing is synthesized for it. Replacing one false claim with a second one is
+  #   the failure mode this block exists to avoid.
   # * **`reasons` is `Ingest::Payload`'s own error list, verbatim** — the same words the client was
   #   handed in its 400, never re-worded into a platform-side verdict. This endpoint's standing rule
   #   for `outcome`, applied one grain down.
@@ -501,7 +508,15 @@ class RepositoryOverview
   # from the one the two web surfaces read, and this block exists to stop the agent and the page
   # disagreeing about a key.
   def serialized_credential_health
-    stranded = repository.api_keys.select(&:rotated_and_unused?)
+    # THE RETIREMENT SPLIT, taken in Ruby off the ONE SELECT: stranded keys are a LIVE-keys
+    # question (a key rotated and THEN revoked is both, and the revocation is the newer fact —
+    # reporting it as merely rotated would understate the state a client needs to act on), and the
+    # presented-revoked half reads the retained rows a `WHERE` would have filtered out. One query,
+    # as before; `rotated_and_unused?`'s comment carries the rule against re-expressing that
+    # predicate in SQL.
+    keys = repository.api_keys.to_a
+    stranded = keys.reject(&:revoked?).select(&:rotated_and_unused?)
+    presented_revoked = keys.select(&:revoked_and_still_presented?)
 
     {
       rotated_and_unused: stranded.any?,
@@ -513,6 +528,27 @@ class RepositoryOverview
           # it is exactly the figure a client must not read as a live reachability signal. `null`
           # when the key was rotated before it ever authenticated.
           last_used_at: api_key.last_used_at&.iso8601
+        }
+      end,
+      # ⚠️ THE REVOKED-PRESENTATION FINDING, SERVED ON EVERY RESPONSE INCLUDING THE NEGATIVE — the
+      # block's standing rule: a positive finding is indistinguishable from "SpecGuard does not
+      # track that" unless the negative is served too. `true` means a key this repository's owner
+      # revoked has arrived at the API and been refused (`last_refused_at` stamped by
+      # `Api::BaseController`'s failure path): the caller's pipeline — or a sibling's — is still
+      # presenting a dead token, and the fix is updating the secret store, not this endpoint.
+      #
+      # THE HONEST BOUND, stated rather than implied: this closes the REVOKED case of the 401s,
+      # not 401s in general. A token that was never a key for this repository resolves to no row
+      # and nothing may be synthesized for it — the same rule `delivery_health.refusing` follows
+      # for a rejection no row was recorded for. `last_refused_at` is the LAST observed
+      # presentation, so a client reading `true` learns the most recent attempt's recency and not
+      # a promise about the present tense.
+      revoked_key_presented: presented_revoked.any?,
+      presented_revoked_keys: presented_revoked.map do |api_key|
+        {
+          name: api_key.name,
+          revoked_at: api_key.revoked_at.iso8601,
+          last_refused_at: api_key.last_refused_at.iso8601
         }
       end
     }

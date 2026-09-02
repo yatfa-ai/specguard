@@ -51,7 +51,11 @@ class ApiKeysController < ApplicationController
 
   def destroy
     repository = current_repository(:keys_manage)
-    repository.api_keys.find(params[:id]).destroy!
+    # A RETIREMENT, NOT A DELETION: the row stays, stamped `revoked_at` (see `ApiKey#revoke!`).
+    # Keeping it is what makes a revoked token reportable — the failure path in
+    # `Api::BaseController#authenticate_api_key!` needs a row to attribute the refused presentation
+    # to, and a hard delete had left a 401ing pipeline reading "Not connected yet".
+    repository.api_keys.find(params[:id]).revoke!
 
     redirect_to repository_path(repository), notice: "API key revoked."
   end

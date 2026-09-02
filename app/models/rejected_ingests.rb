@@ -39,7 +39,10 @@
 #   limit actually left a refusal off the list.
 #
 # It says nothing about failed AUTHENTICATION. A 401 resolves no repository and writes no row (see
-# `IngestRejection`), so neither this object nor the panel may imply it can see one.
+# `IngestRejection`), so neither this object nor the panel may imply it can see one. The one
+# exception the platform owns — a REFUSED PRESENTATION of a key it has a row for — is reported by
+# `credential_health` (see `RepositoryOverview`), not here: that is a credential fact about a row
+# the platform retains, and this remains a delivery fact about payloads.
 class RejectedIngests
   # Reads one row PAST the bound and throws it away. That extra row is the only thing that can tell
   # {#bounded?} apart from "the list came back full", and it is what every sibling disclosure object

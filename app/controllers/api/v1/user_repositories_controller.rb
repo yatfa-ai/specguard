@@ -177,9 +177,11 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   #
   # ## `created_by_user`: the half of the parity with `ApiKeysController` that has no second chance
   #
-  # `add_created_by_user_to_api_keys` says why: `ApiKeysController#destroy` is a hard `destroy!` with
-  # no audit row, so attribution is not backfillable after the fact — a key minted NULL is NULL
-  # forever. There is nothing to infer from either: this request KNOWS who minted the key, because
+  # `add_created_by_user_to_api_keys` says why: attribution recorded at mint time is the only
+  # attribution a row will ever carry — it is not backfillable after the fact. (`ApiKeysController#destroy`
+  # has been a retirement rather than a hard `destroy!` since SPGD-804, so a revoked key's row and
+  # its `created_by_user` both survive; that makes durable attribution MORE true, not less.) There
+  # is nothing to infer from either: this request KNOWS who minted the key, because
   # the person the `sgu_` key speaks for is the only reason the registration was permitted at all,
   # and the roadmap's own non-goal is that the key's reach is the person's reach. Leaving it blank
   # would render a false sentence — `repositories/_api_keys` shows "Unknown" for a creator that was
