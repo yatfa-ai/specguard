@@ -105,4 +105,35 @@ RSpec.describe "Repository API keys (web)", type: :request do
       expect(response).to have_http_status(:not_found)
     end
   end
+
+  # SPGD-924: the mint's flash keys are this surface's own — the mirror of the user-surface
+  # example in spec/requests/account_api_keys_spec.rb. A flash is delivered to whatever request
+  # arrives next, and while the two credential surfaces shared one namespace, an intervening
+  # `accounts#show` read a freshly minted `sgk_` token off it and rendered it in a panel
+  # labelling it as the person's own key. The mint below deliberately does NOT follow its
+  # redirect, so the flash is armed across the intervening visit — the state a browser is in
+  # between the POST's 302 and its landing page.
+  #
+  # As on the user surface: distinct key names confine the mint to its own reader, and no naming
+  # could make it SURVIVE an intervening request — Rails discards every session-borne flash entry
+  # at the end of each request that touches the flash, read or not. After the account visit the
+  # token renders nowhere; the recovery is this surface's own Regenerate (or revoke and re-mint),
+  # unchanged and out of scope here.
+  describe "an intervening request on the other credential surface" do
+    # @intent: {"entity": "POST /repositories/:id/api_keys", "action": "confine reveal to own surface", "behavior": "an account page loaded between the mint POST and the repository landing renders no sgk_ token and no reveal panel, and the repository page afterwards shows none either.", "layer": "request"}
+    it "renders the fresh token in no account panel" do
+      post repository_api_keys_path(repository), params: { api_key: { name: "CI" } }
+      expect(response).to redirect_to(repository_path(repository, anchor: "revealed-key"))
+
+      # The mis-route itself: this page renders its reveal panel whenever the flash it reads
+      # carries anything, so before the key split BOTH assertions failed here.
+      get account_path
+      expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]{20,}/)
+      expect(response.body).not_to include("Your new API key")
+
+      # Consumed by the intervening visit, read or not — the landing page shows nothing either.
+      get repository_path(repository)
+      expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]{20,}/)
+    end
+  end
 end
