@@ -3085,12 +3085,22 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
-  # `ApiKey#rotated_and_unused?` — a live key regenerated with nothing authenticating since, the
-  # state the connection indicator on `show` words "Key rotated, not yet in use" — rendered on the
-  # grid beside the refusal marker the block above ships. It had lived on repositories#show alone,
-  # so the reader who had just rotated keys — the one most likely to hold several at once — had to
-  # open every card's page one at a time to learn which of their pipelines was holding a
-  # replacement token that never reached CI.
+  # The rotated-but-unused state — the connection indicator on `show` words it "Key rotated, not
+  # yet in use" — rendered on the grid beside the refusal marker the block above ships. It had
+  # lived on repositories#show alone, so the reader who had just rotated keys — the one most likely
+  # to hold several at once — had to open every card's page one at a time to learn which of their
+  # pipelines was holding a replacement token that never reached CI.
+  #
+  # The card TRIGGERS the way `show` does. On `show` this state is branch 3 of an exclusive chain —
+  # not refusing, `@last_api_request_at` present, `@last_live_api_request_at` blank — i.e. something
+  # authenticated and every token that ever did has since been rotated away, so CI is presenting a
+  # credential that no longer exists. `ApiKey#rotated_and_unused?` is the predicate that state is
+  # DERIVED from (the model's own word), not the state itself: keyed on it per key, the card would
+  # contradict `show` on a repository whose live key keeps CI connected (the stranded key beside it
+  # holds nothing back) and on a key rotated before it ever authenticated (nothing was ever routed
+  # through it, so no replacement is hanging) — the two cases pinned below as rendering nothing.
+  # The chain's refusing conjunct is carried by the card's ORDER — refusal first, both shown — not
+  # by suppression.
   #
   # The card carries the BADGE and a count-free age sentence, and nothing else. The count-free
   # shape is this grid's own rule: the key count is credential information here
@@ -3217,24 +3227,68 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(page_text).to include("No runs yet")
     end
 
-    # Criterion 5 — the limb a WHERE clause would drop. `rotated_and_unused?` has two `nil` limbs
-    # that go opposite ways, and `last_used_at IS NULL` means TRUE: a key rotated before it ever
-    # authenticated is the state at its purest, in the model's own words. A SQL spelling of the
-    # rule (`WHERE rotated_at > last_used_at`) answers NULL for this row and silently drops it, so
-    # this example is what pins the predicate-in-Ruby reading the controller states.
-    # @intent: {"entity": "ApiKey", "action": "mark never-authenticated", "behavior": "a key rotated before ever being used still draws the badge and the note, its rotated_at dating the sentence", "layer": "request"}
-    it "marks the key that was rotated before it ever authenticated" do
-      repository = create_repository(user: @user, github_full_name: "acme/never-authed")
-      key = repository.api_keys.create!(name: "CI")
+    # Amended criterion 5 — the case the per-key predicate would badge and `show` does not. A key
+    # rotated before it ever authenticated has a nil `last_used_at`, so NOTHING has ever
+    # authenticated for this repository at all: `show` falls past the rotated branch to "Not
+    # connected yet" — an ordinary starting condition, not work being lost — and the card must read
+    # the same. "The replacement token has not reached CI" would assert a pipeline that never
+    # existed: no token was ever routed through this key, so no replacement is hanging and the
+    # reader did not just break anything. The row still answers `rotated_and_unused?` true — the
+    # model calls the nil limb the state at its purest — which is exactly why this example exists:
+    # it is the proof the card's trigger is the chain-equivalent aggregate and not that predicate.
+    # Asserted both as absence and as byte-identity with a never-wired card, with only the names
+    # stripped — the amended AC5's own standard.
+    # @intent: {"entity": "ApiKey", "action": "skip never-authenticated", "behavior": "a key rotated before ever being used draws no Key rotated label and no note, its card byte-identical to a never-wired card's, and show's indicator reads Not connected yet for the same repository", "layer": "request"}
+    it "does not mark a key that was rotated before it ever authenticated" do
+      rotated_never_authed = create_repository(user: @user, github_full_name: "acme/never-authed")
+      key = rotated_never_authed.api_keys.create!(name: "CI")
       key.regenerate!
+      never_wired = create_repository(user: @user, github_full_name: "acme/never-wired")
+      never_wired.api_keys.create!(name: "CI")
 
       get repositories_path
 
+      # The row is everything the old per-key trigger asked for — and the card still renders
+      # nothing, because the aggregate does not fire.
       expect(key.reload).to be_rotated_and_unused
-      expect(page_text).to include(rotated_label)
-      expect(page_text).to include(
-        ApplicationController.helpers.rotated_key_note(key.reload.rotated_at)
-      )
+      expect(page_text).not_to include(rotated_label)
+      expect(page_text).not_to include("replacement token has not reached CI")
+      # Byte-identical to the card beside it that was never wired at all, once the one word that
+      # must differ is stripped: both count the same one live key (a rotation does not revoke),
+      # both say "No runs yet", neither prints a marker.
+      expect(card_text(rotated_never_authed).sub("acme/never-authed", ""))
+        .to eq(card_text(never_wired).sub("acme/never-wired", ""))
+
+      # The surface it must agree with, on the same repository at the same instant.
+      get repository_path(rotated_never_authed)
+      indicator_text = Capybara.string(response.body).find("#connection-indicator").text.squish
+      expect(indicator_text).to include("Not connected yet")
+      expect(indicator_text).not_to include(rotated_label)
+    end
+
+    # The other divergence the per-key trigger shipped: a repository whose live key authenticated
+    # an hour ago and whose OTHER key is stranded is CONNECTED. CI is flowing on the credential it
+    # carries, the stranded key's replacement is not the token the pipeline uses, and `show` says
+    # so in success tone — a warning here would be a false alarm on a healthy repository, on the
+    # very page the reader is comparing cards across. The aggregate reads it the way `show` does:
+    # the live key keeps the live figure present, so the rotated branch never fires. Pinned
+    # against `show`'s own verdict, since surface agreement is the point of the resolution.
+    # @intent: {"entity": "ApiKey", "action": "skip connected with strand", "behavior": "a repository with one live authenticated key and one stranded key draws no Key rotated label on the card while show's indicator still reads Connected — the two surfaces agree", "layer": "request"}
+    it "does not mark a repository whose live key keeps it connected beside a stranded one" do
+      repository = create_repository(user: @user, github_full_name: "acme/still-connected")
+      repository.api_keys.create!(name: "Live").touch_last_used!
+      strand_key(repository, "Old", used_at: 6.days.ago, rotated_at: 5.days.ago)
+
+      get repositories_path
+
+      expect(page_text).not_to include(rotated_label)
+      expect(page_text).not_to include("replacement token has not reached CI")
+
+      # The surface it must agree with, saying the opposite of a warning.
+      get repository_path(repository)
+      indicator_text = Capybara.string(response.body).find("#connection-indicator").text.squish
+      expect(indicator_text).to include("Connected")
+      expect(indicator_text).not_to include(rotated_label)
     end
 
     # The retirement split, carried over from `show`'s own rule: a key that was rotated and THEN

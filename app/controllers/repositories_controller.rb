@@ -116,10 +116,10 @@ class RepositoriesController < ApplicationController
 
   # The first five are per-card questions asked by repositories/index, once per repository in the
   # list. The sixth is a per-row question asked by repositories/show, once per API key.
-  # `oldest_rotated_key_time` is back to the first five's shape: another per-card question asked by
+  # `stranded_rotation_time` joins the first five's shape: another per-card question asked by
   # repositories/index, once per repository in the list.
   helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run,
-                :rejection_verdict, :former_member?, :oldest_rotated_key_time
+                :rejection_verdict, :former_member?, :stranded_rotation_time
 
   # The seventh through tenth are the index's NARROWING state, handed to the view so it can echo
   # the reader's own ask back at them — the search field's value, the selects' selected options,
@@ -1201,17 +1201,31 @@ class RepositoriesController < ApplicationController
     @api_key_counts ||= api_key_rows.group_by(&:repository_id).transform_values(&:size)
   end
 
-  # `repository_id => oldest stranded `rotated_at`` for every repository on this page — the age the
-  # card's rotation marker dates its sentence from, `nil` when the repository has no stranded key
-  # and therefore renders no marker.
+  # `repository_id => the oldest stranded `rotated_at`` for every repository on this page that
+  # reads the way show's rotated branch reads — `nil` for every repository that does not, and
+  # therefore renders no marker. The value the card's rotation sentence dates itself from.
   #
-  # "Stranded" is `ApiKey#rotated_and_unused?`'s own verdict, applied per loaded ROW rather than
-  # re-derived as SQL. The predicate has two `nil` limbs that go OPPOSITE ways (`rotated_at` nil is
-  # never-rotated → false; `last_used_at` nil is rotated before it ever authenticated → TRUE, the
-  # state at its purest), so a `WHERE rotated_at > last_used_at` spelling here would be a second
-  # expression of the rule, free to drift from the one both web surfaces read — and the WHERE would
-  # drop precisely the never-authenticated stranded key, the limb the model calls the state at its
-  # purest. `show` states the same rule for itself: rows loaded, predicate applied in Ruby.
+  # THE TRIGGER IS SHOW'S CHAIN, NOT THE ROW PREDICATE. The decision card this ticket was resumed
+  # under settled that fork, and this follows it: on `show` the rotated-but-unused state is branch
+  # 3 of an exclusive `elsif` chain, reached only when nothing is refusing AND `@last_api_request_at`
+  # is present AND `@last_live_api_request_at` is blank — some live key has authenticated, and every
+  # token that ever did has since been rotated away, so CI is presenting a credential that no longer
+  # exists. `ApiKey#rotated_and_unused?` is the predicate that state is DERIVED from (the model's
+  # own word), not the state itself. Keyed on it per row, the card would contradict `show` on a
+  # repository whose live key keeps CI connected (the stranded key beside it holds nothing back —
+  # `show` says Connected) and on a key rotated before it ever authenticated (`show` says Not
+  # connected yet — no token was ever routed through it, so no replacement is hanging). The chain's
+  # refusing conjunct is carried by the CARD'S ORDER rather than by suppression: the refusal marker
+  # renders first, and a card holding both facts shows both.
+  #
+  # "Stranded" is still `ApiKey#rotated_and_unused?`'s own verdict, applied per loaded ROW rather
+  # than re-derived as SQL. The predicate has two `nil` limbs that go OPPOSITE ways (`rotated_at`
+  # nil is never-rotated → false; `last_used_at` nil is rotated before it ever authenticated →
+  # TRUE), so a `WHERE rotated_at > last_used_at` spelling here would be a second expression of
+  # the rule, free to drift from the one both web surfaces read. Here the limbs enter as GUARDS
+  # rather than as badge triggers: the predicate sorts the rows into the stranded set, and the two
+  # aggregate questions read `last_used_at` off the sets — the first off all of them, the second
+  # off everything but the stranded.
   #
   # LIVE rows only, on the rule `show` states at its own rotation split: a key that was rotated and
   # THEN revoked is both, the revocation is the newer and stronger fact, and the rotated state must
@@ -1223,16 +1237,35 @@ class RepositoriesController < ApplicationController
   # against its own rotation, so the only date true of all of them at once is the oldest — the
   # NEWEST would date a five-day-dead pipeline at one minute whenever a second key was rotated just
   # now. The same choice the connection indicator's own branch makes over the same column.
-  def oldest_rotated_key_time(repository)
-    oldest_rotated_key_times[repository.id]
+  def stranded_rotation_time(repository)
+    stranded_rotation_times[repository.id]
   end
 
-  def oldest_rotated_key_times
-    @oldest_rotated_key_times ||= begin
-      api_key_rows.select(&:rotated_and_unused?)
-                  .group_by(&:repository_id)
-                  .transform_values { |keys| keys.filter_map(&:rotated_at).min }
-    end
+  def stranded_rotation_times
+    @stranded_rotation_times ||= api_key_rows.group_by(&:repository_id)
+                                             .transform_values { |rows| stranded_rotation_time_within(rows) }
+  end
+
+  # Show's rotated branch, over one repository's loaded rows. The locals mirror the chain's
+  # conditions and are named after the instance variables that carry them on `show` — read the
+  # three lines beside `repositories_controller#show`'s own guards and the equivalence is the
+  # check.
+  def stranded_rotation_time_within(rows)
+    stranded = rows.select(&:rotated_and_unused?)
+    # `@last_api_request_at` — did any LIVE key ever authenticate, with whichever token it carried
+    # at the time (a rotation retires a token without touching its use).
+    some_authenticated = rows.filter_map(&:last_used_at).max.present?
+    # `@last_live_api_request_at` — does any live key's `last_used_at` still describe the token it
+    # is carrying NOW; blank means every token that ever authenticated has been rotated away.
+    nothing_live = (rows - stranded).filter_map(&:last_used_at).max.blank?
+
+    return nil unless some_authenticated && nothing_live
+
+    # The trigger cannot fire on an empty stranded set: with nothing stranded, `nothing_live` reads
+    # the very rows `some_authenticated` does and the two cannot hold at once — so the min runs
+    # over a non-empty set, and every stranded row carries a `rotated_at` (the predicate's first
+    # limb is exactly that), never a filtered-out nil.
+    stranded.filter_map(&:rotated_at).min
   end
 
   # The rows BOTH per-card `ApiKey` questions read — the key count above and the rotation age
