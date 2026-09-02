@@ -80,7 +80,19 @@ Rails.application.routes.draw do
     # /`update` change a member's permission set in place: the alternative is Revoke + re-add,
     # which fires a consequence dialog about surviving API keys for an operation that is not a
     # removal, and resets the "Since" column so a narrowed colleague reads as a brand-new one.
-    resources :members, only: %i[index new create edit update destroy], controller: "memberships"
+    resources :members, only: %i[index new create edit update destroy], controller: "memberships" do
+      # Leave (SPGD-838): a member ending their OWN access, beside the "Your access" row on
+      # repositories#show. A COLLECTION route, deliberately not a member one — the path carries
+      # no id at all, because the row being destroyed is whichever one the SESSION names
+      # (`MembershipsController#leave` resolves it from `current_user`), so the request is
+      # structurally incapable of naming somebody else's membership. Declaring it on the members
+      # resource keeps the verb's subject honest (`DELETE …/members/leave` — leave the set of
+      # people), and Rails serves collection routes ahead of member ones, so it cannot be
+      # swallowed by `:id`; a membership id is an integer in any case.
+      collection do
+        delete :leave
+      end
+    end
 
     # Deleting one run from the "Recent runs" panel (SPGD-812). A member route with only `destroy`,
     # the same shape `api_keys` above uses: the id is a path segment so Rails' CSRF check applies,

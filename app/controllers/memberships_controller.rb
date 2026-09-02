@@ -34,11 +34,17 @@
 # closes is their having no way to know they need to pull it.
 #
 # That disclosure is gated on `keys.manage`, NOT on the `members.manage` that gates the page —
-# see `keys_minted_by`. The two permissions are independent, so "who can reach this repository"
+# see MintedKeyCounts. The two permissions are independent, so "who can reach this repository"
 # and "how many credentials exist on it" are separate questions and this page may only answer the
 # first to a viewer who holds only `members.manage`.
+#
+# `#leave` is the one deliberate exception to the gate above, and it is the member acting on
+# THEMSELVES rather than the page being opened to them: it gates at `:view` because ending your
+# own access is not administering members. Its comment carries the argument.
 class MembershipsController < ApplicationController
   before_action :require_authentication
+
+  include MintedKeyCounts
 
   def index
     @repository = current_repository(:members_manage)
@@ -177,6 +183,41 @@ class MembershipsController < ApplicationController
     else
       redirect_to repository_members_path(repository), notice: helpers.revoke_notice(handle, keys_minted)
     end
+  end
+
+  # A member ending their OWN access, reached from the Leave control on repositories#show — the
+  # acting half of the "Your access" row, whose comment (and SPGD-185's whole thesis) is that the
+  # page renders no control its viewer does not hold. A person can be added by somebody else with
+  # no consent step, and until now their only way out was asking the owner.
+  #
+  # Deliberately a SECOND action rather than a widened gate on `#destroy`. Relaxing `#destroy`'s
+  # `:members_manage` to `:view` would let any member delete any OTHER member's row — the precise
+  # cross-row escalation the comment on `find_membership!` exists to prevent. This action is
+  # structurally incapable of naming somebody else: the route carries no id segment and the
+  # membership is resolved from the session below, never from any submitted parameter.
+  #
+  # Gates at `:view`, the same gate that opens repositories#show, so the population that can leave
+  # is exactly the population that can see the control. The failure shapes reuse the existing ones:
+  # a signed-out visitor is turned away by `require_authentication`; a signed-in non-member 404s
+  # inside `current_repository` (the repository's existence stays hidden); and the OWNER reaches
+  # `:view` with no membership row at all — `RepositoryMembership#user_is_not_the_owner` makes one
+  # impossible — so the nil row answers 404 here rather than raising, exactly as `find_membership!`
+  # answers a stranger with the id of a row that is not theirs.
+  def leave
+    repository = current_repository(:view)
+    membership = repository.repository_memberships.find_by(user_id: current_user.id)
+    raise ActiveRecord::RecordNotFound unless membership
+
+    # Read before the row goes away, in `#destroy`'s order: destroying a membership touches no
+    # api_keys row, so the count is stable either side — taking it first keeps the notice's claim
+    # and the state it describes in one place.
+    keys_minted = keys_minted_by(repository, [membership.user_id]).fetch(membership.user_id, 0)
+
+    membership.destroy!
+
+    # The leaver has just 404'd themselves out of this repository — the destination `#destroy`'s
+    # self-revoke arm already reasoned about, somewhere that still exists.
+    redirect_to repositories_path, notice: helpers.leave_notice(repository, keys_minted)
   end
 
   private
@@ -342,39 +383,4 @@ class MembershipsController < ApplicationController
     "Added #{handle} with #{membership.permissions.to_sentence}."
   end
 
-  # `user_id => live key count`, for the whole table in ONE grouped query — the same N+1 discipline
-  # as `RepositoriesController#shared_permissions` ("the same answer in a single query"), because a
-  # per-row count would cost one query per member.
-  #
-  # Scoped through `repository.api_keys`, so it can never read another repository's keys, and it
-  # counts what is *live*: revoking a key deletes the row, so a member whose keys have all been
-  # revoked drops out of the hash entirely and reads as zero.
-  #
-  # The `keys.manage` gate is the load-bearing line, and it lives HERE rather than at the two call
-  # sites for the same reason `current_repository` resolves and authorizes together: a caller that
-  # forgets it is a leak, and both callers need it. `members.manage` and `keys.manage` are
-  # independent permissions, so a viewer can hold this page without holding any right to key
-  # metadata — and `RepositoriesController#key_count_visible?` already states the rule this obeys:
-  # "repositories#show gates the whole API keys panel behind `keys.manage`, so a bare count would
-  # leak past the same line." A count on *this* page is the same count. An empty hash makes every
-  # surface downstream degrade to the zero-key wording, which is exactly right: a viewer who may
-  # not know the number should be told nothing, not told less.
-  #
-  # This also keeps the badge's deep link honest. It points at `#api-keys` on repositories#show,
-  # a panel that renders only under the same `keys.manage` — so gating on anything wider would
-  # render an affordance that lands on a page where the panel, the anchor and the Revoke button
-  # it promises all do not exist.
-  #
-  # `repository_policy` is memoized per repository and already populated by `current_repository`
-  # above, so this asks the database nothing.
-  def keys_minted_by(repository, user_ids)
-    return {} unless repository_policy(repository).can?(:keys_manage)
-    return {} if user_ids.empty?
-
-    # LIVE keys only (SPGD-804): a revoked row is retained, and counting it here would tell the
-    # owner — twice, on the page and in the revoke dialog — that a member "minted 3 keys" that
-    # keep authenticating when all 3 have been retired. The badge's premise is a key that will
-    # SURVIVE the membership revocation, and a revoked key is not one.
-    repository.api_keys.live.where(created_by_user_id: user_ids).group(:created_by_user_id).count
-  end
 end

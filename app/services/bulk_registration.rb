@@ -418,7 +418,7 @@ class BulkRegistration
   # `Api::V1::UserRepositoriesController#create` gives the reasoning in full and it applies verbatim
   # here: `ApiKeysController#destroy` is a hard `destroy!` with no audit row, so attribution cannot
   # be backfilled — a key minted NULL is NULL forever, renders "Unknown" in `repositories/_api_keys`,
-  # and silently undercounts `MembershipsController#keys_minted_by`, the query behind the warning
+  # and silently undercounts `MintedKeyCounts#keys_minted_by`, the query behind the warning
   # shown when someone's access is revoked. This service holds `user` for the whole batch and that
   # is exactly who minted it.
   #

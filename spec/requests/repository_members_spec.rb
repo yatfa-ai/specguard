@@ -1356,6 +1356,70 @@ RSpec.describe "Repository members", type: :request do
     end
   end
 
+  # The Leave path's refusals, beside the `#destroy` ones they mirror. Leave gates at `:view` and
+  # resolves the row from the session, so the population that can act is exactly the population
+  # with a membership row here; everyone else must be refused WITHOUT the refusal depending on any
+  # submitted value — there is no id in the route, and the examples below smuggle one in anyway to
+  # prove it is never consulted. (That the session-resolved member destroys only their own row is
+  # pinned in spec/requests/repository_sharing_spec.rb, beside the control that submits it.)
+  describe "leaving without a membership to end" do
+    let!(:membership) { create_membership(repository: repository, user: colleague, permissions: %w[view]) }
+
+    # The owner passes `:view` — they hold every capability implicitly — but has no membership ROW
+    # (`user_is_not_the_owner` makes one impossible), so the session-resolved lookup finds nothing.
+    # That must answer 404, exactly as `find_membership!` answers a stranger, not a 500: the
+    # control never renders for them, but the URL is reachable and must fail closed.
+    # @intent: {"entity": "RepositoryMembership", "action": "refuse owner leave", "behavior": "the owner DELETEing the leave path answers 404, changes no rows, and the colleague's membership survives", "layer": "request"}
+    it "answers 404 for the owner, who has no membership row to end" do
+      repository
+      sign_in_via_github
+
+      expect {
+        delete leave_repository_members_path(repository),
+               params: { id: membership.id, membership_id: membership.id }
+      }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:not_found)
+      expect(RepositoryMembership.exists?(membership.id)).to be(true)
+    end
+
+    # A member of a DIFFERENT repository: signed in, legitimate somewhere, and a stranger here —
+    # so a distinct person rather than `colleague`, who belongs to this repository too and would
+    # (correctly) be leaving it. `current_repository(:view)` refuses the actor before any row is
+    # read — the 404-vs-403 fork's non-member arm, unchanged by which membership id the request
+    # carries.
+    # @intent: {"entity": "RepositoryMembership", "action": "refuse foreign member leave", "behavior": "a member of another repository DELETEing this repository's leave path with a smuggled membership id answers 404, changes nothing, and the victim row survives", "layer": "request"}
+    it "answers 404 for a member of a different repository, at any parameter value" do
+      other_owner = create_user(github_uid: "2002", github_handle: "other-owner")
+      other_repository = create_repository(user: other_owner, github_full_name: "acme/payments-service")
+      create_membership(repository: other_repository,
+                        user: create_user(github_uid: "3666", github_handle: "migrant"),
+                        permissions: %w[view])
+      sign_in_via_github(uid: "3666")
+
+      expect {
+        delete leave_repository_members_path(repository),
+               params: { id: membership.id, membership_id: membership.id }
+      }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:not_found)
+      expect(RepositoryMembership.exists?(membership.id)).to be(true)
+    end
+
+    # A signed-in user with no membership anywhere: the repository's existence stays hidden from
+    # them, so 404 rather than 403 — the same fork every other repository action answers at.
+    # @intent: {"entity": "RepositoryMembership", "action": "refuse stranger leave", "behavior": "a signed-in non-member DELETEing the leave path answers 404 and changes nothing", "layer": "request"}
+    it "answers 404 for a signed-in user with no membership, and changes nothing" do
+      sign_in_via_github(uid: "7777")
+
+      expect {
+        delete leave_repository_members_path(repository)
+      }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:not_found)
+    end
+  end
+
   # Slice: the reader for `repository_memberships.granted_by_user_id`. The column has been written
   # on every web save since the grantor bound landed and rendered nowhere, so until now nothing in
   # the suite proved the stored attribution was ever legible to the owner.
@@ -1469,7 +1533,7 @@ RSpec.describe "Repository members", type: :request do
       expect(member_row("hubot")).to include("Unknown")
     end
 
-    # Criterion 3, held to the standard `MembershipsController#keys_minted_by` sets for the cell two
+    # Criterion 3, held to the standard `MintedKeyCounts#keys_minted_by` sets for the cell two
     # columns over. Distinct grantors on purpose: three rows sharing one grantor would be collapsed
     # by the per-request query cache, and a lazily-loaded `membership.granted_by_user` would still
     # look like a single query.

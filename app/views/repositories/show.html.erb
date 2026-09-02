@@ -155,8 +155,33 @@
 
         <% if viewer_access %>
           <p class="text-xs text-app-muted"><%= held_access_description(viewer_access) %></p>
-        <% end %>
 
+          <%# LEAVE (SPGD-838) — the acting half of the row above. SPGD-185's thesis is that the
+              page must say what the reader holds; that thesis has an unstated corollary the row
+              could not explain: one of the things every member holds is the right to give it up,
+              and until now no surface rendered that control, so `held_access_description`'s
+              closing sentence — "a control this page does not show you is one you have not been
+              granted" — was quietly false for exactly one control.
+
+              Inside the `viewer_access` split, and that is the gate: it is non-nil for every
+              non-owner (membership itself grants view, see RepositoryPolicy#can?) and nil for the
+              owner, who holds every capability implicitly and has no membership row to end —
+              a `can?(:members_manage)` wrapper here would be the same wrong gate the row above
+              refuses, splitting members into two classes by an accident of their grant.
+
+              The dialog and the flash after it are `MembershipsHelper`'s leave pair, the same
+              disclosure the owner's Revoke carries, revoiced in the second person and routed
+              through the same count agreement; `@viewer_keys_minted` is computed in the
+              controller under the same `keys.manage` gate, so a view-only member's dialog
+              mentions keys not at all and costs them no query. The route carries no id — the
+              action resolves the row from the session — so it cannot remove anyone but the
+              reader. %>
+          <div class="pt-2">
+            <%= button_to "Leave", leave_repository_members_path(@repository), method: :delete,
+                          class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                          form: { data: { turbo_confirm: leave_confirmation(@repository, @viewer_keys_minted) } } %>
+          </div>
+        <% end %>
         <%# WHICH RUN this whole page is anchored on, whenever `?commit_sha=` named one — the web's
             counterpart to the JSON endpoint's `run_anchor` block, and the half of that ask this
             surface could not have without it. The parameter re-anchors every run-grain panel on the

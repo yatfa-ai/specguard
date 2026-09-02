@@ -186,7 +186,7 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # and the roadmap's own non-goal is that the key's reach is the person's reach. Leaving it blank
   # would render a false sentence — `repositories/_api_keys` shows "Unknown" for a creator that was
   # never recorded or has been deleted, and neither is true of a key a person minted a second ago —
-  # and would silently undercount `MembershipsController#keys_minted_by`, the query behind the
+  # and would silently undercount `MintedKeyCounts#keys_minted_by`, the query behind the
   # warning shown when that person's access is revoked.
   #
   # ## One transaction, because the response promises both

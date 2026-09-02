@@ -111,6 +111,8 @@ class RepositoriesController < ApplicationController
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
   # picker built from the same listing and has to answer the same questions the same way.
   include GithubRepositoryListing
+  # The minted-key count behind the Leave dialog's disclosure — see `show`.
+  include MintedKeyCounts
 
   before_action :require_authentication
 
@@ -261,14 +263,24 @@ class RepositoriesController < ApplicationController
     # the difference between the two is what tells "nothing has ever connected" apart from
     # "something did, with a token that is gone".
     @last_live_api_request_at = (@api_keys - @rotated_unused_api_keys).filter_map(&:last_used_at).max
-    # THE RETIRED KEYS THE PLATFORM HAS SEEN BEING PRESENTED — a revoked token arriving and being
-    # refused stamps `last_refused_at` on the row it names (`Api::BaseController`'s failure path),
-    # and this is the set the connection indicator's revoked state is derived from. Restricted to
-    # rows that carry the stamp: a key revoked and never presented again is not a finding, and
-    # synthesizing one for it is exactly what the honest-bound rule forbids. The recency of the
-    # stamp travels with the row (`last_refused_at`), so the rendered state can date the last
-    # observed presentation rather than claim a present tense the data does not carry.
     @presented_revoked_api_keys = @revoked_api_keys.select(&:revoked_and_still_presented?)
+    # The minted-key count behind the Leave dialog beside the "Your access" row (SPGD-838). The
+    # count is the VIEWER'S OWN — the dialog warns them what their departure leaves running — and
+    # it goes through `MintedKeyCounts#keys_minted_by`, so the `keys.manage` gate is the reader's,
+    # not this call site's: a `view`-only member (and a `members.manage`-only one) is handed `{}`
+    # before any `api_keys` query runs and the dialog degrades to the zero-key wording, which is
+    # the rule this page already keeps for credential metadata.
+    #
+    # Skipped for the OWNER, who is never shown the control — `viewer_access` is nil for them in
+    # the template — and must not pay the grouped query: this page's query budgets are absolute
+    # and pinned, and the owner's must not move for a dialog they cannot see.
+    @viewer_keys_minted =
+      if repository_policy.can?(:owner)
+        0
+      else
+        keys_minted_by(@repository, [current_user.id]).fetch(current_user.id, 0)
+      end
+
     # Every suite figure on the Overview panel is read off this one row — suite size, annotated
     # count, and the difference between them. `nil` is load-bearing and means *never ingested*,
     # which the panel renders as an empty state rather than as `0%`; a repository whose CI has
@@ -1016,7 +1028,7 @@ class RepositoriesController < ApplicationController
   # The user ids that currently hold access to `@repository`: every membership row, plus the owner
   # (who never has one — see RepositoryMembership#user_is_not_the_owner). One query for the whole
   # table, the same single-query discipline as `shared_permissions` above and as
-  # `MembershipsController#keys_minted_by`; `includes(:created_by_user)` has already loaded the
+  # `MintedKeyCounts#keys_minted_by`; `includes(:created_by_user)` has already loaded the
   # creators themselves, so the keys panel asks nothing further per row.
   #
   # `pluck(:user_id)` rather than `@repository.members`, because ids are all the caller compares
@@ -1027,7 +1039,7 @@ class RepositoriesController < ApplicationController
   # creator a former member. `former_member?` fails closed on the nil.
   #
   # The gate is `members.manage`, not the `keys.manage` that gates the panel this feeds, because
-  # "does this person still have access" is a membership question. `MembershipsController#keys_minted_by`
+  # "does this person still have access" is a membership question. `MintedKeyCounts#keys_minted_by`
   # already ruled on this exact collision in the opposite direction — the members page withholds a
   # key count from a `members.manage`-only viewer — and this is that rule applied symmetrically. A
   # member holding only `keys.manage` therefore sees the creator cell exactly as it read before this
