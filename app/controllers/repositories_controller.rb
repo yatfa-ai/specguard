@@ -439,7 +439,7 @@ class RepositoriesController < ApplicationController
   #
   # LIVE keys only (SPGD-804): the badge deep-links to `#api-keys`, and the panel it lands on
   # renders the live partition — a count that included retained revoked rows would advertise "4
-  # keys" over a table showing one, the same misreading `MembershipsController#keys_minted_by`
+  # keys" over a table showing one, the same misreading `MintedKeyCounts#keys_minted_by`
   # was corrected for. The count reads `live_rows.size` off each partition rather than the size of
   # the handed-in rows, so the badge's premise is stated where it is read rather than depending on
   # the load's scope staying narrow.
