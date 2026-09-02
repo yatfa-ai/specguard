@@ -39,6 +39,8 @@ class RepositoriesController < ApplicationController
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
   # picker built from the same listing and has to answer the same questions the same way.
   include GithubRepositoryListing
+  # The minted-key count behind the Leave dialog's disclosure — see `show`.
+  include MintedKeyCounts
 
   before_action :require_authentication
 
@@ -124,6 +126,23 @@ class RepositoriesController < ApplicationController
       revealed_token_name: flash[:revealed_api_key_name],
       revealed_token_regenerated: flash[:revealed_api_key_regenerated].present?
     ).each { |name, value| instance_variable_set(name, value) }
+    # The minted-key count behind the Leave dialog beside the "Your access" row (SPGD-838), kept
+    # in the action under SPGD-1010's own split — it is AUTHORIZATION-shaped viewer state, and
+    # authorization is exactly the quarter of the action the dashboard's header leaves here. It
+    # goes through `MintedKeyCounts#keys_minted_by`, so the `keys.manage` gate is the reader's,
+    # not this call site's: a `view`-only member (and a `members.manage`-only one) is handed `{}`
+    # before any `api_keys` query runs and the dialog degrades to the zero-key wording, which is
+    # the rule this page already keeps for credential metadata.
+    #
+    # Skipped for the OWNER, who is never shown the control — `viewer_access` is nil for them in
+    # the template — and must not pay the grouped query: this page's query budgets are absolute
+    # and pinned, and the owner's must not move for a dialog they cannot see.
+    @viewer_keys_minted =
+      if repository_policy.can?(:owner)
+        0
+      else
+        keys_minted_by(@repository, [current_user.id]).fetch(current_user.id, 0)
+      end
   end
 
   def new
@@ -247,7 +266,7 @@ class RepositoriesController < ApplicationController
   # The user ids that currently hold access to `@repository`: every membership row, plus the owner
   # (who never has one — see RepositoryMembership#user_is_not_the_owner). One query for the whole
   # table, the same single-query discipline as `shared_permissions` above and as
-  # `MembershipsController#keys_minted_by`; `includes(:created_by_user)` has already loaded the
+  # `MintedKeyCounts#keys_minted_by`; `includes(:created_by_user)` has already loaded the
   # creators themselves, so the keys panel asks nothing further per row.
   #
   # `pluck(:user_id)` rather than `@repository.members`, because ids are all the caller compares
@@ -258,7 +277,7 @@ class RepositoriesController < ApplicationController
   # creator a former member. `former_member?` fails closed on the nil.
   #
   # The gate is `members.manage`, not the `keys.manage` that gates the panel this feeds, because
-  # "does this person still have access" is a membership question. `MembershipsController#keys_minted_by`
+  # "does this person still have access" is a membership question. `MintedKeyCounts#keys_minted_by`
   # already ruled on this exact collision in the opposite direction — the members page withholds a
   # key count from a `members.manage`-only viewer — and this is that rule applied symmetrically. A
   # member holding only `keys.manage` therefore sees the creator cell exactly as it read before this
