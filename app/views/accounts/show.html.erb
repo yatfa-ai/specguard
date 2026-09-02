@@ -224,4 +224,62 @@
       <% end %>
     <% end %>
   <% end %>
+
+  <%# CLOSE ACCOUNT (SPGD-853) — the writer for `users.archived_at` that SPGD-358's three
+      enforcement points have been policing without any way to reach the state. The panel sits
+      LAST on the page deliberately, which is where "below the keys panel" from the proposal
+      landed once this page grew two panels above it: everything above is reversible — keys can
+      be re-minted, a grant re-recorded, a disconnected installation reconnected — and closure
+      is the one control here that cannot be undone, so it is the one a reader meets after they
+      have seen everything they might still do instead.
+
+      The copy in this panel is the enforcement read literally off the code, not asserted:
+      sign-in refusal is SessionsController#refuse_archived, the instant key refusal is the
+      User.active merge in UserApiKey.authenticate, and "nothing is destroyed" is the
+      `:restrict_with_error` / no-default-scope pair on User. The one-way sentence is the
+      refusal story told here rather than papered over: there is no restore surface in the
+      product, and SessionsController's own alert now says the same thing — the two must not
+      drift, which is why both name the operator rather than an in-product undo. %>
+  <%= render UI::PanelComponent.new(title: "Close account", id: "account-closure",
+                                    class: "mt-6") do %>
+    <p class="mb-3 text-sm text-app-content-secondary">
+      Closing your account is how you leave SpecGuard, and it is a one-way door:
+      <strong>a closed account cannot be reopened from within SpecGuard</strong> — not by you,
+      not from any browser. Changing your mind afterwards means asking whoever operates this
+      instance, outside the product.
+    </p>
+
+    <p class="mb-1 text-sm text-app-content-secondary">Closing does three things, immediately:</p>
+    <ul class="mb-3 list-disc space-y-1 pl-5 text-sm text-app-content-secondary">
+      <li>
+        <strong>You cannot sign in again.</strong> Any future sign-in attempt is refused, and the
+        session you are in right now ends with this click.
+      </li>
+      <li>
+        <strong>Every personal API key you hold stops authenticating</strong> — every
+        <code class="font-mono text-xs">sgu_</code> token, including keys still running on
+        machines you no longer have. Nothing that uses them warns you first.
+      </li>
+      <li>
+        <strong>Nothing is destroyed.</strong> Your repositories, test runs, spec intents, the
+        keys you minted and the memberships you granted all remain, with your name still on
+        them. Closure is a departure, not a deletion.
+      </li>
+    </ul>
+
+    <%# The same `button_to` + `turbo_confirm` shape the Revoke and Disconnect buttons above
+        take, and the same disclosure discipline — the dialog is where the three consequences
+        get said a second time, because a confirm dialog is often the only thing a person
+        actually reads. %>
+    <div class="mt-4">
+      <%= button_to "Close account…", close_account_path, method: :post,
+                    class: UI::ButtonComponent.classes(variant: :danger, size: :sm),
+                    form: { data: { turbo_confirm:
+                      "Close your account? You cannot sign in again, and this session ends " \
+                      "now. Every sgu_ API key you hold stops working immediately, including " \
+                      "keys on machines you no longer have. Nothing is deleted — your " \
+                      "repositories, runs, intents, keys and memberships remain, with your " \
+                      "name on them. This cannot be undone from within SpecGuard." } } %>
+    </div>
+  <% end %>
 <% end %>

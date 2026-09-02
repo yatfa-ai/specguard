@@ -94,6 +94,28 @@ RSpec.describe "GitHub sign-in", type: :request do
       expect(response).to redirect_to(root_path)
     end
 
+    # SPGD-853 gave this state a second way of being reached: the person closing their own
+    # account from `/account`. The refusal cannot tell a self-closure from a console archive,
+    # so its alert answers both — and THIS is the pin that keeps it answering the self-closed
+    # reader first. The previous copy's only guidance ("contact whoever administers your
+    # SpecGuard instance") named an authority the product has never had, and was written when
+    # the console was the only way in; without this assertion a future copy edit could quietly
+    # reintroduce it as the whole answer.
+    # @intent: { entity: "Session", action: "disclose one-way closure at refusal", behavior: "the refused callback's alert tells a self-closed person that closure cannot be undone from within SpecGuard and keeps the operator pointer only for the unexpected case", layer: "request" }
+    it "tells a person who closed their own account the truth about recovery" do
+      user = sign_in_via_github(installation: false)
+      delete sign_out_path
+      user.update!(archived_at: Time.current)
+
+      sign_in_via_github(installation: false)
+      follow_redirect!
+
+      expect(response.body).to include("has been archived")
+      expect(response.body).to include("If you closed it yourself, closure cannot be undone " \
+                                       "from within SpecGuard")
+      expect(response.body).not_to include("If this is unexpected")
+    end
+
     # The identity upsert stays a pure upsert: it still refreshes the row it resolved. That is
     # deliberate (the row was already theirs and the refresh grants nothing), and pinned here so it
     # reads as a decision rather than as a leak someone should "fix".

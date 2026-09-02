@@ -104,6 +104,26 @@ Rails.application.routes.draw do
   # — an `/account/:id` would be an invitation to type somebody else's.
   resource :account, only: :show do
     resources :api_keys, only: %i[create destroy], controller: "user_api_keys"
+
+    # Closing the account (SPGD-853) — the WRITER for `users.archived_at`, a state that has been
+    # enforced in three places since SPGD-358 (sign-in refused at SessionsController#create, a
+    # live session killed by ApplicationController#current_user, every `sgu_` token 401'd by
+    # UserApiKey.authenticate) while remaining reachable only from a Rails console.
+    #
+    # A nested POST under the account rather than DELETE on `/account` itself, and the choice is
+    # about what the verb says, not about brevity: closure DESTROYS NOTHING — the row survives
+    # with every repository, run, key and membership still naming it (see the
+    # `:restrict_with_error` and `scope :active` notes on User) — so a `delete` verb would
+    # advertise a deletion that never happens. `POST /account/close` names the act instead of
+    # the record's fate, and the nested declaration keeps the path inside the account surface it
+    # belongs to. POST rather than GET because it mutates, which also puts it behind Rails' CSRF
+    # check like every other mutating route here.
+    #
+    # The action is AccountsController#close, and it reads no parameters: whose account closes
+    # is answered by the session alone, on the rule UserApiKeysController already states — the
+    # association IS the authorization — so there is deliberately no id by which one signed-in
+    # person could close another's.
+    post "close", to: "accounts#close", as: :close
   end
 
   # --- Machine auth: Bearer API key ---------------------------------------------
