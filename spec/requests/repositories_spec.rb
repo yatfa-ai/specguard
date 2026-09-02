@@ -3085,6 +3085,265 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
+  # `ApiKey#rotated_and_unused?` — a live key regenerated with nothing authenticating since, the
+  # state the connection indicator on `show` words "Key rotated, not yet in use" — rendered on the
+  # grid beside the refusal marker the block above ships. It had lived on repositories#show alone,
+  # so the reader who had just rotated keys — the one most likely to hold several at once — had to
+  # open every card's page one at a time to learn which of their pipelines was holding a
+  # replacement token that never reached CI.
+  #
+  # The card carries the BADGE and a count-free age sentence, and nothing else. The count-free
+  # shape is this grid's own rule: the key count is credential information here
+  # (`key_count_visible?` gates the key badge on the very same card), so the indicator's plural —
+  # "N keys have been regenerated…" — cannot travel, and N behind an ungated badge would smuggle
+  # the gated figure in through the wording. The state itself is ungated by an existing argued
+  # decision — the indicator is, and this is the same class of signal, no key name and no hint.
+  #
+  # The wording is NOT typed onto the card. It lives in `rotated_key_label` /
+  # `rotated_key_note` / `rotated_keys_note` in ApplicationHelper, beside the refusal pair, and
+  # both surfaces render through it — the same seam rule the refusal block above is held to, and
+  # the reason the extraction is part of this work rather than a copy.
+  describe "the rotation marker on the repositories index" do
+    # The wording, READ FROM THE SEAM both surfaces render rather than typed out here — the rule
+    # `refusal_label` in the block above is held to, for the same reason: a literal copied into a
+    # spec is agreement that merely HOLDS TODAY.
+    def rotated_label = ApplicationController.helpers.rotated_key_label
+
+    # The one card a claim is about, found by its link — the same per-card scoping the refusal
+    # block uses, because page-level assertions cannot tell one card's marker from another's.
+    def card_for(repository)
+      Capybara.string(response.body).find_link(href: repository_path(repository))
+    end
+
+    def card_text(repository) = card_for(repository).text.gsub(/\s+/, " ")
+
+    # A stranded key: minted, used once by the old token, then regenerated — and nothing has
+    # authenticated with the replacement since. `update_columns` backdates the fixture the same way
+    # the `show` indicator specs do.
+    def strand_key(repository, name, used_at: 1.hour.ago, rotated_at: 30.minutes.ago)
+      key = repository.api_keys.create!(name: name)
+      key.touch_last_used!
+      key.regenerate!
+      key.update_columns(last_used_at: used_at, rotated_at: rotated_at)
+      key
+    end
+
+    # Criterion 1, and the oldest date the sentence is held to. The fixture tells the candidate
+    # aggregates apart the same way `show`'s own example does: on a one-key set `min`, `max` and
+    # `first` are indistinguishable, so two strands with different `rotated_at` are the minimum
+    # that can catch a newest-dated sentence — the reading that would tell a five-day-dead
+    # pipeline its event was a minute old.
+    # @intent: {"entity": "ApiKey", "action": "mark stranded rotation", "behavior": "a repository with two stranded keys draws the Key rotated, not yet in use badge and dates the card sentence from the OLDEST stranded rotated_at, read from the shared note seam", "layer": "request"}
+    it "marks a repository with a stranded key and dates the sentence from the oldest rotation" do
+      repository = create_repository(user: @user, github_full_name: "acme/nightlies")
+      nightly = strand_key(repository, "Nightly", used_at: 6.days.ago, rotated_at: 5.days.ago)
+      strand_key(repository, "Main")
+
+      get repositories_path
+
+      expect(page_text).to include(rotated_label)
+      # Against the seam's own figure rather than a literal date, so this pins the SOURCE.
+      expect(page_text).to include(
+        ApplicationController.helpers.rotated_key_note(nightly.reload.rotated_at)
+      )
+      # The reading a newest-dated sentence would produce on this very fixture.
+      expect(page_text).not_to include("less than a minute ago")
+    end
+
+    # Criterion 2, and it is a credential rule, not a style one. The viewer here is the OWNER, so
+    # the key-count badge above the marker legitimately reads "3 keys" — the assertion is scoped to
+    # the ROTATION COPY, which must carry neither that figure nor any other count, and no key name:
+    # the card renders exactly the ungated class the connection indicator established, or it hands
+    # a `view`-only reader credential metadata the page it links to gates.
+    # @intent: {"entity": "ApiKey", "action": "keep count off card", "behavior": "with three stranded keys named Nightly Main and Deploy the rotation paragraph carries no digit at all, the count-bearing 3-keys wording never renders, and no key name appears on the card", "layer": "request"}
+    it "carries no key count and no key name in the card's rotation copy" do
+      repository = create_repository(user: @user, github_full_name: "acme/three-strands")
+      %w[Nightly Main Deploy].each { |name| strand_key(repository, name) }
+
+      get repositories_path
+
+      text = card_text(repository)
+      expect(text).to include(rotated_label)
+      # The indicator's count-bearing variant must not travel to the grid.
+      expect(text).not_to include("3 keys have been regenerated")
+      # ...and no key name either — these names exist only behind `keys.manage` on `show`.
+      expect(text).not_to include("Nightly")
+      expect(text).not_to include("Deploy")
+      # The count-free sentence is asserted on ITS OWN paragraph, not on the card: the owner's key
+      # badge two rows up is allowed to say "3 keys", and the marker must not need it to be absent.
+      # The digit test is the BARE figure (`\b3\b`), not any digit at all — the sentence carries an
+      # age, and "30 minutes" is a measurement, not a count of keys.
+      rotation_paragraph = card_for(repository).find("p", text: "The oldest key was regenerated")
+      expect(rotation_paragraph.text).not_to match(/\b3\b/)
+      expect(rotation_paragraph.text).not_to include("keys have been regenerated")
+    end
+
+    # Criterion 3, and the ordering IS the rule: a refusing pipeline is the worse fact —
+    # deliveries thrown away beats a rotation that never landed — so a card holding both shows
+    # both, refusal first. The same precedence the connection indicator settles on `show`.
+    # @intent: {"entity": "ApiKey", "action": "order refusal first", "behavior": "a card carrying both a live refusal and a stranded rotation renders both labels with Deliveries refused appearing before Key rotated, not yet in use", "layer": "request"}
+    it "renders a card with both facts with the refusal first and the rotation beneath it" do
+      repository = create_repository(user: @user, github_full_name: "acme/both-facts")
+      strand_key(repository, "CI", used_at: 3.days.ago, rotated_at: 2.days.ago)
+      create_test_run(repository: repository, commit_sha: "cafe0501", total_specs_count: 10,
+                      created_at: 2.days.ago)
+      IngestRejection.create!(repository: repository, occurred_at: 1.hour.ago,
+                              details: ["commit_sha can't be blank"], total_reasons_count: 1)
+
+      get repositories_path
+
+      text = card_text(repository)
+      expect(text).to include(ApplicationController.helpers.refused_deliveries_label)
+      expect(text).to include(rotated_label)
+      # Both, and in this order: refusal first, rotation second.
+      expect(text.index(ApplicationController.helpers.refused_deliveries_label))
+        .to be < text.index(rotated_label)
+    end
+
+    # Criterion 4 — purely additive for the population without a stranded key, asserted through
+    # the seam both ways: no badge and no note sentence, while the card keeps printing what it
+    # printed before. The "1 key" figure doubles as the guard that the consolidated read the
+    # marker rides still answers the count badge exactly as the grouped COUNT it replaced did.
+    # @intent: {"entity": "ApiKey", "action": "leave unstranded unchanged", "behavior": "a repository whose key is used and never rotated prints its 1 key badge and No runs yet with no Key rotated label and no oldest-key sentence", "layer": "request"}
+    it "leaves a repository with no stranded key rendering exactly what it rendered before" do
+      repository = create_repository(user: @user, github_full_name: "acme/plain")
+      repository.api_keys.create!(name: "CI").touch_last_used!
+
+      get repositories_path
+
+      expect(page_text).not_to include(rotated_label)
+      expect(page_text).not_to include("The oldest key was regenerated")
+      expect(page_text).to include("1 key")
+      expect(page_text).to include("No runs yet")
+    end
+
+    # Criterion 5 — the limb a WHERE clause would drop. `rotated_and_unused?` has two `nil` limbs
+    # that go opposite ways, and `last_used_at IS NULL` means TRUE: a key rotated before it ever
+    # authenticated is the state at its purest, in the model's own words. A SQL spelling of the
+    # rule (`WHERE rotated_at > last_used_at`) answers NULL for this row and silently drops it, so
+    # this example is what pins the predicate-in-Ruby reading the controller states.
+    # @intent: {"entity": "ApiKey", "action": "mark never-authenticated", "behavior": "a key rotated before ever being used still draws the badge and the note, its rotated_at dating the sentence", "layer": "request"}
+    it "marks the key that was rotated before it ever authenticated" do
+      repository = create_repository(user: @user, github_full_name: "acme/never-authed")
+      key = repository.api_keys.create!(name: "CI")
+      key.regenerate!
+
+      get repositories_path
+
+      expect(key.reload).to be_rotated_and_unused
+      expect(page_text).to include(rotated_label)
+      expect(page_text).to include(
+        ApplicationController.helpers.rotated_key_note(key.reload.rotated_at)
+      )
+    end
+
+    # The retirement split, carried over from `show`'s own rule: a key that was rotated and THEN
+    # revoked is both, the revocation is the newer and stronger fact, and the rotated state must
+    # not fire for it. The read is off the live partition the key count already uses — which is
+    # also why a dropped `.live` scope would break this example and not merely change a flavour.
+    # @intent: {"entity": "ApiKey", "action": "skip revoked strand", "behavior": "a key that was stranded and then revoked draws no Key rotated marker on the card, the revocation being the stronger fact", "layer": "request"}
+    it "does not mark a key that was rotated and then revoked" do
+      repository = create_repository(user: @user, github_full_name: "acme/retired")
+      key = strand_key(repository, "CI")
+      key.revoke!
+
+      get repositories_path
+
+      expect(key.reload).to be_revoked
+      expect(page_text).not_to include(rotated_label)
+      expect(page_text).not_to include("replacement token has not reached CI")
+    end
+
+    # Criterion 6, at the surface level the seam exists for: the card and the page it links to
+    # word the state from ONE helper, so a rename cannot move one and strand the other. Each
+    # surface is held to its own seam's output — the indicator keeps the count-bearing note, the
+    # card the count-free one — rather than to literals typed twice here.
+    # @intent: {"entity": "ApiKey", "action": "share rotation wording", "behavior": "the card and the show page's connection indicator both carry the Key rotated label from the same helper, each rendering its own note seam's output", "layer": "request"}
+    it "words the card and the page it links to from one seam" do
+      repository = create_repository(user: @user, github_full_name: "acme/shared-words")
+      strand_key(repository, "CI")
+
+      get repositories_path
+      grid_text = page_text
+
+      get repository_path(repository)
+      indicator_text = Capybara.string(response.body).find("#connection-indicator").text.squish
+
+      key = repository.api_keys.live.first.reload
+      expect(grid_text).to include(rotated_label)
+      expect(indicator_text).to include(rotated_label)
+      # Each surface its own variant, and each asserted against the seam and not a literal.
+      expect(grid_text).to include(
+        ApplicationController.helpers.rotated_key_note(key.rotated_at)
+      )
+      expect(indicator_text).to include(
+        ApplicationController.helpers.rotated_keys_note(1, key.rotated_at)
+      )
+    end
+
+    # Criterion 7 — the guard the neighbouring budgets exist in the shape of: every SELECT the
+    # index issues against `api_keys`, so a per-card read shows up as N of them rather than as a
+    # passing test. Every card here is stranded, which is the difference between this and a
+    # green-for-the-wrong-reason guard: a budget whose page never renders the read it is guarding
+    # passes trivially. The quoted table spelling is deliberate — `user_api_keys` exists, and the
+    # bare substring would count its statements against this budget.
+    #
+    # ONE read serves both facts the card draws from `api_keys` — the count badge and this marker —
+    # because the rotation state is derived in Ruby from the rows the count used to take as a
+    # grouped COUNT. Doubling the grid proves the 1 is a bound and not a coincidence of the
+    # fixture's size.
+    # @intent: {"entity": "ApiKey", "action": "batch key reads", "behavior": "three stranded cards, then six, all render the label while a single api_keys SELECT serves the whole grid at either size", "layer": "request"}
+    it "asks the api_keys question once for the whole grid, however long the list is" do
+      %w[acme/one acme/two acme/three].each do |full_name|
+        strand_key(create_repository(user: @user, github_full_name: full_name), "CI")
+      end
+
+      key_queries = queries_against('"api_keys"') { get repositories_path }
+
+      expect(response).to have_http_status(:ok)
+      # Every card really did render the marker, so every card really did ask.
+      expect(page_text.scan(rotated_label).size).to eq(3)
+      # One row read for the whole page — three cards must not cost three SELECTs.
+      expect(key_queries.size).to eq(1)
+
+      %w[acme/four acme/five acme/six].each do |full_name|
+        strand_key(create_repository(user: @user, github_full_name: full_name), "CI")
+      end
+
+      doubled = queries_against('"api_keys"') { get repositories_path }
+
+      expect(page_text.scan(rotated_label).size).to eq(6)
+      expect(doubled.size).to eq(1)
+    end
+
+    # The read is narrowed to the ids already on this page — a property of the STATEMENT, captured
+    # off the wire rather than copied from the controller. These rows carry `token_digest`, so
+    # "reads every key in the deployment to answer about four" would be a privacy boundary crossed
+    # and not merely a slow query; the stranger's rows stay out of the read entirely.
+    # @intent: {"entity": "ApiKey", "action": "scope key read", "behavior": "the grid's api_keys SELECT is narrowed by repository_id IN to exactly the viewer's two repositories and never reads a stranger's", "layer": "request"}
+    it "reads only the repositories on this page, never the whole table" do
+      mine = create_repository(user: @user, github_full_name: "acme/mine")
+      strand_key(mine, "CI")
+      also_mine = create_repository(user: @user, github_full_name: "acme/also-mine")
+
+      stranger = create_user(github_uid: "7777", github_handle: "stranger")
+      other = create_repository(user: stranger, github_full_name: "other/theirs")
+      5.times { |index| strand_key(other, "CI", rotated_at: (index + 1).minutes.ago) }
+
+      sql = captured_sql('"api_keys"') { get repositories_path }
+
+      expect(page_text).to include(rotated_label)
+      # Narrowed by repository at all — the shape a global read would not have.
+      expect(sql).to match(/WHERE .*"repository_id" IN /)
+
+      scoped_ids = sql[/IN \(([^)]*)\)/, 1].split(",").map { |id| id.strip.to_i }
+      # Both of this viewer's repositories, INCLUDING the one with no keys: the scope is the page,
+      # not the subset that happens to have rows.
+      expect(scoped_ids).to match_array([mine.id, also_mine.id])
+      expect(scoped_ids).not_to include(other.id)
+    end
+  end
+
   # SPGD-836 — registration access, stated on the page both return journeys land on.
   #
   # The gap these pin: `InstallationRepositories::MESSAGES[:not_granted]` refuses an `sgu_`

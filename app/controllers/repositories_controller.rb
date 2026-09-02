@@ -116,8 +116,10 @@ class RepositoriesController < ApplicationController
 
   # The first five are per-card questions asked by repositories/index, once per repository in the
   # list. The sixth is a per-row question asked by repositories/show, once per API key.
+  # `oldest_rotated_key_time` is back to the first five's shape: another per-card question asked by
+  # repositories/index, once per repository in the list.
   helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run,
-                :rejection_verdict, :former_member?
+                :rejection_verdict, :former_member?, :oldest_rotated_key_time
 
   # The seventh through tenth are the index's NARROWING state, handed to the view so it can echo
   # the reader's own ask back at them — the search field's value, the selects' selected options,
@@ -1178,10 +1180,13 @@ class RepositoriesController < ApplicationController
     api_key_counts[repository.id].to_i
   end
 
-  # `repository_id => key count` for every repository on this page, in one query no matter how long
-  # the list is — the same shape, and the same reason, as `shared_permissions` and
-  # `latest_test_runs`. Scoped to the ids already on this page, so it never counts `api_keys`
-  # globally.
+  # `repository_id => key count` for every repository on this page — the same shape, and the same
+  # reason, as `shared_permissions` and `latest_test_runs`. Derived from `api_key_rows` below
+  # rather than issuing its own grouped COUNT: the rotation state beside it needs the same rows
+  # under the same scope, and two reads would hit `api_keys` twice per page render for one answer
+  # each. The GROUP BY this used to run is replaced by a group-by in Ruby over that one row set —
+  # same `{repository_id => count}` answer, still one `api_keys` SELECT for the whole page, still
+  # scoped to the ids already on this page so it never counts `api_keys` globally.
   #
   # LIVE keys only (SPGD-804): the badge deep-links to `#api-keys`, and the panel it lands on
   # renders the live partition — a count that included retained revoked rows would advertise "4
@@ -1193,14 +1198,60 @@ class RepositoriesController < ApplicationController
   # query to visible ids would put a per-card decision back in front of it for no benefit. Nothing
   # here reaches a viewer the gate has not already admitted.
   def api_key_counts
-    @api_key_counts ||= begin
+    @api_key_counts ||= api_key_rows.group_by(&:repository_id).transform_values(&:size)
+  end
+
+  # `repository_id => oldest stranded `rotated_at`` for every repository on this page — the age the
+  # card's rotation marker dates its sentence from, `nil` when the repository has no stranded key
+  # and therefore renders no marker.
+  #
+  # "Stranded" is `ApiKey#rotated_and_unused?`'s own verdict, applied per loaded ROW rather than
+  # re-derived as SQL. The predicate has two `nil` limbs that go OPPOSITE ways (`rotated_at` nil is
+  # never-rotated → false; `last_used_at` nil is rotated before it ever authenticated → TRUE, the
+  # state at its purest), so a `WHERE rotated_at > last_used_at` spelling here would be a second
+  # expression of the rule, free to drift from the one both web surfaces read — and the WHERE would
+  # drop precisely the never-authenticated stranded key, the limb the model calls the state at its
+  # purest. `show` states the same rule for itself: rows loaded, predicate applied in Ruby.
+  #
+  # LIVE rows only, on the rule `show` states at its own rotation split: a key that was rotated and
+  # THEN revoked is both, the revocation is the newer and stronger fact, and the rotated state must
+  # not fire for it. `api_key_rows` below is already the live partition, so this answer and the
+  # key count describe the same population — a card's count and its rotation marker cannot
+  # disagree about which keys a repository has.
+  #
+  # The OLDEST stranded `rotated_at`, and never the newest: each stranded key satisfies the rule
+  # against its own rotation, so the only date true of all of them at once is the oldest — the
+  # NEWEST would date a five-day-dead pipeline at one minute whenever a second key was rotated just
+  # now. The same choice the connection indicator's own branch makes over the same column.
+  def oldest_rotated_key_time(repository)
+    oldest_rotated_key_times[repository.id]
+  end
+
+  def oldest_rotated_key_times
+    @oldest_rotated_key_times ||= begin
+      api_key_rows.select(&:rotated_and_unused?)
+                  .group_by(&:repository_id)
+                  .transform_values { |keys| keys.filter_map(&:rotated_at).min }
+    end
+  end
+
+  # The rows BOTH per-card `ApiKey` questions read — the key count above and the rotation age
+  # beside it — loaded once for the whole page and partitioned in Ruby. Consolidation is the point:
+  # one `ApiKey.live` SELECT scoped to this page's ids answers the count (a group's size) and the
+  # rotation state (the predicate applied per row) together, and the page's `api_keys` budget stays
+  # at the single SELECT a grouped COUNT used to cost.
+  #
+  # Full ROWS rather than an aggregate is precedent on this product, not a new exposure: `show`
+  # loads `keys.to_a` before any gate, and only its `:created_by_user` preload is gated on
+  # `keys_manage` — `token_digest` is never rendered anywhere, and it is not the token. The gate
+  # here is likewise on what is RENDERED: the count is read behind `key_count_visible?` by the
+  # view, and the rotation state renders only as a `:warning` badge plus a count-free age sentence
+  # — the ungated class the connection stat established, no key name, no count, no hint.
+  def api_key_rows
+    @api_key_rows ||= begin
       repository_ids = @repositories.map(&:id)
 
-      if repository_ids.empty?
-        {}
-      else
-        ApiKey.live.where(repository_id: repository_ids).group(:repository_id).count
-      end
+      repository_ids.empty? ? [] : ApiKey.live.where(repository_id: repository_ids).to_a
     end
   end
 
