@@ -192,12 +192,13 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       expect(ApiKey.where.not(last_refused_at: nil)).to be_empty
     end
 
-    # The class guard stated in `attribute_refused_revocation`, asserted: a `sgu_` token failing
+    # The dispatch guard stated in `attribute_refused_revocation`, asserted: a `sgu_` token failing
     # for a reason of its own (here: no such user key at all) is resolved against ITS OWN table —
-    # which this filter sees, because `"api_keys"` is a substring of `"user_api_keys"` — and must
-    # probe no `api_keys` row. So the assertion is on the quoted `FROM "api_keys"` spelling, which
-    # cannot match the user-key table: the failure-path lookup is `ApiKey`-class-guarded, and this
-    # is what proves it.
+    # which this filter sees, because `"api_keys"` is a substring of `"user_api_keys"` — and the
+    # failure path must probe no `api_keys` row for it. Since SPGD-943 the failure path dispatches
+    # on the credential class (`UserApiKey` has a revocation lifecycle of its own), so what this
+    # proves is that the dispatch does not COLLAPSE: the `sgu_` branch reaches exactly one table,
+    # stated on the quoted `FROM "api_keys"` spelling, which cannot match the user-key table.
     # @intent: { entity: "credential seam", action: "guard the credential class", behavior: "a failing user-key presentation resolves its own table and reads no api_keys row at all", layer: "request" }
     it "never probes the repository-key table for a user-key failure" do
       statements = credential_reads do
@@ -205,8 +206,9 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       end
 
       expect(response).to have_http_status(:unauthorized)
-      # The resolution itself ran (against `user_api_keys` — its own table), so the population is
-      # not empty; what must be empty is the `api_keys` half.
+      # The resolution itself ran (against `user_api_keys` — its own table), and since SPGD-943 the
+      # failure path's revoked-row lookup ran with it, so the population is not empty; what must be
+      # empty is the `api_keys` half.
       expect(statements).to be_present
       expect(statements.grep(/FROM "api_keys"/)).to be_empty
       expect(statements.grep(/UPDATE/)).to be_empty
@@ -236,6 +238,87 @@ RSpec.describe "API v1 — the credential seam", type: :request do
     end
   end
 
+  # SPGD-943: the OTHER credential now carries the same lifecycle, and the same cost guard. A
+  # revoked `sgu_` token is retired, not deleted — the row remains, the digest still names it, and
+  # the failure path stamps `last_refused_at` on the row it belongs to, which is what lets /account
+  # say "a key you revoked is still being presented" to the person who handed that token to an
+  # agent. The class dispatch in `attribute_refused_revocation` is what keeps the two halves from
+  # collapsing into each other: an `sgu_` failure probes exactly its own table, as an `sgk_`
+  # failure probes exactly its.
+  describe "a revoked user key arriving at a user-key endpoint" do
+    def credential_reads(&)
+      queries_against("api_keys", &)
+    end
+
+    # The `sgu_` twin of the positive case above, and the same exact shape: the 401 costs TWO reads
+    # of the table — resolution's `authenticate` (which the `live` filter empties) and the failure
+    # path's one lookup on the same unique digest index — plus the stamp, which is the point of the
+    # path. Asserted as separate SELECT and UPDATE counts so a second lookup could not hide inside
+    # a total that also contains the write.
+    # @intent: { entity: "credential seam", action: "attribute a revoked user-key presentation", behavior: "a revoked sgu_ token is refused 401 and stamps last_refused_at on its retained row, costing resolution plus exactly one failure-path lookup plus the write, and no api_keys row", layer: "request" }
+    it "refuses the revoked token and stamps the refused presentation on its row" do
+      revoked_token = user_key.raw_token
+      user_key.revoke!
+
+      statements = credential_reads do
+        get "/api/v1/repositories", headers: bearer(revoked_token)
+      end
+
+      expect(response).to have_http_status(:unauthorized)
+      # Two: the resolution SELECT, then the failure path's revoked-row lookup. A THIRD would be
+      # the failure path wandering.
+      expect(statements.grep(/FROM "user_api_keys"/).size).to eq(2)
+      expect(statements.grep(/UPDATE "user_api_keys"/).size).to eq(1)
+      expect(statements.grep(/FROM "api_keys"/)).to be_empty
+      expect(user_key.reload.revoked_at).to be_present
+      expect(user_key.reload.last_refused_at).to be_present
+    end
+
+    # The miss, on this credential: a LIVE `sgu_` key that fails for another reason cannot exist on
+    # this path — `authenticate` returns nil only for an unknown digest, a revoked row, or an
+    # archived owner — so the plain miss IS the unknown token: the same two reads (resolution, then
+    # the lookup that finds nothing) and NO write. The unattributable 401 stays unattributable.
+    # @intent: { entity: "credential seam", action: "leave an unknown user token unattributable", behavior: "an unknown sgu_ token is refused with resolution plus one empty lookup and no write anywhere on either credential table", layer: "request" }
+    it "writes nothing for a token that was never a user key" do
+      statements = credential_reads do
+        get "/api/v1/repositories", headers: bearer("sgu_not-a-key-anywhere")
+      end
+
+      expect(response).to have_http_status(:unauthorized)
+      expect(statements.grep(/FROM "user_api_keys"/).size).to eq(2)
+      expect(statements.grep(/UPDATE/)).to be_empty
+      expect(UserApiKey.where.not(last_refused_at: nil)).to be_empty
+    end
+
+    # The cost claim, held on the valid `sgu_` path: a valid presentation never reaches the
+    # failure-path lookup at all — the stamping is gated on `authenticate` returning nil. Without
+    # this control, an implementation that ran the revoked-row lookup BEFORE the nil check would
+    # pass the two examples above (a revoked token finds its row either way) while quietly adding
+    # a read to every valid request.
+    #
+    # ONE read and ONE write here, both owed and neither new: the resolution, and the
+    # `last_used_at` stamp every authenticated request has always paid. `/api/v1/repositories`
+    # builds its list from `repositories`, not from a second pass over the credential table.
+    #
+    # The write is asserted to carry no `last_refused_at` rather than the statement population
+    # carrying no MENTION of it — unlike the `sgk_` twin above, whose `authenticate` resolves with
+    # `SELECT "api_keys".*`, this resolution `eager_load`s the person and so spells every column
+    # name into its SELECT list. The column's name rides every valid presentation; what must ride
+    # none is the WRITE.
+    # @intent: { entity: "credential seam", action: "keep the valid user path flat", behavior: "a valid sgu_ presentation costs resolution plus the last_used_at stamp and never runs the failure-path lookup or a refusal write", layer: "request" }
+    it "adds no lookup to a valid presentation" do
+      token = user_key.raw_token
+
+      statements = credential_reads do
+        get "/api/v1/repositories", headers: bearer(token)
+      end
+
+      expect(response).to have_http_status(:ok)
+      expect(statements.grep(/FROM "user_api_keys"/).size).to eq(1)
+      expect(statements.grep(/UPDATE "user_api_keys"/).size).to eq(1)
+      expect(statements.grep(/UPDATE.*last_refused_at/)).to be_empty
+    end
+  end
   describe "a user key (`sgu_`) at a repository-key endpoint" do
     # @intent: { entity: "credential seam", action: "refuse a user key at show", behavior: "a user key at the repository endpoint answers 401", layer: "request" }
     it "is refused by GET /api/v1/repository with 401" do
