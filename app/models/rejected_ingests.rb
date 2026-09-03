@@ -51,29 +51,23 @@ class RejectedIngests
   # figure counted BEFORE the cap against `rows.size`. Here the peek is cheaper than a count and
   # says the same thing: `IngestRejection::REPOSITORY_RETENTION_ROWS` bounds the table at five
   # pages, so the eleventh row is one indexed row off an index this query already walks, in the
-  # same round trip. Still one query for the panel — the retained-window summary below is a SECOND
-  # read, one grouped `GROUP BY`, and the panel's controller hands it in rather than this
-  # constructor issuing it, so a caller that makes no claim about the window pays nothing for one.
+  # same round trip. Still one query HERE — the retained-window summary is a SECOND read, one
+  # grouped `GROUP BY`, and {#retained_window} issues it LAZILY off the peek this method has
+  # already paid for: "nothing peeked" proves the window is empty, so a repository with no
+  # refusals — the overwhelmingly common case — summarizes for free, and the page's absolute
+  # query budget never sees the second read at all.
   #
   # @param last_accepted_run_at [Time, nil] `Repository#latest_test_run`'s `created_at`, passed in
   #   rather than looked up: the page has already loaded that run for the Overview panel, and a
   #   second read here would be a second answer to "when did CI last succeed" with no structural
   #   reason to keep agreeing with the first. `nil` means no run has ever been accepted.
-  # @param retained_window [RejectedIngests::RetainedWindow, nil] the whole retained window's
-  #   population and composition, handed in by the one caller that renders it — the repository
-  #   page's panel. Read {RetainedWindow} for why it is a separate read from the peek above, and
-  #   why the peek stays one query: the window is the PANEL's second read, not this constructor's.
-  #   `nil` (the default) means the caller makes no claim about the window — the JSON API's
-  #   overview serializes `retention_rows`, not a composition, and hands none in — and {#retained_window}
-  #   then answers `nil` rather than an empty summary that would read as a fact.
-  def self.for(repository, last_accepted_run_at:, limit: IngestRejection::PANEL_LIMIT,
-               retained_window: nil)
+  def self.for(repository, last_accepted_run_at:, limit: IngestRejection::PANEL_LIMIT)
     peeked = repository.ingest_rejections.most_recent_first.limit(limit + 1).to_a
 
-    new(rows: peeked.first(limit),
+    new(repository: repository,
+        rows: peeked.first(limit),
         bounded: peeked.size > limit,
-        last_accepted_run_at: last_accepted_run_at,
-        retained_window: retained_window)
+        last_accepted_run_at: last_accepted_run_at)
   end
 
   # The same verdict with NO rows behind it, for a caller that wants only {#refusing?}.
@@ -103,8 +97,9 @@ class RejectedIngests
   # was cut from a list that was never fetched. Neither is a claim the grid makes — it renders one
   # marker and no panel — but they are the honest answers for an object built this way, not
   # placeholders that would read as facts if a future caller asked. {#retained_window} is `nil` for
-  # the same reason: the grid states no population and no composition, and a zeroed summary hanging
-  # off a card object would be exactly the placeholder the paragraph above refuses.
+  # the same reason: no repository was handed in, the grid states no population and no composition,
+  # and a zeroed summary hanging off a card object would be exactly the placeholder the paragraph
+  # above refuses.
   def self.verdict(last_rejection_at:, last_accepted_run_at:)
     new(rows: [],
         bounded: false,
@@ -114,14 +109,14 @@ class RejectedIngests
 
   # @param last_rejection_at [Time, nil] only for {.verdict}, which has no rows to read the head of.
   #   Left `nil` by `.for`, whose rows ARE the answer — see {#last_rejection_at}.
-  # @param retained_window [RejectedIngests::RetainedWindow, nil] only for panel callers; see {.for}.
-  def initialize(rows:, last_accepted_run_at:, bounded:, last_rejection_at: nil,
-                 retained_window: nil)
+  # @param repository [Repository, nil] only for {.for}: {#retained_window} reads the window off
+  #   the repository it was built from, and {.verdict} has none — it is a grid verdict, not a panel.
+  def initialize(repository: nil, rows:, last_accepted_run_at:, bounded:, last_rejection_at: nil)
+    @repository = repository
     @rows = rows
     @last_accepted_run_at = last_accepted_run_at
     @bounded = bounded
     @last_rejection_at = last_rejection_at
-    @retained_window = retained_window
   end
 
   # The refusals, newest first, never longer than the limit this was built with. One query.
@@ -182,15 +177,28 @@ class RejectedIngests
 
   # The retained window's population and composition — the claim `IngestRejection::
   # REPOSITORY_RETENTION_ROWS` has argued for since it was written, performed at last. See
-  # {RetainedWindow} for what it reads and what it deliberately is not; see {.for} for why it is
-  # handed in rather than loaded here.
+  # {RetainedWindow} for what it reads and what it deliberately is not.
   #
-  # `nil` on every object that makes no claim about the window: every {.verdict} object (the grid
-  # renders one marker and no panel), and any `.for` caller that handed none in. The panel reads
-  # this only inside its `any?` branch, where a window is always present — a caller that reached
-  # for it beside an empty rows list would be asking an object that never claimed to know, and
-  # `nil` is the answer that cannot be mistaken for "zero refusals".
-  attr_reader :retained_window
+  # LAZY, and the laziness is a query budget, not an optimisation taste: `.for`'s peek has already
+  # established whether there is anything to summarize, so the reader issues the grouped read only
+  # when there are rows to state it over. A repository with no refusals — the overwhelmingly common
+  # case, and the fixture the page's absolute budget in repositories_spec.rb is counted on — answers
+  # `RetainedWindow.empty` WITHOUT a query, and a refusing repository pays exactly one grouped read,
+  # memoized, however many times the panel or a sibling reaches for it. Loading eagerly would tax
+  # every page load with a `GROUP BY` whose result the panel throws away (the panel body renders
+  # only inside its `any?` branch), and per-window-reach loading would be the N+1 shape this page
+  # has been cleaned of before.
+  #
+  # `nil` on every {.verdict} object: no repository was handed in and the grid renders one marker
+  # and no panel. `nil` is "no claim", which is the honest answer for an object that cannot know;
+  # an EMPTY summary, by contrast, IS a claim — "zero refusals retained" — and `.for`'s objects
+  # earn the right to state it without reading, because "nothing peeked" over a window the
+  # retention rule keeps at fifty proves it.
+  def retained_window
+    return nil unless @repository
+
+    @retained_window ||= rows.empty? ? RetainedWindow.empty : RetainedWindow.for(@repository)
+  end
 
   # The retained window this panel states above its rows: everything `IngestRejection` still holds
   # for the repository, counted and split by reported client, from ONE grouped query.
@@ -226,10 +234,10 @@ class RejectedIngests
   # * **Not a second count.** `#total` is the sum of the bucket counts, so the population and the
   #   breakdown are one `GROUP BY` and cannot disagree — the failure a second aggregate beside a
   #   list exists to invite.
-  # * **Not handed to every caller.** The repositories grid asks {.verdict} per card and must not
-  #   pay a grouped read per card; the JSON API publishes `retention_rows` and no composition. The
-  #   panel's controller passes this in — the same seam `last_accepted_run_at:` already uses for a
-  #   read the page pays for exactly once.
+  # * **Not paid by every caller.** Only a caller that READS {RejectedIngests#retained_window}
+  #   triggers the grouped query — the panel's summary, once per page render, memoized. The
+  #   repositories grid asks {.verdict} per card and must not pay a grouped read per card, and the
+  #   JSON API publishes `retention_rows` and never asks for a composition, so neither does.
   class RetainedWindow
     # One grouped read. `group(:user_agent).count` keys the hash on the STORED value — an
     # ellipsis-truncated string where `MAX_USER_AGENT_LENGTH` bit, `nil` where the client sent no
@@ -240,6 +248,13 @@ class RejectedIngests
     def self.for(repository)
       new(repository.ingest_rejections.group(:user_agent).count)
     end
+
+    # The zero-refusal window, for a caller that has ALREADY established the window is empty
+    # without reading it: `.for`'s peek asked for `PANEL_LIMIT + 1` rows and got none, and the
+    # retention rule keeps fifty, so "nothing peeked" PROVES "window empty". That makes this an
+    # established fact rather than a placeholder — the exact distinction {.verdict}'s `nil`s turn
+    # on, at the other end of the same rule.
+    def self.empty = new({})
 
     # The blank fold is HERE, in Ruby, not left to SQL: `IngestRejection#reported_client` is
     # `user_agent.presence`, so a row with no header reads "Not reported" one panel down — but

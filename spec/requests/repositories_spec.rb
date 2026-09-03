@@ -2268,10 +2268,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        # 23 rather than the 20 this budget carried at the merge base, and it is THREE independent
-        # +1s rather than one recount done twice. Keeping the paragraphs is deliberate: each names
-        # a different read, and a merge that kept any one out would leave the surviving comments
-        # silently accounting for queries they do not describe.
+        # 22 rather than the 20 this budget carried at the merge base, and it is TWO independent
+        # +1s that happened to land in the same rebaseline rather than one recount done twice.
+        # Keeping both paragraphs is deliberate: each names a different read, and a merge that kept
+        # only one would leave the surviving comment silently accounting for a query it does not
+        # describe.
         #
         # +1 from SPGD-816: `run_anchor`'s retention disclosure adds exactly ONE indexed read to
         # the page — `TestRun#observations_retained?` picks the anchored run's branch boundary off
@@ -2285,22 +2286,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # served on every page load because the Overview's reading rows and the sentence beside
         # them both read it. Memoized on the run, so it is one query and not one per reader.
         #
-        # +1 from SPGD-822: the "Rejected deliveries" panel now states its retained window's
-        # population and per-client composition — the reading
-        # `IngestRejection::REPOSITORY_RETENTION_ROWS` has argued its own size from since it was
-        # written, and previously performed by nobody — from ONE grouped `GROUP BY` beside the
-        # panel's existing capped read. ONE for the whole page, not one per row or per client, and
-        # that property is pinned where it can move: the equality guards in
-        # spec/requests/repository_rejected_ingests_spec.rb hold the panel at two reads across one
-        # refusal, a full window, and a window of fifty distinct clients. It is issued on THIS
-        # fixture too — the panel is deliberately ungated, and a repository with no refusals gets
-        # an empty aggregate back — the same unconditional shape the panel's own read has had
-        # since SPGD-563.
-        #
-        # Rebaselined by three rather than carved out, because this is an ABSOLUTE page budget:
+        # Rebaselined by two rather than carved out, because this is an ABSOLUTE page budget:
         # hiding a real new query behind a filter would be the regression this count exists to
         # catch.
-        expect(count_all_queries { get repository_path(repository) }).to eq(23)
+        expect(count_all_queries { get repository_path(repository) }).to eq(22)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

@@ -202,9 +202,11 @@ RSpec.describe "Repository rejected deliveries", type: :request do
   # `GROUP BY` — and they stay two however full the window is and however many distinct clients it
   # holds. An absolute count there cannot tell a structural N+1 from an ordinary widening, so the
   # guard is the equality across two very different row counts — the shape the sibling panels'
-  # guards use. (The absolute number moved from one read to two when the window summary arrived,
-  # SPGD-822: the retention constant's range-of-`user_agent` reading, previously performed by
-  # nobody. The equalities are the part that was and remains load-bearing.)
+  # guards use. (The second read is LAZY — `RejectedIngests#retained_window` issues it only when
+  # there are refusals to summarize, off the peek `.for` has already paid for — so the page's
+  # absolute budget, counted on a zero-refusal fixture, never saw it move: a zero-refusal page
+  # reads this table once and a refusing page reads it twice, and THESE equalities are the
+  # load-bearing part.)
   #
   # `queries_against` rather than a page budget, so this counts reads of THIS table and is
   # unaffected by any panel added beside it later.
@@ -335,16 +337,20 @@ RSpec.describe "Repository rejected deliveries", type: :request do
     # The bucket and the sum. "Not reported" is the rows' own wording one panel down, and the
     # buckets summing to the total is by construction — `total` IS the sum — so this example
     # asserts the rendered arithmetic rather than policing two aggregates into agreement.
-    # @intent: {"entity": "IngestRejection", "action": "bucket missing client", "behavior": "two refusals sent without a User-Agent render a stored NULL row and a summary reading holds 5 with 3 from the reporting client and 2 Not reported", "layer": "request"}
+    #
+    # The sentence is asserted EXACTLY, separators included, because `.squish` collapses whitespace
+    # RUNS and does not remove a space that sits before punctuation: every `include` against the
+    # substrings around a separator passes over "…0.3.1 , 2… Not reported ." — only a match on the
+    # whole sentence can fail on the join itself.
+    # @intent: {"entity": "IngestRejection", "action": "bucket missing client", "behavior": "two refusals sent without a User-Agent render a stored NULL row and the summary reading exactly: The retained window holds 5 refused deliveries: 3 from specguard-rspec/0.3.1, 2 Not reported.", "layer": "request"}
     it "buckets deliveries with no User-Agent under Not reported, summing to the total" do
       3.times { refuse_a_delivery }
       2.times { refuse_a_delivery(user_agent: nil) }
       visit_repository
 
       expect(IngestRejection.last.user_agent).to be_nil
-      expect(window_text).to include("holds 5 refused deliveries")
-      expect(window_text).to include("3 from specguard-rspec/0.3.1")
-      expect(window_text).to include("2 Not reported")
+      expect(window_text).to eq("The retained window holds 5 refused deliveries: " \
+                                "3 from specguard-rspec/0.3.1, 2 Not reported.")
     end
   end
 
@@ -417,15 +423,19 @@ RSpec.describe "Repository rejected deliveries", type: :request do
     end
 
     # Every bound at once — a full retained window, every row a whole suite refused, every reason
-    # long enough to be cut by the length half, and every row's `user_agent` pathological too —
-    # asserted in BYTES, because element counts do not catch a single enormous reason and the length
-    # bound exists for exactly that. The header is driven here because the panel renders
-    # `reported_client` verbatim once per row: without it this ceiling holds only because the
-    # fixture happens to send a well-behaved client string.
-    # @intent: {"entity": "IngestRejection", "action": "hold worst-case byte ceiling", "behavior": "a full window of whole-suite refusals with 5,000-character file paths and 100,000-character user agents keeps every stored reason within the length cap, renders the capped rows and list items, and holds the panel html under 200,000 bytes", "layer": "request"}
+    # long enough to be cut by the length half, and every row's `user_agent` pathological AND
+    # DISTINCT, so the per-row agents stay distinct after the write-side truncate and the summary
+    # above the table renders one max-length bucket PER ROW rather than folding the fixture into
+    # one client. That matters because the summary is the panel's largest new region (distinct
+    # clients x `MAX_USER_AGENT_LENGTH`): an identical agent on every row would leave this fence
+    # never covering it. Asserted in BYTES, because element counts do not catch a single enormous
+    # reason and the length bound exists for exactly that. The header is driven here because the
+    # panel renders `reported_client` verbatim once per row and once per summary bucket: without
+    # it this ceiling holds only because the fixture happens to send a well-behaved client string.
+    # @intent: {"entity": "IngestRejection", "action": "hold worst-case byte ceiling", "behavior": "a full window of whole-suite refusals with 5,000-character file paths and a DISTINCT 100,000-character user agent per row keeps every stored reason within the length cap, renders the capped rows and list items, and holds the panel html under 200,000 bytes", "layer": "request"}
     it "keeps the whole panel under a stated ceiling in the worst case it exists for" do
-      (IngestRejection::PANEL_LIMIT + 2).times do
-        refuse_a_large_delivery(file_path: "x" * 5_000, user_agent: "u" * 100_000)
+      (IngestRejection::PANEL_LIMIT + 2).times do |i|
+        refuse_a_large_delivery(file_path: "x" * 5_000, user_agent: "u#{i}" + "u" * 100_000)
       end
       visit_repository
 
@@ -433,6 +443,9 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
       expect(panel.all("li").size)
         .to eq(IngestRejection::PANEL_LIMIT * IngestRejection::RETAINED_REASONS_PER_ROW)
+      # And the summary really is exercising its own region: one bucket per stored agent.
+      expect(panel.all("#rejected-ingests-window span.font-mono").size)
+        .to eq(IngestRejection::PANEL_LIMIT + 2)
       expect(panel.native.to_html.bytesize).to be < 200_000
     end
   end

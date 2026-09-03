@@ -96,18 +96,26 @@
             and blank happens in `RetainedWindow`, in Ruby, because SQL's GROUP BY keeps `NULL`
             and `''` apart where `IngestRejection#reported_client` does not. %>
         <% window = @rejected_ingests.retained_window %>
+        <%# The bucket phrases are built here and joined with `safe_join`, rather than emitted one
+            at a time inside the loop: a `", " unless index.zero?` inside ERB puts a space before
+            its comma (the newline+indent the trimmer keeps on a line that also emits content),
+            and a `.` on its own line after `<% end %>` picks up the same leading space — both
+            user-visible, and both invisible to an `include` against `.squish`, which collapses
+            whitespace runs without removing one that sits before punctuation. `safe_join` is this
+            codebase's established phrase-list join (`_slowest_tests_over_window`,
+            `_unstable_tests`, `_descriptions_recorded_more_than_once`), and the request spec
+            asserts this sentence EXACTLY, separators included, so neither failure can return. %>
         <p class="text-xs text-app-muted mb-3" id="rejected-ingests-window">
           The retained window holds
           <strong class="text-app-content"><%= window.total %></strong>
           refused <%= "delivery".pluralize(window.total) %>:
-          <% window.entries.each_with_index do |(client, count), index| %>
-            <%= ", " unless index.zero? %><%= count %>
-            <% if client %>
-              from <span class="font-mono break-all"><%= client %></span>
-            <% else %>
-              <span>Not reported</span>
-            <% end %>
-          <% end %>.
+          <% parts = window.entries.map do |client, count|
+               if client
+                 safe_join(["#{count} from ", tag.span(client, class: "font-mono break-all")])
+               else
+                 "#{count} Not reported"
+               end
+             end %><%= safe_join(parts, ", ") %>.
         </p>
 
         <%= render UI::TableComponent.new(columns: ["When", "Reported by", "What the endpoint said"],
