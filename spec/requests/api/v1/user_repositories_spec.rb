@@ -21,8 +21,10 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
 
   let(:user_api_key) { create_user_api_key(user: person) }
 
-  def get_repositories(token: user_api_key.raw_token)
-    get "/api/v1/repositories", headers: { "Authorization" => "Bearer #{token}" }
+  # `params:` carries the narrowing asks (`?q=`, `?role=`, `?sort=stale`); the default is the
+  # unparameterised request every earlier example pins.
+  def get_repositories(token: user_api_key.raw_token, params: {})
+    get "/api/v1/repositories", params: params, headers: { "Authorization" => "Bearer #{token}" }
   end
 
   # Built the way `spec/requests/repositories_spec.rb` builds one, and for the reason stated
@@ -235,8 +237,13 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
     # exercise every read the entry serves rather than short-circuiting on absent history: the
     # refusal aggregate, the newest-run resolution, and the shard priming the `latest_run` block
     # was added to serve — the budget this example bounds is now the budget of the whole entry.
-    # @intent: { entity: "delivery_health", action: "stay flat in N", behavior: "the request issues the same number of queries whether the account holds one repository or four, each carrying a refusal and a sharded run", layer: "request" }
-    it "issues the same number of queries for one repository as for several" do
+    # SPGD-941 widens the claim along its second axis, INSIDE this example rather than beside it
+    # so one example keeps bounding the whole request: the narrowing asks ride the same request and
+    # must add nothing to it — `?q=` and `?role=` are predicates on the relation already being
+    # loaded, and `?sort=stale` sorts the loaded array against the runs map already resolved — so
+    # a fully-asked request over the same four repositories costs the same again.
+    # @intent: { entity: "delivery_health", action: "stay flat in N and under asks", behavior: "the request issues the same number of queries whether the account holds one repository or four, whether the three narrowing asks are absent or all present, each repository carrying a refusal and a sharded run", layer: "request" }
+    it "issues the same number of queries for one repository as for several, asked or not" do
       solo = create_user(github_uid: "4004", github_handle: "solo")
       solo_key = create_user_api_key(user: solo)
       only = create_repository(user: solo, github_full_name: "acme/only")
@@ -260,6 +267,21 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
       expect(response.parsed_body["repositories"].map { |row| row.dig("latest_run", "shards", "count") })
         .to all(eq(4))
       expect(several).to eq(one)
+
+      # The fully-asked third read. All four repositories match the ask (`acme`, all owned by
+      # solo), so the same N entries are served at the same count: the asks are present and doing
+      # nothing to the query plan but reordering. The block assertions above are re-made on THIS
+      # response, so a asked request that stopped serving an entry could not pass on the count
+      # alone.
+      asked = count_queries do
+        get_repositories(token: solo_key.raw_token,
+                         params: { q: "acme", role: "owned", sort: "stale" })
+      end
+
+      expect(response.parsed_body["repositories"].size).to eq(4)
+      expect(response.parsed_body["repositories"].map { |row| row.dig("latest_run", "shards", "count") })
+        .to all(eq(4))
+      expect(asked).to eq(several)
     end
 
     # AC7. The early return, asserted as the ABSENCE OF THE READS rather than as a query total — a
@@ -446,6 +468,262 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
         else
           expect(detail_block[key]).to eq(value)
         end
+      end
+    end
+  end
+
+  # SPGD-941 — the three narrowing asks the web repositories index reads (`?q=`, `?role=owned|
+  # shared`, `?sort=stale`) arriving at their second surface. The endpoint serves the identical
+  # `Repository.accessible_by` population the card grid narrows, UNPAGINATED, and one
+  # `BulkRegistration::MAX_BATCH` gesture puts a hundred repositories on it — until these
+  # parameters the action read NO parameter at all, so an agent looking for one repository had to
+  # ingest the whole body to find it. The parameters are read through the SAME three concerns the
+  # web grid reads (`RequestedSearchParam`, `RequestedRoleParam`, `RequestedSortParam`), so a shape
+  # the web clamps to no-ask cannot be answered differently here.
+  #
+  # ## What the guards are FOR here
+  #
+  # `?q[]=` reaches an `ILIKE`, and an Array would not raise — it would answer a question nobody
+  # asked, in a body an agent then trusts. The malformed hosts below assert the NO-ASK answer
+  # specifically (the whole accessible set, default order), never a bare 200, for the reason each
+  # shared example's own doc comment carries: a guard that swallowed every value would also answer
+  # 200 on every shape, and only the positive-path example beside the host separates the two.
+  describe "narrowing the list — ?q=, ?role=, ?sort=stale" do
+    def full_names
+      response.parsed_body["repositories"].map { |row| row["full_name"] }
+    end
+
+    def entries
+      response.parsed_body["repositories"]
+    end
+
+    describe "?q= — finding one repository by part of its name" do
+      it "matches a case-insensitive substring of the full name" do
+        get_repositories(params: { q: "BILLING" })
+
+        expect(response).to have_http_status(:ok)
+        expect(full_names).to eq(["acme/billing-service"])
+      end
+
+      # The `_` and `%` a caller can legitimately send are TEXT in a repository name (`org/my_repo`
+      # is an ordinary slug), so an unescaped `ILIKE` would widen "my_repo" to match `my-repo` and
+      # `myxrepo` — answering a substring ask with a pattern match. `sanitize_sql_like` escapes
+      # them, and this is the example that keeps it true: drop the escape and this goes red
+      # without anything raising anywhere else in the suite.
+      it "treats a typed underscore as text, not as a single-character wildcard" do
+        create_repository(user: person, github_full_name: "acme/my_repo")
+        create_repository(user: person, github_full_name: "acme/my-repo")
+
+        get_repositories(params: { q: "my_repo" })
+
+        expect(full_names).to eq(["acme/my_repo"])
+      end
+
+      # The narrowing must happen IN SQL INSIDE `Repository.accessible_by`, never as a post-load
+      # filter — this is the security claim of the parameter, and it is a property of the
+      # STATEMENT. Captured off the wire (`captured_sql`, the shared subscriber) rather than
+      # re-spelled here, so a read that stopped being in-scope cannot pass by agreeing with a
+      # hand-written duplicate: the accessibility union and the `ILIKE` must be predicates of ONE
+      # WHERE on ONE read of `repositories` — the only statement this request makes against that
+      # table.
+      it "narrows inside the accessible scope in SQL, not as a post-load filter" do
+        sql = captured_sql('FROM "repositories"') { get_repositories(params: { q: "billing" }) }
+
+        expect(full_names).to eq(["acme/billing-service"])
+        expect(sql).to match(/ILIKE/)
+        # ...and the accessibility union is still in the SAME statement: the search did not become
+        # a second pass over a set that had already been resolved, which is where a post-load
+        # filter would show up as two friendly-looking queries.
+        expect(sql).to match(/"user_id" = /)
+        expect(sql).to match(/IN \(SELECT "repository_memberships"/)
+      end
+
+      # The other half of being in-scope: a repository this key cannot open must never ENTER the
+      # relation, so a name search cannot be turned into an existence probe. The filtered-empty
+      # list is the whole answer — never the stranger's repository, and never an error that would
+      # distinguish "matched nothing" from "does not exist".
+      it "cannot be used to probe for a repository this key cannot open" do
+        get_repositories(params: { q: "secret-payroll" })
+
+        expect(response).to have_http_status(:ok)
+        expect(entries).to eq([])
+      end
+
+      # The positive path beside the malformed host below: `?q=<text>` IS honoured, which is what
+      # separates a working guard from one that swallows every shape — including the shapes the
+      # host asserts are no-asks.
+      it "is honoured as a narrowing ask, not merely tolerated" do
+        get_repositories(params: { q: "ledger" })
+
+        expect(full_names).to eq(["acme/ledger"])
+      end
+
+      describe "a search parameter that is not a search string" do
+        def expect_search_param_treated_as_no_ask(query)
+          get_repositories(params: query)
+
+          expect(response).to have_http_status(:ok)
+          # The no-ask answer specifically: the whole accessible set, in the default name order.
+          expect(full_names).to eq(["acme/billing-service", "acme/ledger"])
+        end
+
+        it_behaves_like "a surface that treats a malformed search parameter as no ask"
+      end
+    end
+
+    describe "?role= — what this key owns versus what was shared with it" do
+      # One of each population in the file's top-level fixture (`owned`, `shared`), so every
+      # example here proves the LINE rather than a presence: an ask honoured serves its side and
+      # hides the other, an ask ignored serves both.
+      it "narrows to what the key's person owns" do
+        get_repositories(params: { role: "owned" })
+
+        expect(full_names).to eq(["acme/billing-service"])
+      end
+
+      it "narrows to what was shared with the key's person" do
+        get_repositories(params: { role: "shared" })
+
+        expect(full_names).to eq(["acme/ledger"])
+      end
+
+      # `shared` is the COMPLEMENT WITHIN the accessible set — not a second reading of the
+      # membership table — so the two asks must partition the unparameterised list exactly, with
+      # no repository on both sides and none dropped between them. That partition is what makes
+      # the `role` field's owner/member distinction safe to hand a filter on.
+      it "partitions the list exactly between the two asks" do
+        get_repositories(params: { role: "shared" })
+        shared_side = full_names
+
+        get_repositories(params: { role: "owned" })
+        owned_side = full_names
+
+        get_repositories
+        whole_list = full_names
+
+        expect((shared_side + owned_side).sort).to eq(whole_list.sort)
+        expect(shared_side & owned_side).to be_empty
+      end
+
+      describe "a role parameter that names no ownership state" do
+        def expect_role_param_treated_as_no_ask(query)
+          get_repositories(params: query)
+
+          expect(response).to have_http_status(:ok)
+          # The no-ask answer specifically: BOTH populations, which is what distinguishes a
+          # clamped read from one that silently narrowed to either side.
+          expect(full_names).to eq(["acme/billing-service", "acme/ledger"])
+        end
+
+        it_behaves_like "a surface that treats a non-owned-or-shared role parameter as no ask"
+      end
+    end
+
+    describe "?sort=stale — ordering by last-ingested recency" do
+      # The web grid's rule, restated for a body an agent reads as a sequence: never-ingested
+      # first, then least-recently-ingested first, newest last. The fixture is arranged so the
+      # stale order and the default name order DISAGREE — the never-ingested repository is named
+      # last — so an implementation that ignored the ask serves a different sequence and this
+      # goes red.
+      it "puts never-ingested first and the most recently ingested last" do
+        create_test_run(repository: owned, commit_sha: "cafe0902", total_specs_count: 10,
+                        created_at: 1.hour.ago)
+        create_test_run(repository: shared, commit_sha: "cafe0901", total_specs_count: 10,
+                        created_at: 3.months.ago)
+        create_repository(user: person, github_full_name: "acme/zebra")
+
+        get_repositories(params: { sort: "stale" })
+
+        expect(full_names).to eq(["acme/zebra", "acme/ledger", "acme/billing-service"])
+      end
+
+      # A shareable URL is a deterministic one: two identical calls must answer with an identical
+      # sequence, and the name tie-break is what makes that true rather than merely likely —
+      # Ruby's `sort_by` promises no stability on its own, so the tie-break is the determinism.
+      it "answers two identical calls with an identical sequence" do
+        create_test_run(repository: owned, commit_sha: "cafe0903", total_specs_count: 10,
+                        created_at: 1.hour.ago)
+        create_repository(user: person, github_full_name: "acme/zebra")
+
+        get_repositories(params: { sort: "stale" })
+        first_read = full_names
+        get_repositories(params: { sort: "stale" })
+
+        expect(full_names).to eq(first_read)
+        # The pinned sequence: ledger and zebra are BOTH never-ingested, so the tie-break orders
+        # the limb (`ledger` < `zebra`); the ingested repository follows it, newest-run aside.
+        expect(first_read).to eq(["acme/ledger", "acme/zebra", "acme/billing-service"])
+      end
+
+      # Same-limb ties — every repository here is never-ingested, one limb, same null recency —
+      # so the sequence this asserts is entirely the name tie-break's, and zebra was INSERTED
+      # first to prove the order comes from the name and not from row order.
+      it "breaks same-recency ties on the name, not on insertion order" do
+        create_repository(user: person, github_full_name: "acme/zebra")
+        create_repository(user: person, github_full_name: "acme/alpha")
+
+        get_repositories(params: { sort: "stale" })
+
+        expect(full_names).to eq(["acme/alpha", "acme/billing-service", "acme/ledger", "acme/zebra"])
+      end
+
+      describe "a sort parameter that names no ordering" do
+        # Recency and name DISAGREE about the order here — the fresh run sits on the name-FIRST
+        # repository and `ledger` has never been ingested — so a clamped read and an honoured one
+        # serve different sequences: this is what lets the no-ask assertion say "name order" and
+        # mean it.
+        def expect_sort_param_treated_as_no_ask(query)
+          create_test_run(repository: owned, commit_sha: "cafe0910", total_specs_count: 10,
+                          created_at: 1.hour.ago)
+
+          get_repositories(params: query)
+
+          expect(response).to have_http_status(:ok)
+          expect(full_names).to eq(["acme/billing-service", "acme/ledger"])
+        end
+
+        it_behaves_like "a surface that treats a non-stale sort parameter as no ask"
+      end
+    end
+
+    describe "the three asks together" do
+      it "compose — narrow, partition and order in one URL" do
+        api_shared_stale = create_repository(user: stranger, github_full_name: "acme/api-legacy")
+        create_membership(repository: api_shared_stale, user: person)
+        api_shared_fresh = create_repository(user: stranger, github_full_name: "acme/api-fresh")
+        create_membership(repository: api_shared_fresh, user: person)
+        create_test_run(repository: api_shared_fresh, commit_sha: "cafe0920", total_specs_count: 10,
+                        created_at: 1.hour.ago)
+        create_repository(user: person, github_full_name: "acme/api-owned")
+
+        get_repositories(params: { q: "api", role: "shared", sort: "stale" })
+
+        # The never-ingested shared api match first, the ingested one last; the owned api match
+        # and the stranger's invisible repository are both gone.
+        expect(full_names).to eq(["acme/api-legacy", "acme/api-fresh"])
+      end
+    end
+
+    # The asks narrow, partition and REORDER the set — none of them may change an ENTRY. Pinned
+    # as whole-entry equality between an unparameterised read and a fully-asked one: same keys,
+    # same values, `delivery_health` and `latest_run` included. A parameter that renamed a field,
+    # re-typed a value or dropped a block under some ask would hold every example above and still
+    # break this one.
+    describe "what no ask may change" do
+      it "serves the same entry a field at a time, however the list is narrowed" do
+        create_test_run(repository: shared, commit_sha: "cafe0930", total_specs_count: 10,
+                        created_at: 3.hours.ago)
+        refuse(shared, at: 2.hours.ago)
+
+        get_repositories
+        unparameterised = entries
+
+        get_repositories(params: { q: "acme", role: "shared", sort: "stale" })
+        narrowed = entries
+
+        expect(narrowed.size).to eq(1)
+        expect(narrowed.first.keys).to contain_exactly(*unparameterised.first.keys)
+        expect(narrowed.first).to eq(unparameterised.find { |row| row["full_name"] == "acme/ledger" })
       end
     end
   end
