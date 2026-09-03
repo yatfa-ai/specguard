@@ -20,9 +20,10 @@
 #
 # ONE MODULE, TWO BASES. This is included into both an `ActionController::Base` (the human Recent
 # runs panel and the repositories grid) and an `ActionController::API` (the `history` block on
-# `GET /api/v1/repository`). Nothing in the few lines below touches view helpers or anything an API
-# controller lacks, so the differing bases were never an obstacle to sharing — which is why this is
-# a module rather than the two verbatim copies it replaces.
+# `GET /api/v1/repository`, via the `RepositoryOverview` PORO that assembles it, and every
+# `latest_run` entry on `GET /api/v1/repositories`). Nothing in the few lines below touches view
+# helpers or anything an API controller lacks, so the differing bases were never an obstacle to
+# sharing — which is why this is a module rather than the two verbatim copies it replaces.
 module ShardCountPreloading
   extend ActiveSupport::Concern
 

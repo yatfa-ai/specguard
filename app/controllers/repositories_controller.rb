@@ -1117,11 +1117,12 @@ class RepositoriesController < ApplicationController
   # reads of one `pick` (`test_run.rb`) — asked in the card loop that is one `test_run_shards` query
   # per card, the same N+1 shape this page has already been cleaned of twice. One grouped aggregate
   # answers all of it for the whole grid in a single round trip, exactly as the Recent-runs table on
-  # `show` already does. The machine-facing list reads `created_at` and nothing else, so lifting the
-  # priming with the resolution would have dragged a `test_run_shards` aggregate into a caller that
-  # never looks at a single primed value. The wall clock needs no priming at all: `duration_seconds`
-  # is a column on the rows selected. Primed HERE and not in `#index`, so the aggregate is taken
-  # only when something actually reads the runs and a page of no repositories still pays nothing.
+  # `show` already does. The machine-facing list (`Api::V1::UserRepositoriesController#index`) now
+  # reads the same primed values for its own `latest_run` block and primes them the same way, at its
+  # own call site — a reader that never serves the block, like `#update` over there, still pays
+  # nothing. The wall clock needs no priming at all: `duration_seconds` is a column on the rows
+  # selected. Primed HERE and not in `#index`, so the aggregate is taken only when something
+  # actually reads the runs and a page of no repositories still pays nothing.
   def latest_test_runs
     @latest_test_runs ||= latest_test_runs_for(@repositories.map(&:id))
                           .tap { |runs| preload_shard_counts(runs.values) }
