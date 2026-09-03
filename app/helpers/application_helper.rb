@@ -52,6 +52,72 @@ module ApplicationHelper
       "the key works, the payload did not."
   end
 
+  # What a repository carrying a rotated-but-unused key is called, in the one place both surfaces
+  # that say it read from.
+  #
+  # Two surfaces state this now: the connection indicator on repositories#show, and the card on the
+  # repositories grid — the same pair that states the refusal above, and on exactly the same terms.
+  # The rotated state's words had lived inline in the indicator alone, so the grid had no way to
+  # reach them without typing a second copy; a reader with twelve cards could see a refusal at a
+  # glance but had to open each page to learn which had rotated a key that never reached CI. The
+  # words move here rather than being copied to the card, so a rename cannot move one surface
+  # without the other — the same argument `refused_deliveries_label` above makes in full.
+  #
+  # The `:warning` tone is deliberately NOT here, as the refusal's `:error` is not: it is markup,
+  # each caller picks its own badge, and both pick warning for the reason the indicator gives —
+  # work is not being destroyed, it has not been allowed to start.
+  def rotated_key_label = "Key rotated, not yet in use"
+
+  # The sentence under that label on the GRID'S CARD: dated from the OLDEST stranded `rotated_at`,
+  # and carrying no key count and no key name.
+  #
+  # The count-free shape is the grid's own rule, not a preference. The count is credential
+  # information there — `key_count_visible?` gates the key badge on the very same card — so the
+  # indicator's multi-key branch ("N keys have been regenerated…") cannot travel to it, and N
+  # behind an ungated badge would smuggle the gated figure in through the wording. What is left is
+  # the singular's claim generalized over the set: the oldest stranded key's age, which is the only
+  # date true of all of them at once (the NEWEST would date a five-day-dead pipeline at a minute
+  # whenever a second key was rotated just now — the argument the indicator's own branch states).
+  #
+  # Count-free is also not count-HIDING: the sentence stays strictly inside the ungated class the
+  # connection stat established — no name, no hint, no token, just "this rotation never reached CI,
+  # and it happened this long ago", which is the fact a reader comparing cards needs.
+  #
+  # Takes the timestamp rather than the collection, on the signature convention
+  # `refused_deliveries_note` above already set: the card reads one grouped row set for the whole
+  # page and holds the oldest `rotated_at` per repository, so a caller with no keys loaded can
+  # still word it.
+  def rotated_key_note(oldest_rotated_at)
+    "The oldest key was regenerated #{time_ago_in_words(oldest_rotated_at)} ago — " \
+      "the replacement token has not reached CI."
+  end
+
+  # The same state, in the connection indicator's own words — the count-bearing variant the card
+  # deliberately does not get.
+  #
+  # This owns the indicator's whole singular/plural branch, not just one side of it, so the surface
+  # stops carrying rotated-state words at all: it hands over a count and the oldest `rotated_at`
+  # and renders what comes back. The two shapes are kept in one method rather than two because the
+  # branch is about the SET (one stranded key speaks of itself; several must name how many and date
+  # the oldest), and splitting it would let a rename move one half of the sentence and not the
+  # other.
+  #
+  # The count travels in as an argument and is RENDERED by the indicator only: the gate on what a
+  # surface may print is each surface's own decision, and this method cannot know them. That is
+  # also why the signature takes the count rather than deriving it — the same reason the timestamps
+  # are arguments rather than rows (see `refused_deliveries_note`).
+  def rotated_keys_note(key_count, oldest_rotated_at)
+    if key_count == 1
+      "Nothing has authenticated since the key was regenerated " \
+        "#{time_ago_in_words(oldest_rotated_at)} ago — the replacement token has not reached CI. " \
+        "Update it wherever the old one was stored."
+    else
+      "#{key_count} keys have been regenerated with nothing authenticating since; the oldest was " \
+        "regenerated #{time_ago_in_words(oldest_rotated_at)} ago — the replacement tokens have " \
+        "not reached CI. Update them wherever the old ones were stored."
+    end
+  end
+
   # The one rendering of a run's wall clock. `TestRun#duration_label` settles the wording; this
   # settles the treatment that goes with it, so the Overview panel's header figure and the
   # Recent-runs table cell cannot drift into two different renderings of the same column.

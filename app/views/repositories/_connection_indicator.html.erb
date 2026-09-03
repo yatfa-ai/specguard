@@ -110,19 +110,20 @@
       </span>
     <% elsif @last_api_request_at.present? %>
       <%# `rotations` cannot be empty here: something authenticated and nothing live did, so the key
-          holding that use is stranded, and a stranded key has a `rotated_at`. %>
+          holding that use is stranded, and a stranded key has a `rotated_at`.
+
+          THE SAME SEAM-AND-CONTAINERS SPLIT the refusal branch above renders. The wording lives in
+          `rotated_key_label` / `rotated_keys_note` in ApplicationHelper, beside the refusal pair,
+          so this indicator and the repositories grid's card cannot word one repository's stranded
+          rotation two ways, and the next rename cannot move one surface without the other. This
+          surface keeps the COUNT-BEARING note — the credential-count gate is the grid's own rule
+          (`key_count_visible?` there), and this page's own counts render behind `keys.manage` where
+          they belong — while the card gets the count-free `rotated_key_note`. The seams own the
+          WORDING; the containers differ. %>
       <% rotations = @rotated_unused_api_keys.filter_map(&:rotated_at).sort %>
-      <%= render UI::BadgeComponent.new(tone: :warning) { "Key rotated, not yet in use" } %>
+      <%= render UI::BadgeComponent.new(tone: :warning) { rotated_key_label } %>
       <span class="text-xs text-app-muted">
-        <% if rotations.one? %>
-          Nothing has authenticated since the key was regenerated
-          <%= time_ago_in_words(rotations.first) %> ago — the replacement token has not reached CI.
-          Update it wherever the old one was stored.
-        <% else %>
-          <%= rotations.size %> keys have been regenerated with nothing authenticating since; the
-          oldest was regenerated <%= time_ago_in_words(rotations.first) %> ago — the replacement
-          tokens have not reached CI. Update them wherever the old ones were stored.
-        <% end %>
+        <%= rotated_keys_note(rotations.size, rotations.first) %>
       </span>
     <% else %>
       <%= render UI::BadgeComponent.new(tone: :neutral) { "Not connected yet" } %>

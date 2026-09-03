@@ -277,6 +277,21 @@
                 exactly one expression of the rule. Costs no query per card: the refused side is one
                 grouped MAX for the whole page, the accepted side is the run already loaded above. %>
             <% rejections = rejection_verdict(repository) %>
+            <%# Whether this repository reads the way the connection indicator's rotated branch
+                reads on `show`: SOMETHING has authenticated and every token that ever did has
+                since been rotated away — no live key's `last_used_at` still describes the token it
+                carries — so CI is presenting a dead credential and work is being lost. That is
+                show's chain-equivalent aggregate (`@last_api_request_at` present AND
+                `@last_live_api_request_at` blank, its refusing branch sitting above), computed per
+                repository by RepositoriesController#stranded_rotation_time in Ruby off the same
+                live row set the key count above uses, so this costs no query per card either.
+                NOT the bare `ApiKey#rotated_and_unused?` per key: the predicate is what the state
+                is DERIVED from, and keyed on it the card would contradict `show` where a live key
+                keeps CI connected (show: Connected — the stranded key holds nothing back) and
+                where a key was rotated before it ever authenticated (show: Not connected yet —
+                nothing was ever routed through it, so no replacement is hanging). The figure is
+                the OLDEST stranded `rotated_at`, the only age true of every stranded key at once. %>
+            <% stranded_rotation = stranded_rotation_time(repository) %>
             <div class="flex items-start justify-between gap-2">
               <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content min-w-0") { repository.github_full_name } %>
               <%# The list now mixes owned and shared repositories, and nothing else on the card
@@ -360,6 +375,35 @@
                 <%= render UI::BadgeComponent.new(tone: :error) { refused_deliveries_label } %>
               </div>
               <p class="text-xs text-app-muted"><%= refused_deliveries_note(rejections.last_rejection_at) %></p>
+            <% end %>
+            <%# THE ROTATION MARKER — the second lost-work verdict this grid could not reach until
+                now, in the warning tone the connection indicator gives the same state, and one notch
+                less stern than the refusal's error above it: work here is not being destroyed, it
+                has not been allowed to start.
+
+                Rendered BELOW the refusal marker, and never instead of it: a refusing pipeline is
+                the worse fact — deliveries thrown away beats a rotation that never landed — so a
+                card carrying both shows both, refusal first, the order the connection indicator
+                itself settles on `show`. That order is also where the chain's refusing conjunct
+                lives on this card: `show` reaches the rotated branch only past its refusing branch,
+                and here the refusal marker renders first instead — the same precedence, stated as
+                layout. The trigger is the aggregate the comment above states, the same verdict
+                `show` renders in this very tone, so the card and the page it links to cannot give
+                one repository's rotation two verdicts any more than two wordings.
+
+                THE SAME SEAM RULE the refusal marker above states in full: both surfaces word the
+                state through `rotated_key_label` / `rotated_key_note` in ApplicationHelper —
+                beside the refusal pair — so this card and the page it links to cannot describe one
+                repository's rotation two ways, and the next rename cannot move one surface without
+                the other. The card gets the COUNT-FREE note, on the grid's own credential rule the
+                key badge above is held to: the indicator's plural names how many keys, and N is
+                exactly what this grid gates, so the age sentence carries the oldest stranded
+                rotation and nothing else — no count, no key name. %>
+            <% if stranded_rotation %>
+              <div class="flex flex-wrap items-center gap-2">
+                <%= render UI::BadgeComponent.new(tone: :warning) { rotated_key_label } %>
+              </div>
+              <p class="text-xs text-app-muted"><%= rotated_key_note(stranded_rotation) %></p>
             <% end %>
             <%# The badge's basis, on the surface beside it — the rule `show` and the API already
                 hold this column to, and this grid needs it more than either of them does, because
