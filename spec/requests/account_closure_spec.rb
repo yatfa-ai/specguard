@@ -19,6 +19,9 @@ RSpec.describe "Account closure", type: :request do
   def colleague = @colleague ||= create_user(github_uid: "2002", github_handle: "hubot",
                                              installation_id: nil)
 
+  # Keyword arguments become TOP-LEVEL request parameters through the splat — `close_account(id: 7)`
+  # posts `id=7`, never `params[id]=7`. The criterion-6 example depends on that contract: its
+  # adversarial parameters must arrive where a params-with-fallback regression would read them.
   def close_account(**params)
     post close_account_path, params: params
     follow_redirect!
@@ -34,7 +37,7 @@ RSpec.describe "Account closure", type: :request do
 
   # SPGD-853 criterion 1 — one confirmed gesture: the row's `archived_at` goes from NULL to a
   # timestamp, and the person lands signed-out on the root page.
-  # @intent: { entity: "User", action: "close account from the page", behavior: "POST /account/closure from a signed-in session stamps the current user's archived_at from nil to a timestamp and redirects to the root path, where the closure notice renders", layer: "request" }
+  # @intent: { entity: "User", action: "close account from the page", behavior: "POST /account/close from a signed-in session stamps the current user's archived_at from nil to a timestamp and redirects to the root path, where the closure notice renders", layer: "request" }
   it "closes the account in one gesture and says so on the way out" do
     expect(person.reload.archived_at).to be_nil
 
@@ -48,7 +51,7 @@ RSpec.describe "Account closure", type: :request do
   # SPGD-853 criterion 2 — the session is ended by the closure, exercised through the real
   # `current_user` path: `ApplicationController` scopes to `User.active`, so the next
   # authenticated request must behave exactly as a signed-out visitor's does.
-  # @intent: { entity: "Session", action: "end session on closure", behavior: "after POST /account/closure the same session GETs /repositories and is redirected to root with the sign-in alert, proving the live session stopped authenticating without asserting on the session hash", layer: "request" }
+  # @intent: { entity: "Session", action: "end session on closure", behavior: "after POST /account/close the same session GETs /repositories and is redirected to root with the sign-in alert, proving the live session stopped authenticating without asserting on the session hash", layer: "request" }
   it "leaves the session it just killed behaving as signed out" do
     get repositories_path
     expect(response).to have_http_status(:ok)
@@ -83,7 +86,7 @@ RSpec.describe "Account closure", type: :request do
   # SPGD-853 criterion 4 — closure is one-way, and the proof is the door on the way back in:
   # the real callback must refuse, exactly as it refuses a console-archived person, rather than
   # silently reactivate.
-  # @intent: { entity: "Session", action: "refuse closed account sign-in", behavior: "after POST /account/closure a fresh GitHub callback for the same uid changes no User count, leaves archived_at untouched, redirects to root with the archived alert including the in-product-irreversible sentence", layer: "request" }
+  # @intent: { entity: "Session", action: "refuse closed account sign-in", behavior: "after POST /account/close a fresh GitHub callback for the same uid changes no User count, leaves archived_at untouched, redirects to root with the archived alert including the in-product-irreversible sentence", layer: "request" }
   it "refuses the closed account at sign-in instead of reactivating it" do
     close_account
     archived_at = person.reload.archived_at
@@ -103,7 +106,7 @@ RSpec.describe "Account closure", type: :request do
   # SPGD-853 criterion 5 — the `not_to change(&counts)` idiom from
   # `spec/models/user_spec.rb` ("destroys and nullifies nothing"), restated over HTTP: the
   # closure endpoint must hold the same invariant the model state was specified to hold.
-  # @intent: { entity: "User", action: "destroy nothing on closure", behavior: "POST /account/closure changes no row counts across repositories, runs, intents, both key kinds, memberships, installations and grants, and leaves every attribution column still naming the closed person", layer: "request" }
+  # @intent: { entity: "User", action: "destroy nothing on closure", behavior: "POST /account/close changes no row counts across repositories, runs, intents, both key kinds, memberships, installations and grants, and leaves every attribution column still naming the closed person", layer: "request" }
   it "destroys and nullifies nothing but the session" do
     repository = create_repository(user: person)
     test_run = create_test_run(repository: repository)
@@ -139,10 +142,12 @@ RSpec.describe "Account closure", type: :request do
 
   # SPGD-853 criterion 6 — the endpoint takes no parameter that names a victim: whatever a
   # request carries, the session alone answers whose account closes.
-  # @intent: { entity: "User", action: "scope closure to the session", behavior: "POST /account/closure carrying another user's id, user_id and github_uid parameters archives only the current user and leaves the other account active", layer: "request" }
+  # @intent: { entity: "User", action: "scope closure to the session", behavior: "POST /account/close carrying another user's id, user_id and github_uid parameters archives only the current user and leaves the other account active", layer: "request" }
   it "closes nobody's account but the session holder's, whatever the request names" do
-    close_account(params: { id: colleague.id, user_id: colleague.id,
-                            github_uid: colleague.github_uid })
+    # Sent as top-level request parameters (not nested under a params key) — exactly where a
+    # `params[:user_id]` lookup with a `current_user` fallback would find them.
+    close_account(id: colleague.id, user_id: colleague.id,
+                  github_uid: colleague.github_uid)
 
     expect(person.reload).to be_archived
     expect(colleague.reload).not_to be_archived
@@ -152,7 +157,7 @@ RSpec.describe "Account closure", type: :request do
   # The gate in front of the endpoint: a request with no session behind it reaches nobody's
   # row. Signed out through the real route, as `sessions_spec` does — the claim is about what
   # the endpoint sees, not about how the session was emptied.
-  # @intent: { entity: "User", action: "require sign-in to close", behavior: "a signed-out POST /account/closure is redirected to root with the sign-in alert and no user row gains an archived_at", layer: "request" }
+  # @intent: { entity: "User", action: "require sign-in to close", behavior: "a signed-out POST /account/close is redirected to root with the sign-in alert and no user row gains an archived_at", layer: "request" }
   it "asks for a session before it closes anything" do
     delete sign_out_path
 
