@@ -99,12 +99,15 @@
         <%# The bucket phrases are built here and joined with `safe_join`, rather than emitted one
             at a time inside the loop: a `", " unless index.zero?` inside ERB puts a space before
             its comma (the newline+indent the trimmer keeps on a line that also emits content),
-            and a `.` on its own line after `<% end %>` picks up the same leading space — both
-            user-visible, and both invisible to an `include` against `.squish`, which collapses
-            whitespace runs without removing one that sits before punctuation. `safe_join` is this
-            codebase's established phrase-list join (`_slowest_tests_over_window`,
-            `_unstable_tests`, `_descriptions_recorded_more_than_once`), and the request spec
-            asserts this sentence EXACTLY, separators included, so neither failure can return. %>
+            and a `.` on its own line after the loop's closing tag picks up the same leading
+            space — both user-visible, and both invisible to an `include` against `.squish`,
+            which collapses whitespace runs without removing one that sits before punctuation.
+            `safe_join` is this codebase's established phrase-list join
+            (`_slowest_tests_over_window`, `_unstable_tests`,
+            `_descriptions_recorded_more_than_once`), and the request spec asserts this sentence
+            EXACTLY, separators included, so neither failure can return. The comment's own body
+            stays free of ERB closing markers for the reason this fix exists: one inside a
+            comment ends the comment there and leaks the rest as page text. %>
         <p class="text-xs text-app-muted mb-3" id="rejected-ingests-window">
           The retained window holds
           <strong class="text-app-content"><%= window.total %></strong>

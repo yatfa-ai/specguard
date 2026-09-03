@@ -351,6 +351,13 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       expect(IngestRejection.last.user_agent).to be_nil
       expect(window_text).to eq("The retained window holds 5 refused deliveries: " \
                                 "3 from specguard-rspec/0.3.1, 2 Not reported.")
+
+      # The ERB-comment leak class: a `<%#` comment whose body contains the closing marker
+      # terminates at it and renders its tail as page text at PANEL-BODY level — outside every
+      # element, so `window_text` (and any element-scoped read) cannot see it; only a
+      # whole-panel read can. An endpoint message containing that sequence would false-fail
+      # this; none exists today, and the panel quotes no client-supplied header verbatim.
+      expect(panel_text).not_to include("%>")
     end
   end
 
