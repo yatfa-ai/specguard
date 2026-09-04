@@ -348,7 +348,12 @@ class RepositoriesController < ApplicationController
     # Loaded unconditionally and NOT gated on `@latest_test_run`, unlike the per-example panels
     # below: a repository that has never had a run accepted is not the empty case here, it is the
     # worst case — every delivery it ever made was refused, and that is precisely when the reader
-    # needs the list. One bounded query, capped at `IngestRejection::PANEL_LIMIT`.
+    # needs the list. One bounded query HERE (`IngestRejection::PANEL_LIMIT`); the retained-window
+    # summary the panel states above its rows is a SECOND read that loads lazily off this object
+    # (`RejectedIngests#retained_window`), so a zero-refusal page — the overwhelmingly common case —
+    # never issues it, and a refusing page pays exactly one grouped query however full the window
+    # is. The grid's cards (`rejection_verdict` below) still pay neither, and the JSON API never
+    # asks for a window, so both callers are unchanged.
     @rejected_ingests = RejectedIngests.for(@repository, last_accepted_run_at: newest_test_run&.created_at)
     # The one figure on that panel read off *two* rows: the run the suite size is compared against,
     # so a size can be reported as a change and not only as a level. Passed the already-loaded

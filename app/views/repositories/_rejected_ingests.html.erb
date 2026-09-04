@@ -67,6 +67,60 @@
           <% end %>
         </p>
 
+        <%# == The retained window, stated as a whole
+            The basis line explains what these rows ARE; this line states how MANY there are and
+            WHO sent them, across everything SpecGuard still retains rather than across the ten
+            rows the table renders. `IngestRejection::REPOSITORY_RETENTION_ROWS` keeps fifty per
+            repository because fifty "show the RANGE of user_agent across them, which is what
+            turns 'we are being refused' into 'the old gem is being refused'" — and until this
+            line nothing performed that reading: the table renders one page in five of the
+            retained window, so a client appearing only in rows eleven-to-fifty was invisible,
+            and a repository refused eleven times read identically to one refused fifty times.
+
+            Two things this deliberately is not:
+
+            * Not pagination. `PANEL_LIMIT`'s comment refuses it — the panel is a disclosure, not
+              a browsable archive. This adds no page and lists no additional deliveries: it is a
+              verdict about the window the panel already discloses.
+            * Not derived from the rows below. A summary computed off them would describe the
+              PAGE — a repository refused eleven times would say ten, and the row-eleven client
+              would vanish. `RejectedIngests::RetainedWindow` reads the whole window in one
+              grouped query (the row set served by the recency index's leading `repository_id`;
+              the walk itself bounded by the retention rule, at most fifty rows whatever the
+              repository's size), and its total is the SUM of its own buckets, so the number and
+              the breakdown cannot disagree.
+
+            A `<p>` and not a list, on purpose: the size guards on this panel count the `<li>`
+            elements the table renders, and the summary has no reason to join that count.
+            "Not reported" is the rows' own wording for a missing `User-Agent` — the fold of nil
+            and blank happens in `RetainedWindow`, in Ruby, because SQL's GROUP BY keeps `NULL`
+            and `''` apart where `IngestRejection#reported_client` does not. %>
+        <% window = @rejected_ingests.retained_window %>
+        <%# The bucket phrases are built here and joined with `safe_join`, rather than emitted one
+            at a time inside the loop: a `", " unless index.zero?` inside ERB puts a space before
+            its comma (the newline+indent the trimmer keeps on a line that also emits content),
+            and a `.` on its own line after the loop's closing tag picks up the same leading
+            space — both user-visible, and both invisible to an `include` against `.squish`,
+            which collapses whitespace runs without removing one that sits before punctuation.
+            `safe_join` is this codebase's established phrase-list join
+            (`_slowest_tests_over_window`, `_unstable_tests`,
+            `_descriptions_recorded_more_than_once`), and the request spec asserts this sentence
+            EXACTLY, separators included, so neither failure can return. The comment's own body
+            stays free of ERB closing markers for the reason this fix exists: one inside a
+            comment ends the comment there and leaks the rest as page text. %>
+        <p class="text-xs text-app-muted mb-3" id="rejected-ingests-window">
+          The retained window holds
+          <strong class="text-app-content"><%= window.total %></strong>
+          refused <%= "delivery".pluralize(window.total) %>:
+          <% parts = window.entries.map do |client, count|
+               if client
+                 safe_join(["#{count} from ", tag.span(client, class: "font-mono break-all")])
+               else
+                 "#{count} Not reported"
+               end
+             end %><%= safe_join(parts, ", ") %>.
+        </p>
+
         <%= render UI::TableComponent.new(columns: ["When", "Reported by", "What the endpoint said"],
                                           describedby: "rejected-ingests-basis") do %>
           <% @rejected_ingests.rows.each do |rejection| %>
