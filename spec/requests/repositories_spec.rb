@@ -3398,6 +3398,253 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
+  # SPGD-947 — the connection chain's TOP state carried onto the grid, through the same
+  # ApplicationHelper seam the refusal and rotation markers already render from. The chain's own
+  # prose ranks this rung above both, and it is the worst collapse the card could carry: every
+  # existing signal reads the live partition (the key count, the rotation marker) or is fed by a
+  # recorder a dead token can never reach (the refusal marker — a revoked token 401s at
+  # `authenticate_api_key!` before any controller runs, so no IngestRejection row is ever written
+  # for its presentation), and the key badge's live-only row set excludes the revoked rows in
+  # every figure it prints. A revoked-and-presented repository therefore rendered byte-identically,
+  # in neutral tone, to one nobody ever wired CI to.
+  describe "the revoked-key marker on the repositories index" do
+    # The wording, READ FROM THE SEAM both surfaces render rather than typed out here — the rule
+    # `rotated_label` in the block above is held to, for the same reason: a literal copied into a
+    # spec is agreement that merely HOLDS TODAY.
+    def revoked_label = ApplicationController.helpers.revoked_key_label
+
+    # The one card a claim is about, found by its link — the same per-card scoping the refusal and
+    # rotation blocks use, because page-level assertions cannot tell one card's marker from
+    # another's.
+    def card_for(repository)
+      Capybara.string(response.body).find_link(href: repository_path(repository))
+    end
+
+    def card_text(repository) = card_for(repository).text.gsub(/\s+/, " ")
+
+    # A presented revoked key: minted, revoked, and the dead token presented at the API so the
+    # REAL failure path stamps `last_refused_at` — the fixture discipline the `show` indicator
+    # specs state in full ("a hand-written `last_refused_at` would leave these examples asserting
+    # against a state no production code path produces"). `revoked_at` may be backdated BEFORE the
+    # presentation, the same way the show specs fix the ages their date assertions name; the
+    # refusal stamp itself stays on the real path. Returns the reloaded row.
+    def present_revoked_key(repository, name, revoked_at: nil)
+      key = repository.api_keys.create!(name: name)
+      token = key.raw_token
+      key.revoke!
+      key.update_columns(revoked_at: revoked_at) if revoked_at
+
+      get "/api/v1/repository", headers: { "Authorization" => "Bearer #{token}" }
+      expect(response).to have_http_status(:unauthorized)
+
+      key.reload
+    end
+
+    # A stranded key: minted, used once by the old token, then regenerated — and nothing has
+    # authenticated with the replacement since. The rotation block's own helper, mirrored here so
+    # this describe stays self-contained.
+    def strand_key(repository, name, used_at: 1.hour.ago, rotated_at: 30.minutes.ago)
+      key = repository.api_keys.create!(name: name)
+      key.touch_last_used!
+      key.regenerate!
+      key.update_columns(last_used_at: used_at, rotated_at: rotated_at)
+      key
+    end
+
+    # Criterion 1, and the oldest date the sentence is held to. The fixture tells the candidate
+    # aggregates apart the same way the show indicator's plural example and the rotation block's
+    # oldest-dated example do: on a one-key set min and max are indistinguishable, so two
+    # presentations with different `revoked_at` are the minimum that can catch a newest-dated
+    # sentence — the reading that would tell a five-day-dead pipeline its revocation was a minute
+    # old.
+    # @intent: {"entity": "ApiKey", "action": "mark presented revocation", "behavior": "a repository with two presented revoked keys draws the Revoked key still presented badge in error tone and dates the card sentence from the OLDEST revoked_at and the newest last_refused_at, read from the shared note seam", "layer": "request"}
+    it "marks a repository with a presented revoked key and dates the sentence from the oldest revocation" do
+      repository = create_repository(user: @user, github_full_name: "acme/offboarded")
+      nightly = present_revoked_key(repository, "Nightly", revoked_at: 5.days.ago)
+      present_revoked_key(repository, "Main")
+
+      get repositories_path
+
+      expect(page_text).to include(revoked_label)
+      # `:error`, on the refusing state's own rule — work is being destroyed, not merely absent.
+      expect(card_for(repository)).to have_css(".text-app-error", text: revoked_label)
+      # Against the seam's own figure rather than a literal date, so this pins the SOURCE: the
+      # oldest revocation (not the minute-old one beside it) and the real failure path's refusal
+      # stamp — the freshest presentation, since the card's sentence dates the NEWEST of those.
+      expect(page_text).to include(
+        ApplicationController.helpers.revoked_key_note(
+          nightly.revoked_at, nightly.last_refused_at
+        )
+      )
+      # The reading a newest-dated sentence would produce on this very fixture.
+      expect(page_text).not_to include("you revoked less than a minute ago")
+    end
+
+    # Criterion 2, and the ordering IS the rule: the chain's own prose ranks this state above
+    # REFUSING, and the card states precedence as layout, the same way the
+    # refusal-above-rotation rule beneath it is stated. A card carrying all three facts shows all
+    # three, worst first — the revoked state suppresses neither, exactly as the refusal
+    # suppresses neither the rotation nor the run badge.
+    # @intent: {"entity": "ApiKey", "action": "order revoked first", "behavior": "a card carrying a presented revocation, a live refusal and a stranded rotation renders all three labels with Revoked key still presented appearing before Deliveries refused and before Key rotated, not yet in use", "layer": "request"}
+    it "renders the revoked badge above the refusal and rotation markers on a card holding all three" do
+      repository = create_repository(user: @user, github_full_name: "acme/all-three")
+      strand_key(repository, "CI", used_at: 3.days.ago, rotated_at: 2.days.ago)
+      create_test_run(repository: repository, commit_sha: "cafe0901", total_specs_count: 10,
+                      created_at: 2.days.ago)
+      IngestRejection.create!(repository: repository, occurred_at: 1.hour.ago,
+                              details: ["commit_sha can't be blank"], total_reasons_count: 1)
+      present_revoked_key(repository, "Old CI")
+
+      get repositories_path
+
+      text = card_text(repository)
+      revoked_at_index = text.index(revoked_label)
+      refusal_at_index = text.index(ApplicationController.helpers.refused_deliveries_label)
+      rotated_at_index = text.index(ApplicationController.helpers.rotated_key_label)
+      expect(revoked_at_index).to be_present
+      expect(refusal_at_index).to be_present
+      expect(rotated_at_index).to be_present
+      expect(revoked_at_index).to be < refusal_at_index
+      expect(revoked_at_index).to be < rotated_at_index
+    end
+
+    # Criterion 3, and it is a credential rule, not a style one — the identical rule the rotation
+    # copy is held to. The viewer here is the OWNER, so the key-count badge legitimately reads
+    # "0 keys"; the assertion is scoped to the REVOKED COPY, which must carry neither a count nor
+    # any key name. The indicator's own plural branch prints "3 keys you revoked" on this very
+    # fixture (pinned on `show`), so the card must render the singular's generalization or it
+    # smuggles the gated figure through the wording.
+    # @intent: {"entity": "ApiKey", "action": "keep count off card", "behavior": "with three presented revoked keys named Nightly Main and Deploy the revoked paragraph carries no digit at all, the count-bearing 3-keys wording never renders, and no key name appears on the card", "layer": "request"}
+    it "carries no key count and no key name in the card's revoked copy" do
+      repository = create_repository(user: @user, github_full_name: "acme/three-revoked")
+      %w[Nightly Main Deploy].each { |name| present_revoked_key(repository, name) }
+
+      get repositories_path
+
+      text = card_text(repository)
+      expect(text).to include(revoked_label)
+      # The indicator's count-bearing variant must not travel to the grid.
+      expect(text).not_to include("3 keys you revoked")
+      # ...and no key name either — these names exist only behind `keys.manage` on `show`.
+      expect(text).not_to include("Nightly")
+      expect(text).not_to include("Deploy")
+      # The count-free sentence is asserted on ITS OWN paragraph, not on the card: the card holds
+      # other figures (the suite badge, the key badge), and the marker must not need them absent.
+      # The digit test is the BARE figure (`\b3\b`), not any digit at all — the sentence carries an
+      # age, and "a minute" is a measurement, not a count of keys.
+      revoked_paragraph = card_for(repository).find("p", text: "still being presented")
+      expect(revoked_paragraph.text).not_to match(/\b3\b/)
+      expect(revoked_paragraph.text).not_to include("keys you revoked")
+    end
+
+    # Criterion 4, at the surface level the seam exists for: the card and the page it links to
+    # word the state from ONE helper, so a rename cannot move one and strand the other. Each
+    # surface is held to its own seam's output — the indicator keeps the count-bearing note, the
+    # card the count-free one — rather than to literals typed twice here. The same example the
+    # rotation block carries for its own pair.
+    # @intent: {"entity": "ApiKey", "action": "share revoked wording", "behavior": "the card and the show page's connection indicator both carry the Revoked key still presented label from the same helper, each rendering its own note seam's output", "layer": "request"}
+    it "words the card and the page it links to from one seam" do
+      repository = create_repository(user: @user, github_full_name: "acme/shared-revoked")
+      key = present_revoked_key(repository, "CI")
+
+      get repositories_path
+      grid_text = page_text
+
+      get repository_path(repository)
+      indicator_text = Capybara.string(response.body).find("#connection-indicator").text.squish
+
+      expect(grid_text).to include(revoked_label)
+      expect(indicator_text).to include(revoked_label)
+      # Each surface its own variant, and each asserted against the seam and not a literal.
+      expect(grid_text).to include(
+        ApplicationController.helpers.revoked_key_note(key.revoked_at, key.last_refused_at)
+      )
+      expect(indicator_text).to include(
+        ApplicationController.helpers.revoked_keys_note(1, key.revoked_at, key.last_refused_at)
+      )
+    end
+
+    # Criterion 5, in the shape the rotation block's own guard uses: every SELECT the index issues
+    # against `api_keys`, on a grid whose markers actually render — a budget whose page never
+    # renders the read it guards passes trivially. Every card here is revoked-and-presented, so
+    # the read is carrying the widened partition and not merely the live one the old guard
+    # exercised. Doubling the grid proves the 1 is a bound and not a coincidence of the fixture's
+    # size.
+    # @intent: {"entity": "ApiKey", "action": "batch key reads", "behavior": "three revoked-presented cards then six all render the revoked label while a single api_keys SELECT serves the whole grid at either size", "layer": "request"}
+    it "asks the api_keys question once for the whole grid, however long the list is" do
+      %w[acme/one acme/two acme/three].each do |full_name|
+        present_revoked_key(create_repository(user: @user, github_full_name: full_name), "CI")
+      end
+
+      key_queries = queries_against('"api_keys"') { get repositories_path }
+
+      expect(response).to have_http_status(:ok)
+      # Every card really did render the marker, so every card really did ask.
+      expect(page_text.scan(revoked_label).size).to eq(3)
+      # One row read for the whole page — three cards must not cost three SELECTs.
+      expect(key_queries.size).to eq(1)
+
+      %w[acme/four acme/five acme/six].each do |full_name|
+        present_revoked_key(create_repository(user: @user, github_full_name: full_name), "CI")
+      end
+
+      doubled = queries_against('"api_keys"') { get repositories_path }
+
+      expect(page_text.scan(revoked_label).size).to eq(6)
+      expect(doubled.size).to eq(1)
+    end
+
+    # Criterion 6 — the older signals must not change meaning because the read beneath them
+    # widened. A rotated-then-revoked-then-presented key belongs to the revoked state, on the rule
+    # `show`'s own rotation split states: the revocation is the newer and stronger fact. The
+    # before/after readings bracket the whole collapse this ticket closes: before the revocation
+    # the card renders the rotation marker over a 1-key badge; after it, every existing signal
+    # goes quiet (the live-only row set excludes the key from both) and the card reads as a
+    # repository nobody ever wired CI to; the presentation is what turns it back into a finding —
+    # the revoked marker, the count still live-only at 0, and no rotation marker.
+    # @intent: {"entity": "ApiKey", "action": "keep live partition", "behavior": "a stranded key renders the rotation marker over a 1-key badge until it is revoked and presented, then switches to the revoked marker over a 0-keys badge with no rotation marker", "layer": "request"}
+    it "moves a rotated-then-revoked key out of the count and the rotation marker into the revoked state" do
+      repository = create_repository(user: @user, github_full_name: "acme/retired-presented")
+      key = strand_key(repository, "CI")
+      token = key.raw_token
+
+      get repositories_path
+      # The pre-revocation reading, so the change this example claims is really observed.
+      expect(card_text(repository)).to include(ApplicationController.helpers.rotated_key_label)
+      expect(card_text(repository)).to include("1 key")
+      expect(card_text(repository)).not_to include(revoked_label)
+
+      key.revoke!
+
+      get "/api/v1/repository", headers: { "Authorization" => "Bearer #{token}" }
+      expect(response).to have_http_status(:unauthorized)
+
+      get repositories_path
+
+      text = card_text(repository)
+      expect(text).to include(revoked_label)
+      expect(text).to include("0 keys")
+      expect(text).not_to include(ApplicationController.helpers.rotated_key_label)
+    end
+
+    # Criterion 7, and it is the honest bound the indicator's head comment states verbatim: a key
+    # revoked and never presented again is not a finding, and nothing may be synthesized for it.
+    # The card correctly stays quiet about the state — the only visible change is the count, which
+    # reads the live partition.
+    # @intent: {"entity": "ApiKey", "action": "not invent a presentation", "behavior": "a key revoked and never presented again produces no revoked marker on the card and no revoked sentence, while the key badge still drops to 0 keys", "layer": "request"}
+    it "marks nothing for a key revoked and never presented again" do
+      repository = create_repository(user: @user, github_full_name: "acme/quietly-retired")
+      repository.api_keys.create!(name: "CI").revoke!
+
+      get repositories_path
+
+      text = card_text(repository)
+      expect(text).not_to include(revoked_label)
+      expect(text).not_to include("still being presented")
+      expect(text).to include("0 keys")
+    end
+  end
+
   # SPGD-836 — registration access, stated on the page both return journeys land on.
   #
   # The gap these pin: `InstallationRepositories::MESSAGES[:not_granted]` refuses an `sgu_`
