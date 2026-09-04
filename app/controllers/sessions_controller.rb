@@ -66,13 +66,23 @@ class SessionsController < ApplicationController
   # refusal does not rest on this line alone.
   #
   # The alert names no reason beyond "archived" — why a particular person was offboarded is not
-  # this page's to disclose, and there is nothing they can do here about it.
+  # this page's to disclose. But since SPGD-853 the state has TWO ways of being reached — the
+  # person closed their own account from `/account`, or whoever operates the instance archived
+  # them from the console — and this alert cannot tell which happened, so it answers both, in
+  # the order the reader needs. A person who closed it themselves must hear first that nothing
+  # in the product will reopen it (there is no restore surface — see the `refused, NOT
+  # reactivated` note above), because anything else sends them hunting for an undo button that
+  # does not exist. Only the unexpected case is pointed at the operator, because the console
+  # that performed an unexpected archive is exactly theirs to ask. The previous copy named only
+  # the second reader, which told a self-closed person to go find an admin authority the
+  # product has never had.
   def refuse_archived(user)
     reset_session
 
     redirect_to root_path,
                 alert: "The SpecGuard account for #{user.github_handle} has been archived and cannot sign in. " \
-                       "If this is unexpected, contact whoever administers your SpecGuard instance."
+                       "If you closed it yourself, closure cannot be undone from within SpecGuard. " \
+                       "If this was unexpected, contact whoever administers your SpecGuard instance."
   end
 
   # Where the user was when they were sent to GitHub, when that is somewhere they were sent *from*.

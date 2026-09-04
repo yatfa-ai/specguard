@@ -2,10 +2,12 @@
 
 # The person's own page: what belongs to them rather than to any one repository.
 #
-# Today that is exactly one thing — their `sgu_` user API keys — and the page is deliberately not
-# named for them. An account surface is where a profile, a notification setting or a sign-out-
-# everywhere control would land, and naming the route after its first occupant would make each of
-# those a second top-level page.
+# Today that is their `sgu_` user API keys, their registration grant, their connected GitHub
+# accounts — and closing the account itself (SPGD-853), the writer for `users.archived_at` the
+# enforcement points have been policing since SPGD-358. The page is deliberately not named for
+# any of its occupants: an account surface is where a profile, a notification setting or a
+# sign-out-everywhere control would land, and naming the route after its first occupant would
+# make each of those a second top-level page.
 class AccountsController < ApplicationController
   before_action :require_authentication
 
@@ -64,5 +66,31 @@ class AccountsController < ApplicationController
     # and this page deliberately does not — listing SpecGuard's own record is what the panel claims
     # to show, and it is what the Disconnect acts on.
     @github_installations = current_user.github_installations.recent_first
+  end
+
+  # Closes the signed-in person's own account (SPGD-853) — the first writer `users.archived_at`
+  # has ever had. SPGD-358 shipped three enforcement points for this state (sign-in refused,
+  # live sessions killed, `sgu_` tokens 401'd) and no way to enter it; this action is that way,
+  # and the panel in `accounts/show` is its confirm dialog.
+  #
+  # ARCHIVING, NOT DELETING, and the distinction is the whole design: `update!` stamps one
+  # column and touches nothing else. The `:restrict_with_error` declarations on User hold the
+  # destroy path closed — this action is the "archive/disable" answer they were written to wait
+  # for — and the refusal copy in SessionsController is where the one-way nature of the state is
+  # disclosed, because that is the page a closed person actually reaches.
+  #
+  # `update!` on `current_user` and no parameter beside it: whose account closes is the session's
+  # answer alone (see the route note). `reset_session` afterwards, not before — the write is the
+  # act, and the session-ending mirrors `SessionsController#refuse_archived`/`#destroy`: end the
+  # session, then send the person to the signed-out root with a message that says what happened.
+  # The root page is also where a stray sign-in attempt would land them, so the notice and that
+  # refusal alert describe the same state in the same words.
+  def close
+    current_user.update!(archived_at: Time.current)
+    reset_session
+
+    redirect_to root_path,
+                notice: "Your account is closed. You have been signed out, and SpecGuard can no " \
+                        "longer sign you in. Nothing of yours was deleted."
   end
 end
