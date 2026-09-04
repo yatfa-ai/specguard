@@ -118,6 +118,83 @@ module ApplicationHelper
     end
   end
 
+  # What a repository whose REVOKED key is still being presented is called, in the one place both
+  # surfaces that say it read from.
+  #
+  # Two surfaces state this now: the connection indicator on repositories#show, and the card on
+  # the repositories grid — the same pair that states the refusal and the rotation above. The
+  # revoked state's words had lived inline in the indicator alone, so the grid had no way to reach
+  # them without typing a second copy, and the grid is where the state was loudest by absence: a
+  # revoked-and-presented repository rendered byte-identically, in neutral tone, to one nobody
+  # ever wired CI to there, because every existing card signal reads the live partition (the key
+  # count, the rotation marker) or is fed by a recorder a dead token can never reach (the refusal
+  # marker — a revoked token 401s at `authenticate_api_key!` before any controller runs). The
+  # words move here rather than being copied to the card, so a rename cannot move one surface
+  # without the other — the same argument `refused_deliveries_label` above makes in full.
+  #
+  # This is the connection chain's TOP state — it outranks REFUSING on the indicator's stated
+  # order, and the card carries that precedence as layout, this badge rendering above the refusal
+  # marker. The `:error` tone is deliberately NOT here, as neither sibling label's is: it is
+  # markup, each caller picks its own badge, and both pick error for the reason the indicator
+  # gives — a pipeline presenting a revoked token cannot complete a delivery at all, so work is
+  # being destroyed at the door.
+  def revoked_key_label = "Revoked key still presented"
+
+  # The sentence under that label on the GRID'S CARD: the indicator's singular branch, taken as
+  # the card's count-free generalization of it.
+  #
+  # Count-free is the grid's own rule, not a preference — the same one `rotated_key_note` above
+  # is held to. The count is credential information there (`key_count_visible?` gates the key
+  # badge on the very same card), so the indicator's plural branch ("N keys you revoked…")
+  # cannot travel to it, and N behind an ungated badge would smuggle the gated figure in through
+  # the wording. What travels instead is the singular's claim generalized over the set, dated
+  # from the OLDEST `revoked_at` — the only revocation date true of all of them at once, on the
+  # rule state 4 states for rotations — and from the NEWEST `last_refused_at`, because there the
+  # question the reader is asking is "is this happening now", and the freshest OBSERVED
+  # presentation is the honest answer. The sentence inherits the honesty bound with its words:
+  # `last_refused_at` is the last time the platform saw the token, never a claim of a present
+  # tense.
+  #
+  # This method and the singular limb of `revoked_keys_note` below are ONE sentence by
+  # construction — this delegates rather than re-types it, so a rename cannot move one half of
+  # the singular and strand the other. They stay separate SEAMS for the reason the rotated pair
+  # is two: the card may never grow a count-bearing branch by accident, and a caller that wants
+  # the count-bearing note must ask for it by its own name.
+  #
+  # Takes the two timestamps rather than the rows, on the signature convention
+  # `refused_deliveries_note` above already set: the card reads one loaded row set for the whole
+  # page and holds these two aggregates per repository, so a caller with no keys loaded can
+  # still word it.
+  def revoked_key_note(oldest_revoked_at, last_refused_at)
+    revoked_keys_note(1, oldest_revoked_at, last_refused_at)
+  end
+
+  # The same state, in the connection indicator's own words — the count-bearing variant the card
+  # deliberately does not get.
+  #
+  # This owns the indicator's whole singular/plural branch, not just one side of it, so the
+  # surface stops carrying revoked-state words at all: it hands over a count and the two
+  # timestamps and renders what comes back. The two shapes are kept in one method rather than two
+  # because the branch is about the SET (one revoked key speaks of itself; several must name how
+  # many and date the oldest), and splitting it would let a rename move one half of the sentence
+  # and not the other.
+  #
+  # The count travels in as an argument and is RENDERED by the indicator only: the gate on what a
+  # surface may print is each surface's own decision, and this method cannot know them. That is
+  # also why the signature takes the count rather than deriving it — the same reason the
+  # timestamps are arguments rather than rows (see `refused_deliveries_note`).
+  def revoked_keys_note(key_count, oldest_revoked_at, last_refused_at)
+    if key_count == 1
+      "A key you revoked #{time_ago_in_words(oldest_revoked_at)} ago is still being presented — " \
+        "last seen #{time_ago_in_words(last_refused_at)} ago. Update the secret wherever it is " \
+        "stored."
+    else
+      "#{key_count} keys you revoked are still being presented — the first was revoked " \
+        "#{time_ago_in_words(oldest_revoked_at)} ago, the latest attempt was seen " \
+        "#{time_ago_in_words(last_refused_at)} ago. Update the secrets wherever they are stored."
+    end
+  end
+
   # The one rendering of a run's wall clock. `TestRun#duration_label` settles the wording; this
   # settles the treatment that goes with it, so the Overview panel's header figure and the
   # Recent-runs table cell cannot drift into two different renderings of the same column.

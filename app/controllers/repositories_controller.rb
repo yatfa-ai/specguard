@@ -47,9 +47,12 @@ class RepositoriesController < ApplicationController
   # The first five are per-card questions asked by repositories/index, once per repository in the
   # list. The sixth is a per-row question asked by repositories/show, once per API key.
   # `stranded_rotation_time` joins the first five's shape: another per-card question asked by
-  # repositories/index, once per repository in the list.
+  # repositories/index, once per repository in the list. `presented_revocation_span` is that
+  # shape once more, for the card's revoked-key marker (SPGD-947) — the connection chain's top
+  # state, read off the same widened row set the count and the rotation age use.
   helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run,
-                :rejection_verdict, :former_member?, :stranded_rotation_time
+                :rejection_verdict, :former_member?, :stranded_rotation_time,
+                :presented_revocation_span
 
   # The seventh through tenth are the index's NARROWING state, handed to the view so it can echo
   # the reader's own ask back at them — the search field's value, the selects' selected options,
@@ -442,7 +445,9 @@ class RepositoriesController < ApplicationController
   # keys" over a table showing one, the same misreading `MintedKeyCounts#keys_minted_by`
   # was corrected for. The count reads `live_rows.size` off each partition rather than the size of
   # the handed-in rows, so the badge's premise is stated where it is read rather than depending on
-  # the load's scope staying narrow.
+  # the load's scope staying narrow — load-bearing since SPGD-947 widened `api_key_rows` to the
+  # whole table, because the revoked state needs rows a live-only read could never return and the
+  # badge must not start counting them.
   #
   # Counted for the whole page even though `key_count_visible?` withholds the badge from a
   # `view`-only member: the gate is on what is *rendered*, not on what is loaded, and narrowing the
@@ -468,6 +473,11 @@ class RepositoriesController < ApplicationController
   # grid, and for the same reason: the grid has rows for N repositories and must not build N loads.
   # A repository with no handed-in rows has no entry, which is exactly what both readers below want
   # (`api_key_count` defaults the missing count to 0; a missing rotation time renders no marker).
+  # The verdict's LIVE-rows-only half — revocation outranks rotation — is carried inside the
+  # partition (`stranded_rows` is the live side), which is load-bearing since SPGD-947 widened
+  # `api_key_rows` to the whole table: it is what keeps this answer and the key count describing
+  # the same population, so a card's count and its rotation marker cannot disagree about which
+  # keys a repository has.
   def stranded_rotation_time(repository)
     stranded_rotation_times[repository.id]
   end
@@ -477,29 +487,80 @@ class RepositoriesController < ApplicationController
   end
 
   # One partition per repository, built once per render off the single SELECT `api_key_rows`
-  # issued. Both per-card `ApiKey` questions — the count above and the rotation age above that —
-  # read off these objects, so they cannot disagree about which keys a repository has.
+  # issued. Every per-card `ApiKey` question — the count, the rotation age, and the
+  # presented-revocation span beside it — reads off these objects, so they cannot disagree about
+  # which keys a repository has.
   def api_key_partitions
     @api_key_partitions ||= ApiKeyPartition.grouped_by_repository(api_key_rows)
   end
 
-  # The rows BOTH per-card `ApiKey` questions read — the key count above and the rotation age
-  # beside it — loaded once for the whole page and partitioned in Ruby. Consolidation is the point:
-  # one `ApiKey.live` SELECT scoped to this page's ids answers the count (a group's size) and the
-  # rotation state (the predicate applied per row) together, and the page's `api_keys` budget stays
-  # at the single SELECT a grouped COUNT used to cost.
+  # The two dates the card's revoked-key sentence is worded from, for the one repository asked
+  # about — `nil` when the repository holds no presented revoked key, and therefore renders no
+  # marker. The pair travels as one answer because the sentence needs both at once and the card
+  # shows the state or it does not: no reading wants one half alone.
+  def presented_revocation_span(repository)
+    presented_revocation_spans[repository.id]
+  end
+
+  # `repository_id => [oldest revoked_at, newest last_refused_at]` for every repository on this
+  # page that reads the way show's revoked branch reads, derived from the partitions
+  # `api_key_partitions` builds — every per-card answer off the same row set — and read `nil` for
+  # every repository whose rows carry no presented revoked key, the way `stranded_rotation_times`
+  # reads `nil` for the unstranded: the hash holds an entry only where the state exists, because
+  # the group-by the partitions come from admits every repository with rows and the span must not
+  # let an empty answer travel as `[nil, nil]`. No second SELECT, so the page's `api_keys` budget
+  # stays where the guard pins it.
+  #
+  # REVOKED rows only, and only those STILL BEING PRESENTED — the trigger is
+  # `ApiKeyPartition#presented_revoked_rows`, the seam's own reading of the revoked side against
+  # `revoked_and_still_presented?`, applied per loaded ROW rather than re-derived as SQL. The
+  # predicate is what `show`'s revoked branch reads, and a SQL spelling here would be a second
+  # expression of the rule, free to drift from the one both web surfaces read — which is also why
+  # this answer reads through `api_key_partitions` rather than re-filtering `api_key_rows` itself:
+  # the partition's single-source property (spec/models/api_key_partition_spec.rb) holds the
+  # split spelled at the seam and nowhere else, and a `.select` copy here would fail it. A key
+  # revoked and never presented again is not in this answer — nothing is synthesized for it, on
+  # the honest bound the connection indicator's head comment states.
+  #
+  # The OLDEST `revoked_at`, and never the newest: every presented key satisfies the state against
+  # its own revocation, so the only date true of all of them at once is the oldest — the same
+  # choice the indicator's branch makes over the same column, and `stranded_rotation_times` over
+  # `rotated_at`. The NEWEST `last_refused_at`: there the question the reader is asking is "is
+  # this happening now", and the freshest OBSERVED presentation is the honest answer — a last-seen
+  # age, never a claim of a present tense.
+  def presented_revocation_spans
+    @presented_revocation_spans ||= api_key_partitions.transform_values do |partition|
+      presented = partition.presented_revoked_rows
+      next nil unless presented.any?
+
+      [presented.filter_map(&:revoked_at).min, presented.filter_map(&:last_refused_at).max]
+    end.compact
+  end
+
+  # The rows EVERY per-card `ApiKey` question reads — the key count, the rotation age beside it,
+  # and the presented-revocation span above — loaded once for the whole page. Consolidation is the
+  # point: ONE SELECT scoped to this page's ids answers all of them, and the page's `api_keys`
+  # budget stays at the single SELECT a grouped COUNT used to cost. SPGD-947 widened the read from
+  # the `live` partition to the WHOLE table partition, because the revoked state needs rows the
+  # live-only read could never return; the partitions every question answers from are built once,
+  # in Ruby, at `api_key_partitions` (`ApiKeyPartition.grouped_by_repository`) — precisely the
+  # move `show` makes at its own retirement split, where partitioning in Ruby rather than
+  # filtering in SQL is stated as what keeps the page on its pinned absolute query budget. A
+  # second SELECT for the revoked rows would fail that budget even where it cost no fresh round
+  # trip (query-cache hits are counted).
   #
   # Full ROWS rather than an aggregate is precedent on this product, not a new exposure: `show`
   # loads `keys.to_a` before any gate, and only its `:created_by_user` preload is gated on
   # `keys_manage` — `token_digest` is never rendered anywhere, and it is not the token. The gate
   # here is likewise on what is RENDERED: the count is read behind `key_count_visible?` by the
-  # view, and the rotation state renders only as a `:warning` badge plus a count-free age sentence
-  # — the ungated class the connection stat established, no key name, no count, no hint.
+  # view, the rotation state renders only as a `:warning` badge plus a count-free age sentence,
+  # and the revoked state as an `:error` badge plus its own count-free sentence — the ungated
+  # class the connection stat established, no key name, no count, no hint.
   def api_key_rows
     @api_key_rows ||= begin
       repository_ids = @repositories.map(&:id)
 
-      repository_ids.empty? ? [] : ApiKey.live.where(repository_id: repository_ids).to_a
+      repository_ids.empty? ? [] : ApiKey.where(repository_id: repository_ids).to_a
     end
   end
 
