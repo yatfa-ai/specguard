@@ -136,28 +136,35 @@
         <% end %>
       </fieldset>
 
-      <fieldset>
-        <legend class="section-label mb-1">Permissions</legend>
-        <p class="mb-2 text-xs text-app-muted">
-          Held for every repository ticked above. The grid offers what you hold <strong>somewhere</strong>:
-          a permission granted on one repository but not another is accepted only where you hold it,
-          and the save names both when it refuses. Ticking none is allowed: the repository set alone
-          is read access.
-        </p>
-        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <% @grantable_permissions.each do |permission| %>
-            <label class="flex items-start gap-2 rounded-md border border-app-border-light bg-app-surface-raised p-3">
-              <%= check_box_tag "agent_api_key[permissions][]", permission, false,
-                                id: "agent_api_key_permissions_#{permission.parameterize}",
-                                class: "mt-0.5 rounded border-app-border-light" %>
-              <span class="space-y-0.5">
-                <span class="block font-mono text-sm text-app-content"><%= permission %></span>
-                <span class="block text-xs text-app-muted"><%= permission_description(permission) %></span>
-              </span>
-            </label>
-          <% end %>
-        </div>
-      </fieldset>
+      <%# The permissions fieldset renders only when the grid has something to offer. Empty
+          means no accessible repository at all (every membership implies `view`, so a person
+          with any repository to tick is offered at least that) — the state the repositories
+          fieldset's own sentence above already names — and a legend and prose over an empty
+          grid would describe checkboxes that cannot exist. %>
+      <% unless @grantable_permissions.empty? %>
+        <fieldset>
+          <legend class="section-label mb-1">Permissions</legend>
+          <p class="mb-2 text-xs text-app-muted">
+            Held for every repository ticked above. The grid offers what you hold <strong>somewhere</strong>:
+            a permission granted on one repository but not another is accepted only where you hold it,
+            and the save names both when it refuses. Ticking none is allowed: the repository set alone
+            is read access.
+          </p>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <% @grantable_permissions.each do |permission| %>
+              <label class="flex items-start gap-2 rounded-md border border-app-border-light bg-app-surface-raised p-3">
+                <%= check_box_tag "agent_api_key[permissions][]", permission, false,
+                                  id: "agent_api_key_permissions_#{permission.parameterize}",
+                                  class: "mt-0.5 rounded border-app-border-light" %>
+                <span class="space-y-0.5">
+                  <span class="block font-mono text-sm text-app-content"><%= permission %></span>
+                  <span class="block text-xs text-app-muted"><%= permission_description(permission) %></span>
+                </span>
+              </label>
+            <% end %>
+          </div>
+        </fieldset>
+      <% end %>
 
       <div>
         <%= form.submit_button "Mint agent key", size: :sm %>

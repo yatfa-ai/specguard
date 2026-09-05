@@ -167,5 +167,71 @@ RSpec.describe "Account agent keys", type: :request do
       expect(response.body).not_to include("members.manage")
       expect(response.body).not_to include("repo.delete")
     end
+
+    # The rule of the union most likely to be lost in a rewrite: a row holding only `keys.manage`
+    # still offers `view`, because membership itself grants it (`RepositoryPolicy#can?`). The
+    # controller's one-read union restates this rule explicitly; this spec is what notices if a
+    # future rewrite reads the stored strings without it.
+    # @intent: { entity: "AgentApiKey", action: "offer implied view", behavior: "a membership row holding only keys.manage is offered the view checkbox as well", layer: "request" }
+    it "offers view to a member whose row omits it" do
+      owner = create_user(github_uid: "91005", github_handle: "implied-owner")
+      repository = create_repository(user: owner, github_full_name: "acme/implied-view")
+      create_membership(repository: repository, user: person, permissions: ["keys.manage"])
+
+      get account_path
+
+      expect(response.body).to include("agent_api_key_permissions_view")
+      expect(response.body).to include("agent_api_key_permissions_keys-manage")
+    end
+
+    # Ownership of ANY accessible repository dominates the union — the positive control above,
+    # exercised over a mixed set so the owner branch is taken across the whole offered list and
+    # not only beside an otherwise empty one.
+    # @intent: { entity: "AgentApiKey", action: "let ownership dominate the union", behavior: "a person owning one accessible repository is offered the whole vocabulary even beside a view-only shared one", layer: "request" }
+    it "offers the whole vocabulary when any accessible repository is owned" do
+      mint_grant
+      owner = create_user(github_uid: "91006", github_handle: "second-owner")
+      shared = create_repository(user: owner, github_full_name: "acme/also-shared")
+      create_membership(repository: shared, user: person, permissions: ["view"])
+
+      get account_path
+
+      RepositoryMembership::PERMISSIONS.each do |permission|
+        expect(response.body).to include("agent_api_key_permissions_#{permission.parameterize}")
+      end
+    end
+
+    # THE QUERY BUDGET the union is held to, on the fixture shape the N+1 hid in: SEVERAL shared
+    # repositories, where the per-repository spelling this replaced paid one
+    # `repository_memberships` read per shared repository (each fresh `RepositoryPolicy` memoized
+    # its own `find_by`) and an owned-only fixture could not see it — `can?` short-circuits on
+    # `owner?` before touching the row. The page reads this table a CONSTANT number of times:
+    # the `accessible_by` boundary read, whose OR-leg is a `repository_memberships` subquery, plus
+    # ONE read for the offered-set union. A regression to the N+1 answers 6 here, not "more than
+    # one", which is why the count is pinned exactly.
+    # @intent: { entity: "AgentApiKey", action: "hold the grid's query budget", behavior: "GET /account reads repository_memberships exactly twice with several shared repositories — the boundary subquery plus one union read, never one per repository", layer: "request" }
+    it "reads repository_memberships a constant number of times however many repositories are shared" do
+      owner = create_user(github_uid: "91007", github_handle: "budget-owner")
+      4.times do |n|
+        repository = create_repository(user: owner, github_full_name: "acme/shared-#{n}")
+        create_membership(repository: repository, user: person, permissions: ["view"])
+      end
+
+      statements = queries_against("repository_memberships") { get account_path }
+
+      expect(statements.size).to eq(2)
+    end
+  end
+
+  # A person with no accessible repositories has nothing to tick and is offered no permission —
+  # every membership implies `view`, so "no boxes" can only mean "no repositories" — and the
+  # repositories fieldset's own sentence above already names that state. A legend and prose over
+  # an empty grid would describe checkboxes that cannot exist.
+  # @intent: { entity: "AgentApiKey", action: "omit the empty permissions fieldset", behavior: "the account page of a person with no repositories renders no Permissions fieldset, while the repositories empty-state sentence still shows", layer: "request" }
+  it "renders no permissions fieldset when there is nothing to offer" do
+    get account_path
+
+    expect(response.body).not_to include('<legend class="section-label mb-1">Permissions</legend>')
+    expect(response.body).to include("No repositories to grant yet")
   end
 end

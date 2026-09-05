@@ -42,6 +42,38 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
       expect(roles).to eq(["agent"])
     end
 
+    # `?role=` asks the OWNERSHIP partition — a person axis this credential does not have: every
+    # entry serves `role: "agent"`, and there is no person in the request for the shared
+    # application's `viewer.id` to read. The ask therefore clamps to the module's no-ask and the
+    # whole granted set is served — the same answer an out-of-vocabulary value already gets —
+    # rather than a 500 on a nil dereference or a partition that does not exist.
+    # @intent: { entity: "AgentApiKey", action: "clamp an ownership ask", behavior: "an agent key asking ?role=owned or ?role=shared is served its whole granted set with a 200, never a 500", layer: "request" }
+    it "serves its whole set under an ownership ask that cannot apply to it" do
+      get "/api/v1/repositories", params: { role: "owned" }, headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body["repositories"].map { |r| r["full_name"] })
+        .to eq([repository.github_full_name])
+
+      get "/api/v1/repositories", params: { role: "shared" }, headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body["repositories"].map { |r| r["full_name"] })
+        .to eq([repository.github_full_name])
+    end
+
+    # The narrowing asks the merge brought onto this surface that ARE viewer-independent are
+    # honored — `?q=` filters the key's own set, and the boundary still applies FIRST: a name
+    # that exists on the platform but outside the set answers an empty list, never the
+    # out-of-set repository.
+    # @intent: { entity: "AgentApiKey", action: "narrow by name within the set", behavior: "an agent key asking ?q= for a name outside its granted set answers an empty list, not the out-of-set repository", layer: "request" }
+    it "narrows its granted set under ?q= without widening the boundary" do
+      get "/api/v1/repositories", params: { q: "not-granted" }, headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body["repositories"]).to eq([])
+    end
+
     # The offboarding cut, asserted over HTTP: archiving the owner un-authenticates a key that
     # answered 200 a moment earlier, exactly as it does for the person's own `sgu_` keys.
     # @intent: { entity: "AgentApiKey", action: "retire with the owner", behavior: "archiving the minting owner stops a key that answered 200 moments earlier", layer: "request" }

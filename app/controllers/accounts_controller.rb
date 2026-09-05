@@ -31,19 +31,15 @@ class AccountsController < ApplicationController
     @grantable_repositories = Repository.accessible_by(current_user).order(:github_full_name)
 
     # WHAT THE MINT FORM MAY OFFER — the union of `RepositoryPolicy#grantable_permissions`
-    # across the repositories above, in the vocabulary's own order (`Array#&` keeps the left
-    # side's). The permission grid renders from this and never from
+    # across the repositories above (see `grantable_permissions_for` below for the one-read
+    # spelling and the rules it restates). The permission grid renders from this and never from
     # `RepositoryMembership::PERMISSIONS` whole: a box no tickable repository would accept is a
     # control whose only possible outcome is the model's refusal on submit — the exact shape
     # `_permission_fields.html.erb` renders its own grids to prevent. The BOUND itself stays
     # per-repository on the model — a permission held on one ticked repository but not another
     # is still refused, by a flash naming both — so this grid promises only what is true of it:
     # it never offers what NO accessible repository accepts.
-    @grantable_permissions =
-      RepositoryMembership::PERMISSIONS &
-      @grantable_repositories.flat_map { |repository|
-        RepositoryPolicy.new(current_user, repository).grantable_permissions
-      }
+    @grantable_permissions = grantable_permissions_for(@grantable_repositories)
 
     # Set by UserApiKeysController#create, readable exactly once. One reveal-once mechanism for
     # both credentials, not two: a second implementation is a second chance to get "shown exactly
@@ -100,6 +96,45 @@ class AccountsController < ApplicationController
     # to show, and it is what the Disconnect acts on.
     @github_installations = current_user.github_installations.recent_first
   end
+
+  # THE UNION THE MINT GRID OFFERS — `RepositoryPolicy#grantable_permissions` for every accessible
+  # repository at once, read in ONE pass over `repository_memberships` rather than one query per
+  # repository. The per-repository spelling this replaces built a fresh `RepositoryPolicy` per
+  # accessible repository, and each instance's memoized `find_by` cost one query — the exact cost
+  # `RepositoriesController#key_count_visible?` declines in writing for the same call, with
+  # `shared_permissions` there as the settled one-read alternative. The answer is the union's,
+  # byte for byte; the two rules the policy owns are RESTATED here rather than inherited, because
+  # a hand-rolled union that silently drops either would answer a page the policy never would:
+  #
+  #   * OWNER ⇒ THE WHOLE VOCABULARY. `can?` returns true on `owner?` before consulting any row,
+  #     so a person owning any accessible repository may grant all four. `repo.delete` is
+  #     reachable ONLY this way — it is the OWNER_ONLY capability, so no membership row can
+  #     contribute it and the row branch below never reads it back.
+  #   * MEMBERSHIP IMPLIES `view`. A row holding only `keys.manage` — or holding nothing at all —
+  #     still contributes `view`, because the membership itself grants it
+  #     (`RepositoryPolicy#can?`); this is what keeps the answer honest for a member whose row
+  #     omits "view".
+  #
+  # `Array#&` hands the grid the vocabulary's own order (`PERMISSIONS` on the left) rather than
+  # whatever order the rows happened to produce, so the grid does not reshuffle as memberships
+  # change. The BOUND itself stays per-repository on the model — this union widens only what the
+  # form offers, never what a mint may contain.
+  def grantable_permissions_for(repositories)
+    repository_ids = repositories.map(&:id)
+    return [] if repository_ids.empty?
+
+    return RepositoryMembership::PERMISSIONS.dup if repositories.any? { |r| r.user_id == current_user.id }
+
+    RepositoryMembership::PERMISSIONS &
+      current_user.repository_memberships
+                  .where(repository_id: repository_ids)
+                  .flat_map { |membership|
+                    [RepositoryMembership::VIEW] +
+                      (membership.permissions - [RepositoryMembership::REPO_DELETE])
+                  }
+  end
+
+  private :grantable_permissions_for
 
   # Closes the signed-in person's own account (SPGD-853) — the first writer `users.archived_at`
   # has ever had. SPGD-358 shipped three enforcement points for this state (sign-in refused,
