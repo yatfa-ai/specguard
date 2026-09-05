@@ -513,15 +513,18 @@ class RepositoryOverview
   # from the one the two web surfaces read, and this block exists to stop the agent and the page
   # disagreeing about a key.
   def serialized_credential_health
-    # THE RETIREMENT SPLIT, taken in Ruby off the ONE SELECT: stranded keys are a LIVE-keys
-    # question (a key rotated and THEN revoked is both, and the revocation is the newer fact —
-    # reporting it as merely rotated would understate the state a client needs to act on), and the
-    # presented-revoked half reads the retained rows a `WHERE` would have filtered out. One query,
-    # as before; `rotated_and_unused?`'s comment carries the rule against re-expressing that
-    # predicate in SQL.
-    keys = repository.api_keys.to_a
-    stranded = keys.reject(&:revoked?).select(&:rotated_and_unused?)
-    presented_revoked = keys.select(&:revoked_and_still_presented?)
+    # THE RETIREMENT SPLIT, one object off the ONE SELECT: `ApiKeyPartition` owns the
+    # live / revoked / stranded / presented-revoked split — the same object the two web surfaces
+    # read, which is what makes "the agent and the page cannot disagree about a key" a property of
+    # the construction rather than a hope about three hand-typed copies. Stranded keys are a
+    # LIVE-keys question (a key rotated and THEN revoked is both, and the revocation is the newer
+    # fact — reporting it as merely rotated would understate the state a client needs to act on),
+    # and the presented-revoked half reads the retained rows a `WHERE` would have filtered out, so
+    # ALL of this repository's rows are handed in, loaded once. `rotated_and_unused?`'s comment
+    # carries the rule against re-expressing that predicate in SQL.
+    partition = ApiKeyPartition.for(repository.api_keys.to_a)
+    stranded = partition.stranded_rows
+    presented_revoked = partition.presented_revoked_rows
 
     {
       rotated_and_unused: stranded.any?,

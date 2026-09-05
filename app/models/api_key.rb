@@ -129,10 +129,14 @@ class ApiKey < ApplicationRecord
     self
   end
 
-  # Whether THIS row has been retired. Read by every consumer that must see live keys only —
-  # `RepositoriesController#show`'s partition, `RepositoryOverview#serialized_credential_health`,
-  # the "minted N keys" badge — via the `live`/`revoked` scopes at the SQL layer and this predicate
-  # once the rows are loaded.
+  # Whether THIS row has been retired. Read by every consumer that must see live keys only, via
+  # the `live`/`revoked` scopes at the SQL layer (the loads behind `RepositoriesController#show`,
+  # the repositories grid and the "minted N keys" badge) and — once the rows are loaded — through
+  # `ApiKeyPartition`, the seam that owns the live/revoked/stranded/presented-revoked split built
+  # from this predicate. `RepositoriesController#show`, `RepositoryOverview#serialized_credential_health`
+  # and the grid's per-card counts and rotation ages all read that partition rather than spelling
+  # the split at their own site; `spec/models/api_key_partition_spec.rb` holds the repo-wide
+  # property that they still do.
   def revoked?
     revoked_at.present?
   end
