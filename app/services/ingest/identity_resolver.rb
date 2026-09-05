@@ -1950,10 +1950,11 @@ module Ingest
     # the match band comes back with nothing, and a test that already had an identity gets a second
     # one. A miss here is not a worse ranking, it is a history split in two.
     #
-    # **Mitigated, with the number that chose it.** The query below runs inside its own
-    # transaction and issues `SET LOCAL hnsw.iterative_scan = 'relaxed_order'` before it, scoped
-    # to this statement and undone at commit — a global `hnsw.*` change would tax every other
-    # vector consumer for a fix only this query needs. On the same grid: `iterative_scan =
+    # **Mitigated, with the number that chose it.** The query below gets its transaction and its
+    # recall directive from {SpecIdentity.with_hnsw_planner_setup} — issued on the read's own
+    # transaction, before the statement, scoped to it and undone at commit; a global `hnsw.*`
+    # change would tax every other vector consumer for a fix only this query needs. On the same
+    # grid: `iterative_scan =
     # relaxed_order` at stock `ef_search` returns recall **1.000**. Raising `ef_search` to 200
     # also reaches 1.000, and is not preferred because it buys the same recall for the same
     # latency (~148 ms/query against ~7.9 unmitigated) while making EVERY query dearer at the
@@ -2050,18 +2051,20 @@ module Ingest
     # (the tiebreak, the projection) holds under either, and the recall mitigation below is
     # inert on a non-HNSW plan.
     def nearest(embedding)
-      SpecIdentity.transaction do
-        # Scoped to THIS query via SET LOCAL inside the surrounding transaction — never a global
-        # `hnsw.*` change, which would tax every other vector consumer for a fix only this query
-        # needs. Two notes for whoever touches this: (1) SET LOCAL persists until COMMIT, so if a
-        # caller already holds a transaction this savepoint joins, the GUC rides to that outer
-        # transaction's end — harmless here because `iterative_scan` only alters how an HNSW scan
-        # gathers candidates and the resolver's other statements are not vector scans, but it is
-        # why this is a transaction of its own whenever nothing outer holds one; (2)
-        # `relaxed_order` and not `strict_order`: the `.order(:id)` tiebreak below already forces
-        # an Incremental Sort over whatever the scan emits, so paying for strict ordering inside
-        # the scan as well buys nothing.
-        SpecIdentity.connection.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
+      # The transaction and the recall directive are {SpecIdentity.with_hnsw_planner_setup}'s —
+      # it scopes the directive to this statement the way the notes there describe. What remains
+      # THIS site's answer is the price: `correct_operator_price: false`, because that is the
+      # setup SPGD-375 measured and installed here — directive only — and SPGD-958 moved the
+      # setup without changing it. Whether the price should ALSO apply to this read is a real,
+      # still-open question (the directive's comment above raises neither way); it is a measured
+      # decision for another ticket, because unlike the directive the price can change WHICH
+      # plan this query gets. The standing rationale for both answers lives in one place, on the
+      # seam.
+      #
+      # The `relaxed_order` value the seam issues is right for this read too: the `.order(:id)`
+      # tiebreak below already forces an Incremental Sort over whatever the scan emits, so
+      # paying for strict ordering inside the scan as well buys nothing.
+      SpecIdentity.with_hnsw_planner_setup(correct_operator_price: false) do
         @repository.spec_identities
                    .select(:id, :text, :text_digest, :signal_source)
                    .nearest_neighbors(:embedding, embedding, distance: "cosine",
