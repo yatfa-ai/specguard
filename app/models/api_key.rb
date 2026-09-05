@@ -24,9 +24,12 @@ class ApiKey < ApplicationRecord
   # It was two literals agreeing by hand until the third caller arrived, and
   # `Api::V1::UserRepositoriesController` already states why the agreement is deliberate: "so a
   # repository registered by an agent and one registered in a browser have identically-named keys
-  # rather than two conventions a person has to learn." Every default-naming mint site reads this
-  # constant rather than repeating the literal, so a rename cannot leave one path spelling the name
-  # differently — a hand-typed copy would be exactly the drift nothing in the suite would see.
+  # rather than two conventions a person has to learn." Every default-naming mint site in Ruby reads
+  # this constant rather than repeating the literal, so a rename cannot leave two Ruby paths
+  # spelling the default differently. The one hand-typed copy of the literal outside this constant
+  # and the specs is the `api_keys.name` column default (see `db/schema.rb`) — a rename here does
+  # NOT move it, and a mint that passes no name at all takes that column default rather than this
+  # constant.
   DEFAULT_NAME = "Default CI Key"
 
   belongs_to :repository
