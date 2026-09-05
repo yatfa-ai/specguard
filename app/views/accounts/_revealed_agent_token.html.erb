@@ -1,0 +1,62 @@
+<%# SPGD-952 — the agent key's reveal-once panel: the account page's third, on the mechanism
+    `accounts/_revealed_user_token` documents and does not re-argue here. What differs is the
+    credential and therefore the copy: an `sga_` token answers the PLURAL read surface only, with
+    the reach of the grant minted onto it — never ingest, never the singular repository route. %>
+<% if @revealed_agent_token.present? %>
+  <% content_for :head do %>
+    <meta name="turbo-cache-control" content="no-cache">
+  <% end %>
+
+  <%# The id is the fragment `AgentApiKeysController` redirects to. Turbo preserves scroll across
+      the redirect, so a perfect reveal can still arrive off-screen; the controller is the second
+      mechanism for the same job. There is no second chance — only a digest is stored. %>
+  <%= render UI::PanelComponent.new(
+        title: @revealed_agent_token_name.present? ? "Your new agent key: #{@revealed_agent_token_name}" : "Your new agent key",
+        id: "revealed-agent-key",
+        data: { controller: "scroll-into-view" }
+      ) do %>
+    <div class="space-y-3"
+         data-controller="copy-text"
+         data-copy-text-auto-copy-value="true"
+         data-copy-text-copied-message-value="Copied to your clipboard — paste it somewhere safe before you leave this page."
+         data-copy-text-copy-failed-message-value="Your browser did not allow an automatic copy. Use Copy or Download below, before you leave this page."
+         data-copy-text-download-filename-value="<%= revealed_token_filename(@revealed_agent_token_name) %>">
+      <%= render UI::AlertComponent.new(tone: :warning, title: "This is the only time this token is shown") do %>
+        <p>Only the SHA-256 digest is stored, so reloading this page will not show it again. There is
+          no way to rotate this key — if you lose it, mint another and revoke this one.</p>
+        <p class="mt-1 font-semibold" role="status" data-copy-text-target="status">
+          Copy it before you leave this page.
+        </p>
+      <% end %>
+
+      <div class="space-y-1">
+        <p class="section-label text-app-content-secondary">The key</p>
+        <%= render UI::CopyableCodeComponent.new do %><%= @revealed_agent_token %><% end %>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <%= render UI::ButtonComponent.new(variant: :secondary, size: :sm, type: "button",
+                                           data: { action: "copy-text#download" }) do %>
+          Download as a file
+        <% end %>
+        <p class="text-xs text-app-muted">
+          Written from this page, not fetched from the server — SpecGuard does not hold the token.
+        </p>
+      </div>
+
+      <%# The one request that proves this credential works, with the token already in it. The
+          PLURAL route is the one this credential answers — and for an agent key the list it gets
+          back is the key's own granted set, which makes this curl the readout of the grant as
+          much as a smoke test. The singular `/api/v1/repository` would 401 for it, which is the
+          seam working. %>
+      <div class="space-y-1" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">Check the key works</p>
+        <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer <%= @revealed_agent_token %>" <%= api_v1_repositories_url %><% end %>
+        <p class="text-xs text-app-muted">
+          Ready to run as-is. It lists the repositories this key was granted, and sends SpecGuard
+          nothing.
+        </p>
+      </div>
+    </div>
+  <% end %>
+<% end %>

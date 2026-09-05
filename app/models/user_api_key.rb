@@ -29,8 +29,11 @@ require "openssl"
 # of columns that exist to date the copy on a stranded CI credential.
 class UserApiKey < ApplicationRecord
   # Deliberately NOT `ApiKey::TOKEN_PREFIX` with a letter swapped, and deliberately the same LENGTH
-  # as it: the two are compared against a caller's string, and a prefix of one that is a prefix of
-  # the other would make the discrimination in `Api::BaseController` ambiguous.
+  # as it: the credential prefixes are compared against a caller's string, and a prefix of one that
+  # is a prefix of another would make the discrimination in `Api::BaseController` ambiguous. The
+  # agent credential's `sga_` keeps the same discipline — three same-length prefixes, no one a
+  # prefix of another — and `spec/requests/api/v1/credential_seam_spec.rb` walks all of them, so a
+  # fourth that breaks the rule fails there rather than at runtime.
   TOKEN_PREFIX = "sgu_"
   TOKEN_BYTES = 24
 

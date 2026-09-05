@@ -2,11 +2,14 @@
 
 # Base class for every machine-facing endpoint.
 #
-# Auth is a Bearer API key. There are now TWO kinds of them, and the distinction is the whole
+# Auth is a Bearer API key. There are now THREE kinds of them, and the distinction is the whole
 # subject of this class:
 #
 #   * `sgk_…` — an `ApiKey`, which speaks for ONE repository and resolves `current_repository`.
 #   * `sgu_…` — a `UserApiKey`, which speaks for ONE PERSON and resolves `current_api_user`.
+#   * `sga_…` — an `AgentApiKey`, which speaks for NOBODY: it carries its own repository set and
+#     permission set, and answers repository questions through `AgentApiKeyPolicy` rather than
+#     through any person's rights.
 #
 # ## "Resolved a key" and "resolved a repository" are two different facts
 #
@@ -27,7 +30,8 @@
 #
 # A controller that declares NOTHING answers 401 to everything, including a perfectly valid key.
 # That is deliberate and it is the safe direction: the alternative default — accept whichever
-# credential the caller happened to send — hands a new endpoint the union of both surfaces on the
+# credential the caller happened to send — hands a new endpoint the union of every credential
+# surface there is, on the
 # day somebody forgets a line, and nothing in the response would say so. Be honest about the cost:
 # at runtime a missing declaration presents as "my key stopped working" rather than as an error
 # naming the controller. That is what makes the trade acceptable rather than merely safe:
@@ -37,10 +41,12 @@
 #
 # ## One indexed read, still
 #
-# The prefix is checked BEFORE any lookup, against the ONE class this controller accepts. So a
-# repository key sent to a user-key endpoint (or the reverse) is refused with no query at all, and a
-# valid presentation costs exactly the single `find_by` on a unique digest index that resolution has
-# always been. Probing both tables per request would have been the naive shape.
+# The prefix is checked BEFORE any lookup, against the classes this controller accepts — a scan of
+# the declaration, not of any table, and at most one class can match because the prefixes are
+# same-length and mutually exclusive. So a repository key sent to a user-key endpoint (or either
+# sent to an endpoint accepting neither) is refused with no query at all, and a valid presentation
+# costs exactly the single `find_by` on a unique digest index that resolution has always been.
+# Probing tables per request would have been the naive shape; it still is.
 #
 # `bind_principal` is part of that claim, not an exception to it. It runs on every authenticated
 # request, and reading the principal is free only because resolution brings it back in the SAME
@@ -55,13 +61,23 @@
 # to the credential tables alone would report "exactly one read" while the request made two, which
 # is precisely how this paragraph came to be wrong once already.
 class Api::BaseController < ActionController::API
-  # The credential class this endpoint accepts — `ApiKey`, `UserApiKey`, or `nil` for "has not said,
-  # therefore nothing". Set through the two macros below rather than assigned directly, so the
-  # declaration reads as a sentence in the subclass and greps as one.
+  # The credential classes this endpoint accepts — a subset of {ApiKey, UserApiKey, AgentApiKey},
+  # empty for "has not said, therefore nothing". Set through the macros below rather than assigned
+  # directly, so the declaration reads as a sentence in the subclass and greps as one.
+  #
+  # It is an ARRAY now rather than the single class it was, because the plural endpoints answer to
+  # a person's `sgu_` key AND to the `sga_` agent credential, and the one-class shape had no way to
+  # say that. What did NOT change is the discipline the single class enforced: an endpoint accepts
+  # only the credential classes it names, a token whose prefix matches none of them is refused
+  # before any table is read, and an endpoint that declares nothing still answers 401 to
+  # everything. Every prefix match in the array resolves exactly one table — the prefixes are
+  # same-length and mutually exclusive (the discipline `UserApiKey::TOKEN_PREFIX` documents, and
+  # the seam spec walks), so "which credential is this?" is answered by the token's first four
+  # characters and never by probing.
   #
   # `instance_accessor: false` because a public instance method on a controller is a routable
   # action, and this one is configuration rather than behaviour.
-  class_attribute :accepted_credential, instance_accessor: false, default: nil
+  class_attribute :accepted_credentials, instance_accessor: false, default: [].freeze
 
   before_action :authenticate_api_key!
 
@@ -85,12 +101,28 @@ class Api::BaseController < ActionController::API
 
   # This endpoint needs `current_repository`. A `sgu_` user key gets 401 here.
   def self.accepts_repository_credential
-    self.accepted_credential = ApiKey
+    accept_credential ApiKey
   end
 
   # This endpoint needs `current_api_user`. A `sgk_` repository key gets 401 here.
   def self.accepts_user_credential
-    self.accepted_credential = UserApiKey
+    accept_credential UserApiKey
+  end
+
+  # This endpoint also answers to an `sga_` agent credential, whose own repository set and
+  # permission set bound every action it reaches (see `AgentApiKeyPolicy`). Declared ALONGSIDE
+  # `accepts_user_credential`, never instead of it: the agent credential is the bounded form of
+  # what the person credential carries, and the endpoints that accept it are read-only for it —
+  # the actions that must act AS a person guard themselves with `require_person_credential`.
+  def self.accepts_agent_credential
+    accept_credential AgentApiKey
+  end
+
+  # The one writer behind the three macros. `|` dedupes so a doubled declaration is idempotent
+  # rather than a doubled array, and the frozen assignment is what makes each subclass's set its
+  # own rather than a shared mutable default.
+  def self.accept_credential(klass)
+    self.accepted_credentials = (accepted_credentials | [klass]).freeze
   end
 
   private
@@ -121,15 +153,18 @@ class Api::BaseController < ActionController::API
   end
 
   def authenticate_api_key!
-    credential = self.class.accepted_credential
+    credentials = self.class.accepted_credentials
     # See "Failing closed" above. Not an exception: a misconfiguration must not be distinguishable
     # from a bad key by anyone holding one.
-    return render_unauthorized if credential.nil?
+    return render_unauthorized if credentials.empty?
 
     token = bearer_token
-    # The prefix decides WHICH table before any of them is read — and, on a mismatch, that no table
-    # is read at all.
-    return render_unauthorized unless token&.start_with?(credential::TOKEN_PREFIX)
+    # The prefix decides WHICH table before any of them is read — and, on a mismatch, that no
+    # table is read at all. With more than one accepted credential this is a scan over the
+    # DECLARATION, not over the database: the prefixes are same-length and mutually exclusive
+    # (see `accepted_credentials`), so at most one class matches and the scan reads nothing.
+    credential = credentials.find { |klass| token&.start_with?(klass::TOKEN_PREFIX) }
+    return render_unauthorized unless credential
 
     @current_api_key = credential.authenticate(token)
     if @current_api_key.nil?
@@ -169,15 +204,71 @@ class Api::BaseController < ActionController::API
     ApiKey.revoked.find_by(token_digest: ApiKey.digest(token))&.touch_last_refused!
   end
 
-  # The one place the two credentials diverge after resolution. A `case` rather than a polymorphic
+  # The one place the credentials diverge after resolution. A `case` rather than a polymorphic
   # method on the models: `ApiKey` is deliberately untouched by this change (its guarantees are what
   # the separate-table decision exists to preserve), so the knowledge of what each key binds to
   # lives here, where the distinction is already the subject.
+  #
+  # `AgentApiKey` binds NOTHING beyond the key already held in `@current_api_key` — that is the
+  # credential's whole point. A `sgu_` key binds a person and inherits their rights; an `sga_` key
+  # resolves to itself and carries its own boundaries, which is why the principal the authorization
+  # concern sees is the key (see `build_repository_policy` below) and there is no person anywhere
+  # in the request.
   def bind_principal
     case @current_api_key
-    when ApiKey     then @current_repository = @current_api_key.repository
-    when UserApiKey then @current_api_user   = @current_api_key.user
+    when ApiKey      then @current_repository = @current_api_key.repository
+    when UserApiKey  then @current_api_user   = @current_api_key.user
+    when AgentApiKey then # the key itself is the principal; there is nobody to bind
     end
+  end
+
+  # HOW THE AGENT CREDENTIAL ANSWERS REPOSITORY QUESTIONS. `RepositoryAuthorization`'s default
+  # builds the person policy (`RepositoryPolicy.new(authorizing_user, …)`), which is the right
+  # answer for the web tree and for a `sgu_` key and the WRONG answer for an `sga_` key: it would
+  # measure the request against `current_api_user` — nil here, and a person's membership rights
+  # even if one were bound — rather than against the boundaries the key itself carries. So the
+  # branch lives HERE, next to `bind_principal`, where the knowledge of what each credential is
+  # already lives, and the concern keeps asking its protocol questions (`member?` / `can?`) of
+  # whichever policy this hands back. The 404-vs-403 fork is thereby shared, not re-decided: an
+  # agent key out of set is a 404, in set without the permission a 403, exactly as for a person.
+  def build_repository_policy(repository)
+    if @current_api_key.is_a?(AgentApiKey)
+      AgentApiKeyPolicy.new(@current_api_key, repository)
+    else
+      super
+    end
+  end
+
+  # THE READ BOUNDARY AS A RELATION — the repositories this credential may list and name by id.
+  # For a person credential that is `Repository.accessible_by` (owned UNION shared-with-them);
+  # for an agent credential it is the key's own set, mint-time fixed — deliberately NOT
+  # `accessible_by` of anybody, because the key holds nobody's rights. The plural endpoints
+  # scope through this one method, so a repository outside whichever boundary applies never
+  # enters a query, let alone a response.
+  def authorized_repositories
+    if @current_api_key.is_a?(AgentApiKey)
+      @current_api_key.repositories
+    else
+      Repository.accessible_by(current_api_user)
+    end
+  end
+
+  # THE GUARD FOR ACTIONS THAT MUST ACT AS A PERSON. A controller that accepts the agent
+  # credential accepts it for its READ actions; the mutating and person-anchored verbs —
+  # registering, renaming, deleting, minting `sgk_` keys, editing members — are refused here,
+  # declared per action with `before_action … only:`, because the seam is controller-scoped and
+  # the narrowing is the endpoint's own sentence.
+  #
+  # 403, not 401: the token is valid and of a class this endpoint accepts — "a valid Bearer API
+  # key is required" would be a lie. What is refused is the ACT: an agent key cannot act as a
+  # person, which is the same authenticated-but-not-yours shape every other 403 on this surface
+  # carries. On the only two classes a multi-credential endpoint can resolve, this passes
+  # `UserApiKey` and refuses `AgentApiKey`; a `sgk_` key can never reach a controller that does
+  # not accept it, because the prefix turns it away first.
+  def require_person_credential
+    return if @current_api_key.is_a?(UserApiKey)
+
+    render_forbidden("This action requires a personal key — an agent key cannot act as a person.")
   end
 
   def bearer_token

@@ -8,9 +8,10 @@
 # It was, and the whole body was read off `current_repository`. That is exactly one credential's
 # worth of reach: an `sgk_` repository key names one repository, so a controller that reads the
 # key can only ever describe that one. The same figures asked for BY NAME under an `sgu_` user key
-# — `GET /api/v1/repositories/:id` — are the same figures, and the only thing that differs is how
-# the repository was arrived at. So the repository is a PARAMETER here and not a credential, and
-# the two controllers differ in resolution and authorization alone.
+# — `GET /api/v1/repositories/:id` — are the same figures, and since SPGD-952 under an `sga_`
+# agent key too (bounded by the key's own set). The only thing that differs between the three is
+# how the repository was arrived at. So the repository is a PARAMETER here and not a credential,
+# and the controllers differ in resolution and authorization alone.
 #
 # ## What travels, and the one thing that does not
 #

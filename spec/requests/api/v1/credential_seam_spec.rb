@@ -296,7 +296,7 @@ RSpec.describe "API v1 — the credential seam", type: :request do
   describe "the declaration every endpoint must make" do
     # @intent: { entity: "credential declaration", action: "fail closed", behavior: "the base controller declares no accepted credential, so an undeclared endpoint answers 401 to everything", layer: "request" }
     it "is absent by default, so an endpoint that says nothing accepts nothing" do
-      expect(Api::BaseController.accepted_credential).to be_nil
+      expect(Api::BaseController.accepted_credentials).to be_empty
     end
 
     # @intent: { entity: "credential declaration", action: "cover every route", behavior: "every routed controller under the api namespace declares its accepted credential, naming any that forgot in the failure message", layer: "request" }
@@ -306,12 +306,51 @@ RSpec.describe "API v1 — the credential seam", type: :request do
         next unless controller&.start_with?("api/")
 
         klass = "#{controller.camelize}Controller".safe_constantize
-        klass&.name if klass && klass <= Api::BaseController && klass.accepted_credential.nil?
+        klass&.name if klass && klass <= Api::BaseController && klass.accepted_credentials.empty?
       }.uniq
 
       expect(undeclared).to be_empty,
                             "these endpoints declare no credential and will 401 every request: " \
                             "#{undeclared.join(", ")}"
+    end
+  end
+
+  # SPGD-952: there are THREE credential classes now, and the dispatch that decides among them
+  # still costs nothing because the prefixes are same-length and mutually exclusive — no one of
+  # them is a prefix of another, so `authenticate_api_key!`'s scan over the declaration can match
+  # at most one class and never has to probe a second table. This is the invariant the base
+  # controller's comment rests on; if a fourth credential ships with a prefix that breaks it, it
+  # fails HERE, at the invariant, rather than as a doubled read count in production.
+  describe "the prefix discipline across every credential class" do
+    # @intent: { entity: "credential prefix", action: "keep the dispatch unambiguous", behavior: "every credential prefix is the same length and a prefix of no sibling, so prefix dispatch always names exactly one table", layer: "request" }
+    it "keeps every prefix the same length and disjoint from its siblings" do
+      prefixes = [ApiKey, UserApiKey, AgentApiKey].map { |klass| klass::TOKEN_PREFIX }
+
+      expect(prefixes.uniq.size).to eq(prefixes.size), "two credential classes share a prefix"
+      expect(prefixes.map(&:length).uniq.size).to eq(1), "credential prefixes drifted apart in length"
+      prefixes.permutation(2).each do |first, second|
+        expect(second).not_to start_with(first),
+                              "the #{first.inspect} prefix is a prefix of #{second.inspect}"
+      end
+    end
+
+    # The third direction of the zero-read refusal, for the credential this slice adds: an `sga_`
+    # token at an endpoint that accepts neither the agent nor the repository credential is turned
+    # away before any table is read.
+    # @intent: { entity: "credential prefix", action: "refuse an agent key at an undeclaring endpoint", behavior: "an sga_ token at a user-key-only endpoint answers 401 with zero credential reads", layer: "request" }
+    it "reads no credential table when an agent key is presented to a user-key-only endpoint" do
+      # Built from its OWN repository rather than the file's `repository` let: that let is
+      # evaluated lazily, and referencing it inside the measured block would count the mint as
+      # one of the request's statements — the same trap the first example in this file documents.
+      repo = create_repository(user: person, github_full_name: "acme/not-reachable")
+      token = create_agent_api_key(user: person, repositories: [repo], permissions: []).raw_token
+
+      statements = queries_against("api_keys") do
+        post "/api/v1/repositories/#{repo.id}/api_keys", headers: bearer(token)
+      end
+
+      expect(response).to have_http_status(:unauthorized)
+      expect(statements).to be_empty
     end
   end
 end

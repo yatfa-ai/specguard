@@ -74,11 +74,24 @@ module RepositoryAuthorization
   # Memoized per repository, and shared with `authorize_repository!` above, so a page that asks
   # several capabilities loads the membership row once rather than once per question.
   #
+  # The policy is built through `build_repository_policy` rather than inlined, because the PRINCIPAL
+  # is a seam the same way `authorizing_user` is: the web tree and the `sgu_` API tree both answer
+  # repository questions as a person, but the `sga_` agent credential answers them as a credential
+  # — a different computation (`AgentApiKeyPolicy`), reached through the same fork. The default
+  # here is the person policy both existing trees mean; `Api::BaseController` narrows it per
+  # credential, which is the file where the credential classes are already the subject.
+  #
   # Exposed to views on the web tree via `helper_method :repository_policy` on
   # `ApplicationController` — a template is a call site of this policy like any other; see the note
   # there. On the API tree nothing renders a view and the method is simply private.
   def repository_policy(repository = @current_repository)
-    @repository_policies ||= Hash.new { |cache, repo| cache[repo] = RepositoryPolicy.new(authorizing_user, repo) }
+    @repository_policies ||= Hash.new { |cache, repo| cache[repo] = build_repository_policy(repo) }
     @repository_policies[repository]
+  end
+
+  # The person policy — the only answer until the agent credential existed, and still the only
+  # answer on the web tree. Overridden per credential on `Api::BaseController`.
+  def build_repository_policy(repository)
+    RepositoryPolicy.new(authorizing_user, repository)
   end
 end

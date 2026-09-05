@@ -28,9 +28,19 @@
 # holder and nothing more — the two permissions are independent, and a viewer who may not know
 # how many credentials exist on the repository is told nothing, not told less.
 class Api::V1::UserRepositoryMembersController < Api::BaseController
-  # THIS ENDPOINT NEEDS A PERSON. A repository's own `sgk_` key speaks for the repository, not for
-  # anybody who may administer its members, and gets 401 here — see `Api::BaseController`.
+  # THIS ENDPOINT NEEDS A PERSON — or an agent credential bounded by its own grants. A repository's
+  # own `sgk_` key speaks for the repository, not for anybody who may administer its members, and
+  # gets 401 here — see `Api::BaseController`.
+  #
+  # The `sga_` agent credential is accepted for the READ (who can reach this repository), bounded
+  # twice over by `AgentApiKeyPolicy`: the repository must be in the key's set (else 404) and the
+  # key must hold `members.manage` (else 403). The MUTATING verbs act as a person — `#create` and
+  # `#update` stamp `granted_by_user` from the authenticated principal, and a machine credential
+  # is not one — so they guard themselves below and refuse the agent credential with a 403.
   accepts_user_credential
+  accepts_agent_credential
+
+  before_action :require_person_credential, only: %i[create update destroy]
 
   # THE LIST — the same rows the web members page renders (handle, permissions, who last set
   # them, since when), ordered by handle so the response is stable between calls.

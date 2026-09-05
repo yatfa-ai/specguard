@@ -18,6 +18,18 @@ class AccountsController < ApplicationController
     # rule `Repository#latest_test_run` follows.
     @user_api_keys = current_user.user_api_keys.order(created_at: :desc, id: :desc)
 
+    # THE AGENT CREDENTIALS (SPGD-952) — the same ordering rule as the personal keys above, and on
+    # the same page because the same person mints both. The panel below the personal-keys panel is
+    # where a reader learns what these are: a set of repositories and a set of permissions, fixed
+    # at mint time out of this person's rights, carried by a token that speaks for nobody.
+    @agent_api_keys = current_user.agent_api_keys.order(created_at: :desc, id: :desc)
+
+    # WHAT THIS PERSON MAY GRANT an agent key access to — the same read-side boundary every
+    # surface asking "which repositories may this person see" asks, ordered the way the mint
+    # form lists them. A repository missing here is one the person cannot open, and the model's
+    # grant validation would refuse it anyway; the form shows only what can honestly be ticked.
+    @grantable_repositories = Repository.accessible_by(current_user).order(:github_full_name)
+
     # Set by UserApiKeysController#create, readable exactly once. One reveal-once mechanism for
     # both credentials, not two: a second implementation is a second chance to get "shown exactly
     # once" wrong, and the two pages can never be reached by one redirect. The KEY NAMES, however,
@@ -26,6 +38,12 @@ class AccountsController < ApplicationController
     # shared namespace let an intervening repository page read (and mislabel) this surface's token.
     @revealed_token = flash[:revealed_user_api_key]
     @revealed_token_name = flash[:revealed_user_api_key_name]
+
+    # Set by AgentApiKeysController#create, readable exactly once — this surface's own mailbox
+    # pair, the third, on the rule the pair above records: one namespace per credential kind, so
+    # no intervening page can read (and mislabel) another surface's reveal.
+    @revealed_agent_token = flash[:revealed_agent_api_key]
+    @revealed_agent_token_name = flash[:revealed_agent_api_key_name]
 
     # REGISTRATION ACCESS, which is the one credential on this page that EXPIRES and the only one
     # whose age was reported nowhere. The keys above are revoked or they work; a

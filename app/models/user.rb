@@ -84,6 +84,17 @@ class User < ApplicationRecord
   # given there.
   has_many :user_api_keys, dependent: :destroy
 
+  # The AGENT credentials this person has minted — `sga_` keys whose repository set and permission
+  # set were fixed at mint time out of THIS person's rights. See `AgentApiKey`.
+  #
+  # `:destroy` on the same argument as `user_api_keys` directly above: the owner column IS the
+  # key's meaning — a credential minted by nobody has no source for its grants — and nullifying it
+  # is not even expressible (`agent_api_keys.user_id` is `NOT NULL`). The rows go when the person
+  # does. Archiving is the path that actually gets walked, and it destroys nothing here either:
+  # refusing an archived owner's agent key is `AgentApiKey.authenticate`'s job, at the resolution
+  # site, on the same terms `UserApiKey.authenticate` refuses the person's own tokens.
+  has_many :agent_api_keys, dependent: :destroy
+
   # `:nullify` for the same reason as `created_api_keys`, one step further: a membership is somebody
   # *else's* access. Deleting the person who granted it must forget who granted it, never revoke the
   # colleague who was granted it — and it must not be confused with `repository_memberships` above,
