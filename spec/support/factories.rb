@@ -32,6 +32,25 @@ module Builders
     user.user_api_keys.create!(name: name)
   end
 
+  # One `sga_` agent key — a credential carrying its own repository set and permission set.
+  # `repositories` defaults to one repository owned by the minting person, the ordinary grant;
+  # pass a mixed set (owned + member-shared) or an empty PERMISSION array is the minimal
+  # read-only grant the model explicitly allows. `raw_token` follows the same rule as both
+  # sibling builders: readable on the returned object and nowhere else.
+  # `user` defaults lazily INSIDE the method rather than in the signature: an eager
+  # `user: create_user` default would mint a second default-uid user on every call that already
+  # has one, and the uniqueness validation would refuse it. The other builders take the eager
+  # default because their callers pass distinct uids; this one mints users implicitly often
+  # enough that the lazy spelling is the safe one.
+  def create_agent_api_key(user: nil, repositories: nil, permissions: [], name: "Agent key")
+    user ||= create_user
+    repositories ||= [create_repository(user: user)]
+    repositories = Array(repositories)
+
+    user.agent_api_keys.create!(name: name, repository_ids: repositories.map(&:id),
+                                permissions: permissions)
+  end
+
   # A `GithubRegistrationGrant` stated directly, for specs about REDEEMING one.
   #
   # Deliberately not a mint: the mint path is what `spec/requests/github_registration_grant_spec.rb`

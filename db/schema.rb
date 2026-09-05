@@ -10,10 +10,24 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_02_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_05_040000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
+
+  create_table "agent_api_keys", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.datetime "last_used_at"
+    t.string "name", null: false
+    t.text "permissions", default: [], null: false, array: true
+    t.bigint "repository_ids", default: [], null: false, array: true
+    t.datetime "revoked_at"
+    t.string "token_digest", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["token_digest"], name: "index_agent_api_keys_on_token_digest", unique: true
+    t.index ["user_id"], name: "index_agent_api_keys_on_user_id"
+  end
 
   create_table "api_keys", force: :cascade do |t|
     t.datetime "created_at", null: false
@@ -350,6 +364,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_02_120000) do
     t.index ["github_uid"], name: "index_users_on_github_uid", unique: true
   end
 
+  add_foreign_key "agent_api_keys", "users"
   add_foreign_key "api_keys", "repositories"
   add_foreign_key "api_keys", "users", column: "created_by_user_id"
   add_foreign_key "github_installations", "users"

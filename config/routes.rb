@@ -105,6 +105,17 @@ Rails.application.routes.draw do
   resource :account, only: :show do
     resources :api_keys, only: %i[create destroy], controller: "user_api_keys"
 
+    # THE AGENT CREDENTIAL (SPGD-952) — minting and revoking the `sga_` keys an owner hands to an
+    # automated agent. Same nesting, same only-clause, same reveal-once mechanism as the personal
+    # keys directly above, because the two are one gesture pair applied to a third credential kind:
+    # a POST mints, a DELETE retires (`AgentApiKey#revoke!` — the row stays, the token stops), and
+    # the association is the authorization (`current_user.agent_api_keys`), so there is no id by
+    # which one signed-in person could reach another's key. The mint body is richer than the
+    # personal key's — a name, a set of repositories, a set of permissions — and the validations
+    # that bound it to what this person may grant live on the model, where the membership grant
+    # bound lives.
+    resources :agent_keys, only: %i[create destroy], controller: "agent_api_keys"
+
     # Closing the account (SPGD-853) — the WRITER for `users.archived_at`, a state that has been
     # enforced in three places since SPGD-358 (sign-in refused at SessionsController#create, a
     # live session killed by ApplicationController#current_user, every `sgu_` token 401'd by
@@ -137,9 +148,10 @@ Rails.application.routes.draw do
       # PLURAL, and a different credential from the singular route above — which is the whole
       # reason it is a separate controller rather than an `index` on that one. `/repository`
       # answers to a `sgk_` repository key and reports on the one repository it names;
-      # `/repositories` answers to a `sgu_` user key and lists what that PERSON may open. The two
-      # refuse each other's tokens with a 401 (see `Api::BaseController`), so the near-identical
-      # paths cannot quietly serve the wrong thing.
+      # `/repositories` answers to a `sgu_` user key and lists what that PERSON may open — and,
+      # since SPGD-952, to an `sga_` agent key listing the set THE KEY itself was granted. The
+      # `sgk_` surface and this one refuse each other's tokens with a 401 (see
+      # `Api::BaseController`), so the near-identical paths cannot quietly serve the wrong thing.
       get "repositories", to: "user_repositories#index"
       # WHAT MAY BE REGISTERED, as opposed to what already IS — the reading `get "repositories"`
       # above cannot give, because that one serves `Repository.accessible_by` and a repository the
@@ -189,11 +201,15 @@ Rails.application.routes.draw do
       # id (there is no `:id` member route in this namespace)"; that parenthesis stops being true on
       # this line, so the ordering is now what keeps it safe. Do not sort these routes.
       #
-      # PLURAL, and therefore the `sgu_` side: `GET /api/v1/repository` (singular) answers to a
-      # `sgk_` repository key and is left exactly as it was. The two credentials stay disjoint —
-      # `Api::BaseController`'s `accepted_credential` is one `class_attribute` per controller, so a
-      # surface answering to both is not expressible and deliberately so. The BODY is shared anyway,
-      # by `RepositoryOverview` rather than by a shared credential; see that class.
+      # PLURAL, and therefore answering to the `sgu_` person key AND — SPGD-952 — to the `sga_`
+      # agent credential, whose own repository set bounds every read it makes: `GET /api/v1/repository`
+      # (singular) still answers to a `sgk_` repository key alone and is left exactly as it was. The
+      # `sgk_` surface and this one stay disjoint — `Api::BaseController` refuses a token whose
+      # prefix matches nothing the endpoint declares, before any table is read — but the person and
+      # agent credentials now share THIS surface, each bounded by its own grant: the person by what
+      # they may open, the agent by the key's own set. See `AgentApiKey` and `AgentApiKeyPolicy`.
+      # The BODY is shared regardless, by `RepositoryOverview` rather than by a shared credential;
+      # see that class.
       get "repositories/:id", to: "user_repositories#show"
       # RENAMING ONE — the mutating counterpart of `#show` above, over the same `sgu_` credential
       # and through the same grant-backed `RepositoryRegistration` `#create` redeems. Declared in
@@ -210,6 +226,11 @@ Rails.application.routes.draw do
       # directly above, for the reason the `post "repositories"` note states: a second
       # `accepts_user_credential` declaration to forget on a controller nobody routed is one
       # omission away from a 401 nobody can explain, so same noun, same controller.
+      #
+      # SPGD-952: the LIST also answers to an `sga_` agent key holding `members.manage` on a
+      # repository in its own set (the mutations stay person-only — see the controller). Same
+      # controller, one more accepted credential; a parallel members controller for the agent read
+      # would be the duplicated-endpoint-logic shape this tree has refused twice above.
       #
       # The `:repository_id` segment is what `RepositoryAuthorization#current_repository` reads;
       # the `:id` on the member routes is a MEMBERSHIP id, scoped to the repository by the

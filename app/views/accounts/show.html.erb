@@ -8,6 +8,8 @@
 
   <%= render "accounts/revealed_user_token" -%>
 
+  <%= render "accounts/revealed_agent_token" -%>
+
   <%= render UI::PanelComponent.new(title: "Your API keys", id: "user-api-keys") do |panel| %>
     <% panel.with_actions do %>
       <%# Inline, not .form-grid: this lives in a panel header and stays one row — the same shape
@@ -64,7 +66,165 @@
     <% else %>
       <%= render UI::EmptyStateComponent.new(
             title: "No personal API keys",
-            description: "Mint one to let an agent read the repositories you can see."
+            description: "Mint one to read SpecGuard from a machine or script you control. " \
+                         "For an automated agent that needs only some repositories, mint an " \
+                         "agent key below instead."
+          ) %>
+    <% end %>
+  <% end %>
+
+  <%# AGENT KEYS (SPGD-952) — the third credential kind, and the one that speaks for nobody: a
+      token carrying its own set of repositories and its own set of permissions, both fixed at
+      mint time out of YOUR rights, so an automated agent never needs a personal key (which would
+      hold everything you hold) nor a fistful of per-repository `sgk_` keys (which a `member`
+      cannot mint on somebody else's repository anyway). See AgentApiKey.
+
+      The panel sits below the personal keys because that is the reading order of the credential
+      story: who you are (`sgu_`), then what you have delegated (`sga_`). Registration access
+      below is a property of the person rather than a credential, so it stays after both. %>
+  <%= render UI::PanelComponent.new(title: "Agent keys", id: "agent-keys", class: "mt-6") do |panel| %>
+    <%# No compact header mint beside this panel's, unlike the personal-keys panel above: a
+        personal key IS its name, but an agent key IS its grant — minting one without choosing
+        the repositories would mint a credential that can reach nothing, and defaulting the
+        checkboxes to "everything you can open" would make the widest grant the laziest one.
+        The grant is chosen deliberately, in the form below, or not at all. %>
+
+    <p id="agent-keys-caption" class="mb-3 text-sm text-app-content-secondary">
+      These keys start <code class="font-mono text-xs">sga_</code> and speak for <strong>nobody</strong>:
+      each one carries a set of repositories you choose and a set of permissions you hold, fixed
+      when you mint it. A key can read the repositories in its set — and nothing outside it, which
+      is indistinguishable from a repository that does not exist — and take only the actions its
+      permissions cover. It cannot ingest CI results (<code class="font-mono text-xs">sgk_</code>
+      keys do that) and it cannot act as you: registering, renaming and member management stay
+      person-only over the API. Revoking one leaves the rest working.
+    </p>
+
+    <%# THE FULL MINT FORM — the grant is chosen here and bounded by the model, on the membership
+        grant's rule: every ticked repository must be one you can open, and every ticked
+        permission must be one you hold on EACH ticked repository. The permission grid renders
+        the UNION of what you hold across the repositories above (`@grantable_permissions`,
+        computed in AccountsController), never a box no repository there would accept — such a
+        box could only ever meet the model's refusal on submit, which is why `_permission_fields`
+        renders the member forms' grids from the same bound. The bound itself stays PER
+        REPOSITORY on the model, so a permission held on one ticked repository but not another
+        is still refused by a flash naming both; the grid only narrows what could never be
+        accepted at all. The checkboxes follow `_permission_fields`' shape: the stored string is
+        the label, the shared glossary is the caption — one vocabulary of grants, whichever kind
+        of row holds it. %>
+    <%= form_with url: account_agent_keys_path, scope: :agent_api_key, class: "mb-4 space-y-3" do |form| %>
+      <%= form.field :name, label: "Name", placeholder: "read-only fleet agent", full: true %>
+
+      <fieldset>
+        <legend class="section-label mb-1">Repositories</legend>
+        <p class="mb-2 text-xs text-app-muted">
+          The key's read boundary. Repositories you cannot open are not offered. A ticked repository
+          you later lose access to keeps its id on the key — the model's reachability bound runs at
+          mint time, not per request — so revoke the key to cut it.
+        </p>
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <% @grantable_repositories.each do |repository| %>
+            <label class="flex items-center gap-2 rounded-md border border-app-border-light bg-app-surface-raised p-2">
+              <%= check_box_tag "agent_api_key[repository_ids][]", repository.id, false,
+                                id: "agent_api_key_repository_ids_#{repository.id}",
+                                class: "rounded border-app-border-light" %>
+              <span class="font-mono text-sm text-app-content"><%= repository.github_full_name %></span>
+            </label>
+          <% end %>
+        </div>
+        <% if @grantable_repositories.empty? %>
+          <p class="text-sm text-app-content-secondary">No repositories to grant yet — register one first.</p>
+        <% end %>
+      </fieldset>
+
+      <%# The permissions fieldset renders only when the grid has something to offer. Empty
+          means no accessible repository at all (every membership implies `view`, so a person
+          with any repository to tick is offered at least that) — the state the repositories
+          fieldset's own sentence above already names — and a legend and prose over an empty
+          grid would describe checkboxes that cannot exist. %>
+      <% unless @grantable_permissions.empty? %>
+        <fieldset>
+          <legend class="section-label mb-1">Permissions</legend>
+          <p class="mb-2 text-xs text-app-muted">
+            Held for every repository ticked above. The grid offers what you hold <strong>somewhere</strong>:
+            a permission granted on one repository but not another is accepted only where you hold it,
+            and the save names both when it refuses. Ticking none is allowed: the repository set alone
+            is read access.
+          </p>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <% @grantable_permissions.each do |permission| %>
+              <label class="flex items-start gap-2 rounded-md border border-app-border-light bg-app-surface-raised p-3">
+                <%= check_box_tag "agent_api_key[permissions][]", permission, false,
+                                  id: "agent_api_key_permissions_#{permission.parameterize}",
+                                  class: "mt-0.5 rounded border-app-border-light" %>
+                <span class="space-y-0.5">
+                  <span class="block font-mono text-sm text-app-content"><%= permission %></span>
+                  <span class="block text-xs text-app-muted"><%= permission_description(permission) %></span>
+                </span>
+              </label>
+            <% end %>
+          </div>
+        </fieldset>
+      <% end %>
+
+      <div>
+        <%= form.submit_button "Mint agent key", size: :sm %>
+      </div>
+    <% end %>
+
+    <% if @agent_api_keys.any? %>
+      <%= render UI::TableComponent.new(columns: ["Name", "Key", "Repositories", "Permissions", "Created", "Last used", ""],
+                                        describedby: "agent-keys-caption") do %>
+        <% @agent_api_keys.each do |agent_api_key| %>
+          <tr>
+            <td class="px-3 py-2"><%= agent_api_key.name %></td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary">
+              <%= agent_api_key.token_hint %>
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+              <%= agent_api_key.repository_ids.size %>
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <%# The stored set, or the honest phrase for the minimal grant: an empty permission
+                  array is a key that may read its repositories and nothing more — a state to
+                  render, not an absence to hide. %>
+              <%= agent_api_key.permissions.any? ? agent_api_key.permissions.join(", ") : "read only" %>
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+              <%= time_ago_in_words(agent_api_key.created_at) %> ago
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+              <%= agent_api_key.last_used_at ? "#{time_ago_in_words(agent_api_key.last_used_at)} ago" : "never" %>
+            </td>
+            <td class="px-3 py-2 text-right">
+              <%# Revoked keys STAY on this list — the row is retained so a still-presenting token
+                  stays attributable (see AgentApiKey#revoke!) — so the state has to be visible
+                  rather than the row simply vanishing beside its still-live siblings. %>
+              <% if agent_api_key.revoked? %>
+                <%# `:neutral` — a real member of UI::BadgeComponent::TONES — because the key no
+                    longer authenticates: this row is a record rather than a live hazard, so the
+                    quietest real tone is the honest one. Spelled out rather than abbreviated,
+                    because the component answers an unknown tone with a silent `fetch` fallback
+                    to this very value, and a typo would render as intentional forever. %>
+                <%= render UI::BadgeComponent.new(
+                      tone: :neutral,
+                      title: "This key was revoked, so its token no longer authenticates. The row stays " \
+                             "so a token still being presented remains identifiable."
+                    ) { "Revoked" } %>
+              <% else %>
+                <%= button_to "Revoke", account_agent_key_path(agent_api_key), method: :delete,
+                              class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                              form: { data: { turbo_confirm: "Revoke #{agent_api_key.name}? Anything " \
+                                                             "still using this token stops working " \
+                                                             "immediately." } } %>
+              <% end %>
+            </td>
+          </tr>
+        <% end %>
+      <% end %>
+    <% else %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "No agent keys",
+            description: "Mint one to give an automated agent bounded read access to a set of repositories."
           ) %>
     <% end %>
   <% end %>

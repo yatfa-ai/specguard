@@ -1,23 +1,37 @@
 # frozen_string_literal: true
 
-# WHICH REPOSITORIES THE PERSON BEHIND THIS TOKEN MAY OPEN — the first endpoint that answers to a
-# `sgu_` user key, and the one endpoint this slice ships to prove that credential works.
+# WHICH REPOSITORIES THE CREDENTIAL BEHIND THIS TOKEN MAY OPEN — the first endpoint that answered
+# to a `sgu_` user key, and since SPGD-952 also to an `sga_` agent key.
 #
 # ## Why this is not an action on `Api::V1::RepositoriesController`
 #
 # That controller serves `GET /api/v1/repository`, singular, which answers to a `sgk_` repository
-# key and is a report about the ONE repository that key names. This answers to a different
-# credential and returns a set. Two surfaces that share a noun and nothing else: the same class
-# would carry two `accepts_*_credential` declarations, which the seam has no way to express and no
-# reason to.
+# key and is a report about the ONE repository that key names. This answers to different
+# credentials and returns a set. Two surfaces that share a noun and nothing else — the singular
+# route's credential is not accepted here and vice versa, so the near-identical paths cannot
+# quietly serve the wrong thing. (For a while the seam could not express two accepted credentials
+# on one controller, and this header said so; SPGD-952 widened it — `accepts_user_credential` and
+# `accepts_agent_credential` read together below — which changed what the seam CAN say, not the
+# reason this is a separate controller from the singular one.)
+#
+# ## What the two accepted credentials mean here
+#
+# A `sgu_` key speaks for a PERSON, and this surface lists what that person may open. An `sga_`
+# key speaks for NOBODY: it lists the set granted onto the key at mint time, and can read one of
+# those repositories in full — but every action that must act AS the person (register, rename,
+# delete; `#registrable`'s grant reading) refuses it with a 403. See `Api::BaseController` for
+# `authorized_repositories`, the one read boundary both credentials resolve through, and
+# `require_person_credential` for the guard the person-only actions declare.
 #
 # ## The authorization rule is not reinvented here
 #
-# `Repository.accessible_by` is this application's read-side boundary — owned UNION shared-through-a
-# -membership — and it lives on the model so that every surface asking "which repositories may this
-# person see" asks the same place. The dashboard's repository list reads it; so does this. A
-# repository the person neither owns nor is a member of is not filtered out of this response, it
-# never enters it, so nothing here can leak the fact that it exists.
+# `Repository.accessible_by` is this application's read-side boundary for a PERSON — owned UNION
+# shared-through-a-membership — and it lives on the model so that every surface asking "which
+# repositories may this person see" asks the same place. The dashboard's repository list reads it;
+# so does this for a `sgu_` key. For an `sga_` key the boundary is the key's own repository set
+# (`AgentApiKey#repositories`), never `accessible_by` of anybody — a repository outside either
+# boundary is not filtered out of these responses, it never enters them, so nothing here can leak
+# the fact that it exists.
 #
 # ## Ordering
 #
@@ -75,11 +89,21 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # is shared and not just the parameter guards.
   include RepositoryNarrowing
 
-  # THIS ENDPOINT NEEDS A PERSON. A `sgk_` repository key resolves no user and gets 401 — which is
-  # the direction of the seam that is easy to get wrong, because a repository key IS a valid
-  # credential and this list would otherwise have to invent an answer for one. See
-  # `Api::BaseController`.
+  # THIS ENDPOINT NEEDS A PERSON — or an agent credential bounded by its own grants. A `sgk_`
+  # repository key resolves no user and gets 401 — which is the direction of the seam that is easy
+  # to get wrong, because a repository key IS a valid credential and this list would otherwise have
+  # to invent an answer for one. See `Api::BaseController`.
+  #
+  # The `sga_` agent credential is accepted for the READS only, and every action that must act AS
+  # the person guards itself below: the agent credential carries its own repository set and
+  # permission set (never a person's), so `#create`/`#registrable`/`#update`/`#destroy` — which
+  # redeem the person's GitHub grant or hold the person's owner rights — refuse it with a 403
+  # rather than crash on a nil `current_api_user` or, worse, half-apply a person-shaped rule to a
+  # credential that is not one.
   accepts_user_credential
+  accepts_agent_credential
+
+  before_action :require_person_credential, only: %i[create registrable update destroy]
 
   # The name every first key gets. Deliberately the same string `ApiKeysController` defaults to, so
   # a repository registered by an agent and one registered in a browser have identically-named keys
@@ -115,8 +139,11 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # `user_repositories_spec.rb` pins at one row and at several.
   #
   # `?q=`, `?role=` and `?sort=stale` compose onto the same relation in the web index's exact
-  # order — `accessible_by → ?q= → ?role= → order(:github_full_name) → ?sort=stale` — through
-  # `RepositoryNarrowing`, the module that also applies them for the card grid. The reasoning for
+  # order — `credential boundary → ?q= → ?role= → order(:github_full_name) → ?sort=stale` — through
+  # `RepositoryNarrowing`, the module that also applies them for the card grid. The boundary is
+  # `authorized_repositories`: `Repository.accessible_by` of the person under a `sgu_` key, the
+  # key's own mint-time-fixed set under `sga_` — so a repository outside whichever boundary applies
+  # never enters the relation the asks chain onto. The reasoning for
   # each (the chain that is a security claim, the `sanitize_sql_like` escape, the complement that
   # makes the two roles partition exactly, and the loaded-set sort that re-derives nothing) lives
   # there, in one copy, so this endpoint and the grid cannot answer the same account differently.
@@ -130,7 +157,7 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # An unparameterised request composes none of the three and serves the body this action has
   # always served — every parameter here narrows, partitions or reorders; none adds a key.
   def index
-    scope = narrow_repositories(Repository.accessible_by(current_api_user), current_api_user)
+    scope = narrow_repositories(authorized_repositories, current_api_user)
     repositories = scope.order(:github_full_name).to_a
     latest_runs = latest_test_runs_for(repositories.map(&:id))
     preload_shard_counts(latest_runs.values)
@@ -169,26 +196,28 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # reports on the repository's keys as a SET, which under a user key is a set the caller holds none
   # of and could not otherwise ask about (an `sgk_` key is reveal-once and unrecoverable).
   #
-  # ## The read boundary is `accessible_by`, and there is no policy object
+  # ## The read boundary is the credential's, and there is no policy object in this action
   #
-  # `Repository.accessible_by(current_api_user)` is this application's read-side boundary — owned
-  # UNION shared-through-a-membership — and the scope IS the authorization. `#index` two methods
-  # above serves the same relation; a repository outside it does not enter this query, so there is
-  # nothing here that could leak one.
+  # `authorized_repositories` (see `Api::BaseController`) is the read boundary of WHICHEVER
+  # credential made the request: for a `sgu_` key it is `Repository.accessible_by(person)` — owned
+  # UNION shared-through-a-membership — and for an `sga_` agent key it is the key's own
+  # mint-time-fixed repository set. `#index` above serves the same relation; a repository outside
+  # the boundary does not enter this query, so there is nothing here that could leak one.
   #
-  # ⭐ NIL IS 404, NEVER 403, and the two cases are deliberately indistinguishable. A repository the
-  # person cannot open and a repository that was never registered arrive here identically — as `nil`
-  # from a scoped `find_by` — and separating them would mean asking a second, UNSCOPED question for
-  # the sole purpose of telling a caller that something they may not see nevertheless exists. That
-  # turns id enumeration into a census of the platform. `Api::BaseController#render_not_found`
-  # carries the same argument at the surface it is rendered from.
+  # ⭐ NIL IS 404, NEVER 403, and the two cases are deliberately indistinguishable. A repository
+  # the credential cannot open and a repository that was never registered arrive here identically —
+  # as `nil` from a scoped `find_by` — and separating them would mean asking a second, UNSCOPED
+  # question for the sole purpose of telling a caller that something they may not see nevertheless
+  # exists. That turns id enumeration into a census of the platform.
+  # `Api::BaseController#render_not_found` carries the same argument at the surface it is rendered
+  # from.
   #
   # `find_by` rather than `find`: a `RecordNotFound` from an `ActionController::API` with no rescue
   # registered is a 500, and "no such id" is an ordinary answer rather than an exception. It also
   # makes criterion 4 fall out for free — a malformed id (`"abc"`, `"9' OR 1=1"`) casts to no
   # integer, matches no row and lands on the same 404, with no raise and no special-casing.
   def show
-    repository = Repository.accessible_by(current_api_user).find_by(id: params[:id])
+    repository = authorized_repositories.find_by(id: params[:id])
 
     return render_not_found("No repository with that id is available to this key.") if repository.nil?
 
@@ -502,6 +531,12 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # them. Without it a client cannot tell which of these it may expect to administer once the
   # mutating endpoints land, and would have to guess.
   #
+  # For an `sga_` agent credential every entry is delegated the same way — the key is not a person,
+  # so "owner" and "member" are both answers to a question that was not asked — and the honest
+  # value is the one that says so: `agent`. A client branching on owner/member reads `false` for
+  # both, which is correct; a client that wants to know WHOSE rights these are reads the minting
+  # owner off the account page, because the API does not serve it here.
+  #
   # `delivery_health` is handed IN rather than looked up, because this method has one repository and
   # the reads behind that block are grouped over the whole list — see `#delivery_verdicts`. So is
   # `latest_run`: the block is `LatestRunSerializer`'s at LIST depth, and both its inputs — which
@@ -521,10 +556,36 @@ class Api::V1::UserRepositoriesController < Api::BaseController
       full_name: repository.github_full_name,
       name: repository.name,
       registered_at: repository.created_at.iso8601,
-      role: repository.user_id == current_api_user.id ? "owner" : "member",
-      delivery_health: delivery_health,
-      **(latest_run.equal?(NO_LATEST_RUN_BLOCK) ? {} : { latest_run: latest_run })
-    }
+    role: credential_role(repository),
+    delivery_health: delivery_health,
+    **(latest_run.equal?(NO_LATEST_RUN_BLOCK) ? {} : { latest_run: latest_run })
+  }
+end
+
+  # Which side of the owner/member line this entry sits on — or, under the agent credential, that
+  # the question does not apply. See `#serialize`.
+  def credential_role(repository)
+    return "agent" if @current_api_key.is_a?(AgentApiKey)
+
+    repository.user_id == current_api_user.id ? "owner" : "member"
+  end
+
+  # THE `?role=` ASK UNDER THE AGENT CREDENTIAL. The ownership ask partitions by WHO OWNS each
+  # repository — a PERSON fact (`?role=owned` is `user_id = viewer.id` inside
+  # `RepositoryNarrowing`) — and under the `sga_` credential there is no person in the request:
+  # every entry serves `role: "agent"` (see `#credential_role`), so there is no owned/shared line
+  # to draw, and dereferencing `current_api_user.id` would be a 500 on an otherwise valid read.
+  # The ask therefore clamps to the module's own no-ask, the same answer an absent or
+  # out-of-vocabulary value already gets. The clamp lives HERE rather than in the shared module
+  # because a person viewer is that module's contract — the web grid and the `sgu_` path always
+  # have one — and this controller is the one surface that can hold the request without one;
+  # widening the module for a caller it never sees would put an API-only `nil` branch inside a
+  # rule both surfaces read. `super` keeps the guard's own clamp intact: non-String shapes,
+  # blanks and unknown values answer no-ask before this question is even asked.
+  def requested_role
+    return nil if @current_api_key.is_a?(AgentApiKey)
+
+    super
   end
 
   # WHETHER EACH LISTED REPOSITORY'S DELIVERIES ARE BEING REFUSED — `repository_id =>` the same two
