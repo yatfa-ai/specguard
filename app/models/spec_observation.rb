@@ -1674,16 +1674,34 @@ class SpecObservation < ApplicationRecord
   # OBSERVATION, and three ordinary shapes pull the two out of alignment. A run that recorded nothing
   # under this description contributes NO row — a test added mid-window, renamed, quarantined, or
   # living in a file one shard did not run — a description carried by two examples in one run
-  # contributes TWO, and the cap takes rows off the old end. Reading the run off the index is
-  # precisely the manoeuvre that names the WRONG culprit commit, which is the one error this drill-in
-  # cannot survive.
+  # contributes TWO, and the cap takes rows off the END of the sequence as handed — which end that
+  # is is the caller's orientation's to decide, not this read's (see below). Reading the run off the
+  # index is precisely the manoeuvre that names the WRONG culprit commit, which is the one error this
+  # drill-in cannot survive.
   #
-  # The window's order is newest-first (`Repository#recent_test_runs`), and that decides which end
-  # the cap takes off: a truncated sequence keeps the RECENT runs and drops the old ones, which is
-  # the survivable direction. "It has failed since some point before this list starts" still names a
-  # regression; a list truncated the other way would answer "how is it doing lately" with the state
-  # of a month ago. `id ASC` breaks ties WITHIN a run, so a description carried by several examples
-  # in one run has one stable order rather than one the planner picks afresh per request.
+  # WHICH END THE CAP TAKES OFF FOLLOWS THE WINDOW THE CALLER HANDS IN. This read orders by
+  # `array_position` over the ids AS HANDED, so the cap's end is a property of the caller's
+  # orientation and no sentence here may hardcode one — the method has exactly two callers today,
+  # and their windows point in OPPOSITE directions:
+  #
+  # * `RepositoryOverview#serialized_unstable_test_runs` hands the API window (`history_runs`,
+  #   `Repository#recent_test_runs`) NEWEST first, so a truncated sequence keeps the RECENT runs
+  #   and drops the old ones — the survivable direction: "it has failed since some point before
+  #   this list starts" still names a regression.
+  # * The web drill-in (`repositories#show`) hands the same thirty runs OLDEST first
+  #   (`RunWindow.oldest_first` over `Repository#suite_size_trajectory`), so the cap there takes
+  #   the NEWEST end — the end the regression reading is taken from. Truncation on that surface
+  #   does not shorten the answer, it removes it, which is why that panel carries a cap alert and
+  #   a reading sentence that withholds the regression branch
+  #   (`RepositoriesHelper#unstable_test_runs_capped_reading_sentence`) rather than treating the
+  #   cap as a footnote.
+  #
+  # A comment (or a caller) that asserted either of these orders as THE order would be wrong
+  # about the other surface — as an earlier version of this very paragraph was, for four days
+  # after the web drill-in landed.
+  #
+  # `id ASC` breaks ties WITHIN a run, so a description carried by several examples in one run has
+  # one stable order rather than one the planner picks afresh per request.
   #
   # Scoped by `repository_id` as well as by the window's runs, because it narrows on `name` — and
   # `repository_id` is the leading column of `index_spec_observations_on_repository_id_and_name`,

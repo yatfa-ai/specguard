@@ -64,10 +64,18 @@
 # identity — a description edited, a typo. `.for` returns an object with no rows and the surface
 # says so, which is the same shape `RepeatedDescriptionExamples` answers with one ladder over.
 class UnstableTestRuns
+  # The window is handed in as a {RunWindow} and is read AS HANDED — {RunWindow#runs}, no
+  # orientation asked for — because this object is order-PROPAGATING: `outcome_sequence_in` orders
+  # by `array_position` over these ids, so the rows served follow the caller's window whatever end
+  # it starts from. The API hands its newest-first `history_runs` and serves the sequence newest
+  # run first; the web panel hands its oldest-first window and serves it oldest run first. Both
+  # are correct for their reader, and neither is re-sorted here. A bare array is still accepted
+  # and taken as-is.
   def self.for(repository, runs, name, limit: SpecObservation::UNSTABLE_TEST_RUNS_LIMIT)
-    new(name: name, runs: runs,
+    runs = RunWindow.wrap(runs)
+    new(name: name, runs: runs.runs,
         observations: SpecObservation.outcome_sequence_in(
-          repository_id: repository.id, run_ids: runs.map(&:id), name: name, limit: limit
+          repository_id: repository.id, run_ids: runs.runs.map(&:id), name: name, limit: limit
         ).to_a)
   end
 
@@ -95,7 +103,10 @@ class UnstableTestRuns
   # check against their own suite.
   attr_reader :name
 
-  # This description's rows across the window, in window order — newest run first. One row per run is
+  # This description's rows across the window, in the window's OWN order — the orientation the
+  # window was handed in with, which differs by surface: newest run first on the API (whose
+  # `history_runs` is newest first) and oldest run first on the web panel (whose window is). One
+  # row per run is
   # what the data USUALLY is rather than a promise this list makes, and it comes apart in both
   # directions: a run that recorded nothing under this description contributes NO row — the case
   # `#run_count` below states, where a test added halfway through the window has fifteen rows in a
