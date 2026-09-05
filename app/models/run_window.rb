@@ -27,13 +27,18 @@
 #
 # == Non-mutating, by construction
 #
-# The accessors never mutate the array the window was built from. The accessor whose orientation
-# the window already carries hands back that SAME array — the one memoized array the surface
-# loaded, which is the point of the window being handed in rather than re-queried — and the other
-# accessor hands back a fresh reversed COPY (`Array#reverse`, never `reverse!`). An in-place
-# reversal here would be the exact accident the API's `serialized_history` comment warns about:
-# the same memoized rows under a declared ordering contract, silently serving the opposite of
-# what the contract says, in the same response body.
+# The loaded array is FROZEN at construction, and the accessors never reorder anything in place.
+# The accessor whose orientation the window already carries hands back that SAME frozen array —
+# the one memoized array the surface loaded, which is the point of the window being handed in
+# rather than re-queried — and the other accessor hands back a fresh reversed COPY
+# (`Array#reverse`, never `reverse!`). Each half of that rule closes one half of the hazard the
+# API's `serialized_history` comment used to warn about in prose: an in-place mutation of what a
+# consumer is handed (`reverse!`, `sort!`, `<<`, `shift` — the accidents a call site writes while
+# "just tidying") now raises FrozenError at the mutating site instead of reaching the memoized
+# rows, and the reversed copy is an array nobody else holds, so mutating that cannot reach the
+# window either. The memoized rows can no longer be reordered under `serialized_history`'s
+# declared `ingested_at_desc,ingest_sequence_desc` contract — the failure mode is a loud
+# exception, not a quietly wrong ordering in a response body.
 #
 # The type is a SECOND net, not a replacement: the request-level examples that fail if an
 # orientation is asked for wrongly (`spec/requests/api/v1/repository_slowest_tests_spec.rb`,
@@ -98,9 +103,12 @@ class RunWindow
   private
 
   # Constructed through `.oldest_first` / `.newest_first` / `.wrap`, which exist precisely so the
-  # orientation is NAMED at the site that knows it rather than passed as a bare symbol.
+  # orientation is NAMED at the site that knows it rather than passed as a bare symbol. The rows
+  # are frozen here rather than at each accessor: one enforcement point at the only moment the
+  # window takes ownership of the array, so every accessor's contract ("the loaded array, or a
+  # fresh copy") is guaranteed by the object rather than restated by its readers.
   def initialize(runs, orientation)
-    @runs = runs
+    @runs = runs.freeze
     @orientation = orientation
   end
 end

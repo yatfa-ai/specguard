@@ -73,9 +73,10 @@ class UnstableTestRuns
   # and taken as-is.
   def self.for(repository, runs, name, limit: SpecObservation::UNSTABLE_TEST_RUNS_LIMIT)
     runs = RunWindow.wrap(runs)
-    new(name: name, runs: runs.runs,
+    window_runs = runs.runs
+    new(name: name, runs: window_runs,
         observations: SpecObservation.outcome_sequence_in(
-          repository_id: repository.id, run_ids: runs.runs.map(&:id), name: name, limit: limit
+          repository_id: repository.id, run_ids: window_runs.map(&:id), name: name, limit: limit
         ).to_a)
   end
 
@@ -106,14 +107,13 @@ class UnstableTestRuns
   # This description's rows across the window, in the window's OWN order — the orientation the
   # window was handed in with, which differs by surface: newest run first on the API (whose
   # `history_runs` is newest first) and oldest run first on the web panel (whose window is). One
-  # row per run is
-  # what the data USUALLY is rather than a promise this list makes, and it comes apart in both
-  # directions: a run that recorded nothing under this description contributes NO row — the case
-  # `#run_count` below states, where a test added halfway through the window has fifteen rows in a
-  # window of thirty — and a description carried by more than one example in a run contributes one
-  # row per example. So `rows.length` is neither `run_count` nor bounded below by it, and the run a
-  # row belongs to is read off its `test_run_id` / `commit_sha` and never off its index. Never longer
-  # than the limit it was built with.
+  # row per run is what the data USUALLY is rather than a promise this list makes, and it comes
+  # apart in both directions: a run that recorded nothing under this description contributes NO
+  # row — the case `#run_count` below states, where a test added halfway through the window has
+  # fifteen rows in a window of thirty — and a description carried by more than one example in a
+  # run contributes one row per example. So `rows.length` is neither `run_count` nor bounded
+  # below by it, and the run a row belongs to is read off its `test_run_id` / `commit_sha` and
+  # never off its index. Never longer than the limit it was built with.
   attr_reader :rows
 
   # How many runs THE WINDOW holds — the denominator every claim about this sequence is worded
