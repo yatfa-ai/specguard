@@ -72,20 +72,20 @@
           several, on the rule state 4 states for rotations: the only date true of all of them at
           once. `last_refused_at` is the NEWEST stamp, because there the question the reader is
           asking is "is this happening now", and the freshest observed presentation is the honest
-          answer. %>
+          answer.
+
+          THE SAME SEAM-AND-CONTAINERS SPLIT the refusal and rotation branches below render: the
+          wording lives in `revoked_key_label` / `revoked_keys_note` in ApplicationHelper, beside
+          those two pairs, so this indicator and the repositories grid's card cannot word one
+          repository's revocation two ways, and the next rename cannot move one surface without
+          the other. This surface keeps the COUNT-BEARING note — the credential-count gate is the
+          grid's own rule (`key_count_visible?` there) — and the card renders the count-free
+          generalization of this branch's singular, `revoked_key_note`. %>
       <% revocations = @presented_revoked_api_keys.filter_map(&:revoked_at).sort %>
       <% last_refusal = @presented_revoked_api_keys.filter_map(&:last_refused_at).max %>
-      <%= render UI::BadgeComponent.new(tone: :error) { "Revoked key still presented" } %>
+      <%= render UI::BadgeComponent.new(tone: :error) { revoked_key_label } %>
       <span class="text-xs text-app-muted">
-        <% if revocations.one? %>
-          A key you revoked <%= time_ago_in_words(revocations.first) %> ago is still being presented
-          — last seen <%= time_ago_in_words(last_refusal) %> ago. Update the secret wherever it is
-          stored.
-        <% else %>
-          <%= revocations.size %> keys you revoked are still being presented — the first was revoked
-          <%= time_ago_in_words(revocations.first) %> ago, the latest attempt was seen
-          <%= time_ago_in_words(last_refusal) %> ago. Update the secrets wherever they are stored.
-        <% end %>
+        <%= revoked_keys_note(revocations.size, revocations.first, last_refusal) %>
       </span>
     <% elsif @rejected_ingests.refusing? %>
       <%# THE SAME SEAMS THE REPOSITORIES GRID RENDERS — `refused_deliveries_label` and
