@@ -88,11 +88,12 @@ class RepositoriesController < ApplicationController
 
   # THE THREE NARROWING ASKS THE INDEX READS — `?q=`, `?role=` and `?sort=`, on the one surface
   # that renders every repository an account holds side by side and, until them, offered no way
-  # to act on that comparison. Each is its own concern for the reason every sibling has one (the
-  # argument `RequestedSpecFileParam` makes in full): the parameters mean different things, are
-  # read only here, and one guard answering several would make "which shapes does each tolerate"
-  # a single question nobody asked. What they share is the hazard, and the guard against it is
-  # the same two lines in the same order everywhere.
+  # to act on that comparison. Each parameter is its own guard for the reason every sibling has one
+  # (the argument `RequestedSpecFileParam` makes in full); `RepositoryNarrowing` gathers those three
+  # guards WITH the one application of them, and is shared with
+  # `Api::V1::UserRepositoriesController`, which reads the same three asks over the same
+  # `accessible_by` population for a machine. Sharing the application and not merely the reads is
+  # what stops this grid and that list ordering one account two different ways — see the module.
   #
   # All three are read ONCE, in `#index`, and the URL is their only carrier: no session state, no
   # form state, nothing a colleague receiving a pasted link does not also receive. `?q=` is a
@@ -103,9 +104,7 @@ class RepositoriesController < ApplicationController
   # last-ingested recency over runs the grid already loads. None of the three may add a query:
   # `?q=` and `?role=` only add predicates to the ONE relation the page was already going to
   # load, and the stale ordering sorts the loaded set in memory (see `index`).
-  include RequestedSearchParam
-  include RequestedRoleParam
-  include RequestedSortParam
+  include RepositoryNarrowing
 
   # The repositories this user may pick from, straight off GitHub, and the four different things to
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
@@ -149,17 +148,12 @@ class RepositoriesController < ApplicationController
   # comment says so); these are this page's.
   #
   # `?q=` is `ILIKE '%…%'` — case-insensitive substring, per the parameter's contract — with the
-  # WILDCARD CHARACTERS ESCAPED, and the escape is not pedantry: `_` is a legal and ordinary part
-  # of a repository name (`org/my_repo`), so an unescaped `_` would quietly widen "my_repo" to
-  # match `my-repo` and `myxrepo`, answering a substring ask with a pattern match.
-  # `sanitize_sql_like` backslash-escapes `%`, `_` and `\`, which is the escape character Postgres
-  # `LIKE` already reads by default — no `ESCAPE` clause to keep in step with the helper.
-  #
-  # `?role=owned` is `user_id = current_user.id`; `?role=shared` is its COMPLEMENT WITHIN the
-  # accessible set — `where.not(user_id: …)` chained on the relation, not a second reading of the
-  # membership table, so owned-but-also-shared is impossible by construction (the same
-  # no-overlap invariant `accessible_by` leans on) and the two asks partition exactly the set the
-  # unparameterised page renders.
+  # WILDCARD CHARACTERS ESCAPED, and `?role=owned`/`?role=shared` are a predicate and its
+  # COMPLEMENT WITHIN the accessible set, so the two asks partition exactly the set the
+  # unparameterised page renders. Both are applied by `RepositoryNarrowing#narrow_repositories`,
+  # shared with `Api::V1::UserRepositoriesController`; the reasoning for the escape, for the
+  # complement, and for why chaining on the relation is a SECURITY claim rather than a
+  # convenience all lives there, in one copy.
   #
   # Neither adds a query: they are predicates on the ONE relation the page was already going to
   # load, and everything downstream keys off `@repositories` (the grouped `latest_test_runs`,
@@ -172,20 +166,13 @@ class RepositoriesController < ApplicationController
   # grid whatever it is sorted by), so a SQL spelling would have to re-derive per-repository
   # recency in a join the page then throws away — work the page has already paid for, paid a
   # second time to keep the ORDER BY company. Sorting the loaded Array costs no query and lets the
-  # view's iteration keep working unchanged. See `stale_first`.
+  # view's iteration keep working unchanged. The map is passed in rather than read per row, which
+  # is what lets the API list sort by the same rule against the map IT already holds; the
+  # `latest_test_runs` memo is keyed off the relation and is taken here exactly as before.
   def index
-    scope = Repository.accessible_by(current_user)
-    scope = scope.where("github_full_name ILIKE :pattern",
-                        pattern: "%#{ActiveRecord::Base.sanitize_sql_like(requested_search)}%") if requested_search
-    scope = if requested_role == "owned"
-              scope.where(user_id: current_user.id)
-            elsif requested_role == "shared"
-              scope.where.not(user_id: current_user.id)
-            else
-              scope
-            end
+    scope = narrow_repositories(Repository.accessible_by(current_user), current_user)
     @repositories = scope.includes(:user).order(:github_full_name)
-    @repositories = stale_first(@repositories) if requested_sort == "stale"
+    @repositories = stale_first(@repositories, latest_test_runs) if requested_sort == "stale"
     @registration_grant_story = registration_grant_story
   end
 
@@ -938,31 +925,11 @@ class RepositoriesController < ApplicationController
   # never re-derived here.
   def rollup_limit(default) = @limit_request || default
 
-  # The `?sort=stale` ordering: never-ingested first, then least-recently-ingested first, newest
-  # last — the order a reader scanning for CI that has gone quiet wants, which is the only reason
-  # to reorder this page at all.
-  #
-  # APPLIED OVER THE LOADED SET, NOT IN SQL, and the ticket for it names that the worker's call
-  # provided the query count does not move. It does not: every `created_at` this reads is on a run
-  # `latest_test_runs` already resolved for the whole grid in one DISTINCT ON (the cards read the
-  # same rows for their size badges and their basis sentences), so a SQL spelling of the same
-  # ordering would re-derive per-repository recency in a join only to throw the join away after
-  # the sort. Sorting here loads the relation in the controller rather than in the view — the same
-  # single load either way — and `latest_test_runs` memoises, so the cards' own reads of the same
-  # runs cost nothing further.
-  #
-  # THE `nil` LIMB IS FIRST RATHER THAN SORTED AS ZERO, because "never ingested" is not "ingested
-  # at the epoch": the card renders it as its own state ("No runs yet"), and the stalest thing on
-  # the page is the repository CI has never reached at all. `github_full_name` breaks ties within
-  # a limb so the sequence is DETERMINISTIC — a `?sort=stale` URL is shareable, and two readers
-  # pasting the same link must see the same cards in the same order — which Ruby's `sort_by` does
-  # not promise on its own.
-  def stale_first(repositories)
-    repositories.sort_by do |repository|
-      run = latest_run(repository)
-      [run.nil? ? 0 : 1, run&.created_at || Time.zone.at(0), repository.github_full_name]
-    end
-  end
+  # The `?sort=stale` ordering is `RepositoryNarrowing#stale_first`, shared with
+  # `Api::V1::UserRepositoriesController` — one definition of what "stale" means, so the grid and
+  # the machine-facing list cannot order the same account two different ways. It is handed
+  # `latest_test_runs`, the map this page already resolved in one `DISTINCT ON` for the cards' own
+  # size badges and basis sentences, so the ordering re-derives nothing and costs no query.
 
   # Whether the reader asked to NARROW this page at all: `?q=` or `?role=`, either one. `?sort=`
   # is deliberately excluded — it reorders and cannot empty the set, so an empty set under a

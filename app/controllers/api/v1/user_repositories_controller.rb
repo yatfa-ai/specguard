@@ -61,18 +61,19 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   include ShardCountPreloading
 
   # THE THREE NARROWING ASKS the web repositories index already reads — `?q=`, `?role=owned|shared`,
-  # `?sort=stale` — under the SAME guards the card grid reads them. The web shipped them first
-  # (`repositories_controller.rb`, the SPGD-802 block) because one `BulkRegistration::MAX_BATCH`
-  # gesture puts a hundred repositories on an account; this endpoint serves the identical
-  # `Repository.accessible_by` population, UNPAGINATED, and reads no parameter at all — so the same
-  # hundred-repo body rides every agent call in full, and every narrowing ask re-pays it. Including
-  # rather than re-deriving is the whole point: one guard per parameter is each concern's own rule
-  # ("which shapes does each tolerate" stays one question per parameter), and sharing the module is
-  # what makes a shape the web clamps to no-ask IMPOSSIBLE to answer differently here — unknown,
-  # non-String, empty and out-of-vocabulary values all settle to nil, the no-ask, and never a 400.
-  include RequestedSearchParam
-  include RequestedRoleParam
-  include RequestedSortParam
+  # `?sort=stale` — under the SAME guards the card grid reads them AND through the SAME application
+  # of them. The web shipped them first (`repositories_controller.rb`, the SPGD-802 block) because
+  # one `BulkRegistration::MAX_BATCH` gesture puts a hundred repositories on an account; this
+  # endpoint serves the identical `Repository.accessible_by` population, UNPAGINATED, and read no
+  # parameter at all — so the same hundred-repo body rode every agent call in full, and every
+  # narrowing ask re-paid it.
+  #
+  # Including rather than re-deriving is the whole point, and it covers the RULE and not merely the
+  # reads: sharing `RepositoryNarrowing` is what makes a shape the web clamps to no-ask IMPOSSIBLE
+  # to answer differently here, and what makes the order this list serves under `?sort=stale`
+  # impossible to drift from the order the card grid draws. See the module for why the application
+  # is shared and not just the parameter guards.
+  include RepositoryNarrowing
 
   # THIS ENDPOINT NEEDS A PERSON. A `sgk_` repository key resolves no user and gets 401 — which is
   # the direction of the seam that is easy to get wrong, because a repository key IS a valid
@@ -113,42 +114,23 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # account therefore adds no query to this endpoint — the property the budget example in
   # `user_repositories_spec.rb` pins at one row and at several.
   #
-  # ## The three narrowing asks, and why none of them buys a query
-  #
   # `?q=`, `?role=` and `?sort=stale` compose onto the same relation in the web index's exact
-  # order — `accessible_by → ?q= → ?role= → order(:github_full_name) → ?sort=stale`.
+  # order — `accessible_by → ?q= → ?role= → order(:github_full_name) → ?sort=stale` — through
+  # `RepositoryNarrowing`, the module that also applies them for the card grid. The reasoning for
+  # each (the chain that is a security claim, the `sanitize_sql_like` escape, the complement that
+  # makes the two roles partition exactly, and the loaded-set sort that re-derives nothing) lives
+  # there, in one copy, so this endpoint and the grid cannot answer the same account differently.
   #
-  # `?q=` and `?role=` are predicates chained ON `accessible_by` itself, and the chain is the
-  # security claim rather than a convenience: the WHERE is applied by the database to rows the
-  # scope already admits, so a repository this key cannot open never ENTERS the relation — not
-  # "enters and is filtered out after loading", and not "answers a probe by name". `accessible_by`
-  # hands back a relation precisely so callers can chain their own concerns onto it; these are
-  # this endpoint's, the web grid's three reads arriving at their second surface. `?q=` is
-  # `ILIKE '%…%'` with `sanitize_sql_like` escaping the wildcard characters — `_` and `%` are
-  # ordinary text in a repository name (`org/my_repo`), and an unescaped ask would quietly widen
-  # a substring question into a pattern match. `?role=shared` is the COMPLEMENT WITHIN the
-  # accessible set (`where.not(user_id:)` chained on the same relation, never a second reading of
-  # the membership table), so the two asks partition the unparameterised list exactly — no
-  # repository on both sides, none dropped between them.
-  #
-  # `?sort=stale` is applied OVER THE LOADED SET, for the reason the web's own note gives and at
-  # a better price: the newest run per repository is ALREADY in hand by then — the same
-  # `latest_test_runs_for` map `delivery_health` and `latest_run` both read — so the ordering is a
-  # sort of the materialized array against a map entry, re-deriving nothing. See `stale_first`.
+  # What is this action's own is WHERE the sort sits: `?sort=stale` runs against the
+  # `latest_test_runs_for` map already resolved here for `delivery_health` and `latest_run`, so
+  # the ordering costs no query at all. It also runs BEFORE `#delivery_verdicts`, which is safe
+  # because that method returns an id-keyed hash (`repository_ids.index_with`) and is therefore
+  # order-independent — reordering the list cannot desynchronise a verdict from its entry.
   #
   # An unparameterised request composes none of the three and serves the body this action has
   # always served — every parameter here narrows, partitions or reorders; none adds a key.
   def index
-    scope = Repository.accessible_by(current_api_user)
-    scope = scope.where("github_full_name ILIKE :pattern",
-                        pattern: "%#{ActiveRecord::Base.sanitize_sql_like(requested_search)}%") if requested_search
-    scope = if requested_role == "owned"
-              scope.where(user_id: current_api_user.id)
-            elsif requested_role == "shared"
-              scope.where.not(user_id: current_api_user.id)
-            else
-              scope
-            end
+    scope = narrow_repositories(Repository.accessible_by(current_api_user), current_api_user)
     repositories = scope.order(:github_full_name).to_a
     latest_runs = latest_test_runs_for(repositories.map(&:id))
     preload_shard_counts(latest_runs.values)
@@ -603,22 +585,6 @@ class Api::V1::UserRepositoriesController < Api::BaseController
                                         last_accepted_run_at: latest_runs[repository_id]&.created_at)
 
       { refusing: verdict.refusing?, last_rejection_at: verdict.last_rejection_at&.iso8601 }
-    end
-  end
-
-  # THE `?sort=stale` ORDERING — never-ingested first, then least-recently-ingested first, newest
-  # last; `github_full_name` breaks ties within a limb so two identical calls answer with an
-  # identical sequence (the shareable-URL property the web note argues, restated for a client that
-  # diffs one response against another). The same rule `RepositoriesController#stale_first` sorts
-  # the card grid by, spelled against the RUNS MAP this action already holds rather than a
-  # per-row lookup: `latest_test_runs_for` resolved one newest run per repository for
-  # `delivery_health` and `latest_run` before this reads it, and re-deriving recency here — in a
-  # second grouped read or a SQL join — would pay twice for a fact the request already has.
-  # Sorting the loaded array costs no query, exactly as on the web side.
-  def stale_first(repositories, latest_runs)
-    repositories.sort_by do |repository|
-      run = latest_runs[repository.id]
-      [run.nil? ? 0 : 1, run&.created_at || Time.zone.at(0), repository.github_full_name]
     end
   end
 end
