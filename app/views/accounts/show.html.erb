@@ -101,12 +101,16 @@
 
     <%# THE FULL MINT FORM — the grant is chosen here and bounded by the model, on the membership
         grant's rule: every ticked repository must be one you can open, and every ticked
-        permission must be one you hold on EACH ticked repository. All four permission boxes
-        render because that bound is PER REPOSITORY and a statically narrowed grid could only
-        offer the wrong set; a refused save comes back as a flash carrying the model's own
-        sentence, which names the repository and the permission. The checkboxes follow
-        `_permission_fields`' shape: the stored string is the label, the shared glossary is the
-        caption — one vocabulary of grants, whichever kind of row holds it. %>
+        permission must be one you hold on EACH ticked repository. The permission grid renders
+        the UNION of what you hold across the repositories above (`@grantable_permissions`,
+        computed in AccountsController), never a box no repository there would accept — such a
+        box could only ever meet the model's refusal on submit, which is why `_permission_fields`
+        renders the member forms' grids from the same bound. The bound itself stays PER
+        REPOSITORY on the model, so a permission held on one ticked repository but not another
+        is still refused by a flash naming both; the grid only narrows what could never be
+        accepted at all. The checkboxes follow `_permission_fields`' shape: the stored string is
+        the label, the shared glossary is the caption — one vocabulary of grants, whichever kind
+        of row holds it. %>
     <%= form_with url: account_agent_keys_path, scope: :agent_api_key, class: "mb-4 space-y-3" do |form| %>
       <%= form.field :name, label: "Name", placeholder: "read-only fleet agent", full: true %>
 
@@ -135,11 +139,13 @@
       <fieldset>
         <legend class="section-label mb-1">Permissions</legend>
         <p class="mb-2 text-xs text-app-muted">
-          Held for every repository ticked above, and bounded by what <strong>you</strong> hold on
-          each one. Ticking none is allowed: the repository set alone is read access.
+          Held for every repository ticked above. The grid offers what you hold <strong>somewhere</strong>:
+          a permission granted on one repository but not another is accepted only where you hold it,
+          and the save names both when it refuses. Ticking none is allowed: the repository set alone
+          is read access.
         </p>
         <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <% RepositoryMembership::PERMISSIONS.each do |permission| %>
+          <% @grantable_permissions.each do |permission| %>
             <label class="flex items-start gap-2 rounded-md border border-app-border-light bg-app-surface-raised p-3">
               <%= check_box_tag "agent_api_key[permissions][]", permission, false,
                                 id: "agent_api_key_permissions_#{permission.parameterize}",
@@ -187,8 +193,13 @@
                   stays attributable (see AgentApiKey#revoke!) — so the state has to be visible
                   rather than the row simply vanishing beside its still-live siblings. %>
               <% if agent_api_key.revoked? %>
+                <%# `:neutral` — a real member of UI::BadgeComponent::TONES — because the key no
+                    longer authenticates: this row is a record rather than a live hazard, so the
+                    quietest real tone is the honest one. Spelled out rather than abbreviated,
+                    because the component answers an unknown tone with a silent `fetch` fallback
+                    to this very value, and a typo would render as intentional forever. %>
                 <%= render UI::BadgeComponent.new(
-                      tone: :muted,
+                      tone: :neutral,
                       title: "This key was revoked, so its token no longer authenticates. The row stays " \
                              "so a token still being presented remains identifiable."
                     ) { "Revoked" } %>

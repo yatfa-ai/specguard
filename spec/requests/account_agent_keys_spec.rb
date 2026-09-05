@@ -117,4 +117,55 @@ RSpec.describe "Account agent keys", type: :request do
 
     expect(response).to have_http_status(:not_found)
   end
+
+  # A POST with no `agent_api_key` root at all is an EMPTY MINT, not a malformed request: it
+  # takes the same redirect-and-alert any refused mint takes, rather than a 400 carrying a
+  # raised ParameterMissing — the parity `UserApiKeysController` sets for this browser-facing
+  # form action.
+  # @intent: { entity: "AgentApiKey", action: "answer a bodyless mint", behavior: "POST /account/agent_keys with no params redirects with the model's sentence instead of answering 400", layer: "request" }
+  it "answers a mint with no agent_api_key root as a refused grant, not a 400" do
+    mint_grant
+
+    expect { post account_agent_keys_path, params: {} }.not_to change(AgentApiKey, :count)
+
+    expect(response).to redirect_to(account_path(anchor: "agent-keys"))
+    follow_redirect!
+    expect(response.body).to include("must name at least one repository")
+  end
+
+  # THE OFFERED SET, pinned the way repository_members_spec pins the member forms' grids: the
+  # grid renders from `@grantable_permissions` — the union of `RepositoryPolicy#grantable_permissions`
+  # across the offered repositories — so it can never offer a box whose only possible outcome is
+  # the model's refusal on submit.
+  describe "the mint form's permission grid" do
+    # Positive control: an owner holds everything on their own repository, so the whole
+    # vocabulary is offered — the narrowing must not over-cut the ordinary case.
+    # @intent: { entity: "AgentApiKey", action: "offer the full vocabulary to an owner", behavior: "the account page of a repository owner renders a checkbox for every permission in the vocabulary", layer: "request" }
+    it "offers an owner every permission in the vocabulary" do
+      mint_grant
+
+      get account_path
+
+      RepositoryMembership::PERMISSIONS.each do |permission|
+        expect(response.body).to include("agent_api_key_permissions_#{permission.parameterize}")
+      end
+    end
+
+    # The regression this narrowing exists to prevent, asserted in the shape
+    # repository_members_spec pins on the sibling forms: a view-only grantor sees one box, not
+    # four. "view" itself is asserted via its checkbox id — the bare word is all over any page.
+    # @intent: { entity: "AgentApiKey", action: "narrow the offered set to what the grantor holds", behavior: "a person whose only access is a view membership is offered the view checkbox and never keys.manage, members.manage or repo.delete", layer: "request" }
+    it "offers a view-only grantor exactly what they hold" do
+      owner = create_user(github_uid: "91004", github_handle: "grid-owner")
+      repository = create_repository(user: owner, github_full_name: "acme/shared-repo")
+      create_membership(repository: repository, user: person, permissions: ["view"])
+
+      get account_path
+
+      expect(response.body).to include("agent_api_key_permissions_view")
+      expect(response.body).not_to include("keys.manage")
+      expect(response.body).not_to include("members.manage")
+      expect(response.body).not_to include("repo.delete")
+    end
+  end
 end

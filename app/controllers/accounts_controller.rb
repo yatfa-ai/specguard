@@ -30,6 +30,21 @@ class AccountsController < ApplicationController
     # grant validation would refuse it anyway; the form shows only what can honestly be ticked.
     @grantable_repositories = Repository.accessible_by(current_user).order(:github_full_name)
 
+    # WHAT THE MINT FORM MAY OFFER — the union of `RepositoryPolicy#grantable_permissions`
+    # across the repositories above, in the vocabulary's own order (`Array#&` keeps the left
+    # side's). The permission grid renders from this and never from
+    # `RepositoryMembership::PERMISSIONS` whole: a box no tickable repository would accept is a
+    # control whose only possible outcome is the model's refusal on submit — the exact shape
+    # `_permission_fields.html.erb` renders its own grids to prevent. The BOUND itself stays
+    # per-repository on the model — a permission held on one ticked repository but not another
+    # is still refused, by a flash naming both — so this grid promises only what is true of it:
+    # it never offers what NO accessible repository accepts.
+    @grantable_permissions =
+      RepositoryMembership::PERMISSIONS &
+      @grantable_repositories.flat_map { |repository|
+        RepositoryPolicy.new(current_user, repository).grantable_permissions
+      }
+
     # Set by UserApiKeysController#create, readable exactly once. One reveal-once mechanism for
     # both credentials, not two: a second implementation is a second chance to get "shown exactly
     # once" wrong, and the two pages can never be reached by one redirect. The KEY NAMES, however,

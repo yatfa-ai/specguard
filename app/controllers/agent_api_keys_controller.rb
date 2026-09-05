@@ -73,9 +73,13 @@ class AgentApiKeysController < ApplicationController
 
   # A blank name defaults rather than failing, matching `UserApiKeysController#api_key_name`: the
   # name tells several keys apart on the revoke button, and a refusal over a blank field is a
-  # worse answer than naming the key after what it is.
+  # worse answer than naming the key after what it is. `fetch` with a default rather than
+  # `require`, on the same sibling's rule: a POST with no `agent_api_key` root at all is an
+  # EMPTY MINT, which the model answers with its own sentence via the redirect below — not a 400
+  # carrying a Rails exception, which is what a raised `ParameterMissing` would put on this
+  # browser-facing form action.
   def agent_api_key_params
-    params.require(:agent_api_key).permit(:name, repository_ids: [], permissions: []).tap do |permitted|
+    params.fetch(:agent_api_key, {}).permit(:name, repository_ids: [], permissions: []).tap do |permitted|
       permitted[:name] = permitted[:name].presence || "Agent key"
     end
   end

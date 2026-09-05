@@ -152,9 +152,12 @@ class AgentApiKey < ApplicationRecord
   # Array columns collect whitespace, blanks and duplicates the moment a form writes to them —
   # the same normalization `RepositoryMembership` runs on its permissions column, extended to the
   # repository set this model adds. Integer coercion here rather than at the controller: a grant
-  # is a set of ids wherever it arrives from.
+  # is a set of ids wherever it arrives from. ONE parse with no rescue: `Integer(id,
+  # exception: false)` — the spelling `RequestedLimitParam` established — rather than an inline
+  # `rescue nil`, which swallows every StandardError the block could raise, not just the
+  # ArgumentError a non-numeric id produces.
   def normalize_grants
-    self.repository_ids = Array(repository_ids).filter_map { |id| Integer(id) rescue nil }.uniq
+    self.repository_ids = Array(repository_ids).filter_map { |id| Integer(id, exception: false) }.uniq
     self.permissions = Array(permissions).map { |permission| permission.to_s.strip }.reject(&:empty?).uniq
   end
 
