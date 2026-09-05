@@ -25,8 +25,10 @@ require "openssl"
 # something. A user key has no such fixture: it is held by a person, on a laptop or in an agent, and
 # the answer to "I lost it" is to mint another and revoke this one. Two rows, two names, and an
 # audit trail that says which was retired when — rather than one row whose history quietly changes
-# meaning. Porting `regenerate!` here would also port `rotated_at` and `rotated_and_unused?`, a pair
-# of columns that exist to date the copy on a stranded CI credential.
+# meaning. That trail is real now (`revoke!` stamps `revoked_at` and the row is kept — SPGD-943);
+# it was this class's own promise before it was its behaviour. Porting `regenerate!` here would
+# also port `rotated_at` and `rotated_and_unused?`, a pair of columns that exist to date the copy
+# on a stranded CI credential.
 class UserApiKey < ApplicationRecord
   # Deliberately NOT `ApiKey::TOKEN_PREFIX` with a letter swapped, and deliberately the same LENGTH
   # as it: the two are compared against a caller's string, and a prefix of one that is a prefix of
@@ -35,6 +37,14 @@ class UserApiKey < ApplicationRecord
   TOKEN_BYTES = 24
 
   belongs_to :user
+
+  # The retirement split, named once and used everywhere a caller needs one side of it — the same
+  # scopes `ApiKey` carries, and the same NO `default_scope` rule (stated where `ApiKey` names its
+  # own): the distinction exists precisely so each reader can pick a side and say so, and a default
+  # would silently flip `authenticate` and every future reader without any of them naming the
+  # choice. `revoked_at` is written by `revoke!` and never cleared: a revoked key cannot come back.
+  scope :live, -> { where(revoked_at: nil) }
+  scope :revoked, -> { where.not(revoked_at: nil) }
 
   # Populated by the request that minted this row, and `nil` on every record loaded from the
   # database — the same shape as `ApiKey#raw_token`, for the same reason.
@@ -71,14 +81,68 @@ class UserApiKey < ApplicationRecord
   # `spec/models/user_api_key_spec.rb` pins both halves — one statement, and a `user` that reads
   # zero — and `spec/requests/api/v1/credential_seam_spec.rb` counts the whole request against
   # BOTH tables so the claim is measured over HTTP rather than asserted in this comment.
+  #
+  # `live` only, and that is the security half of the retirement (SPGD-943): `revoke!` keeps the
+  # row — retention is what makes a revoked token attributable — so the row would otherwise keep
+  # resolving forever. The filter rides the same `find_by`, so everything the paragraphs above
+  # measure survives intact: still one statement, still one indexed read on the unique digest
+  # index, still the ONLY resolution site for a user credential. The refusal of a revoked token
+  # then has somewhere to land — `Api::BaseController`'s failure path finds this same row on the
+  # digest and stamps `last_refused_at` — which is the whole point of keeping it.
   def self.authenticate(token)
     return nil if token.blank?
 
-    eager_load(:user).merge(User.active).find_by(token_digest: digest(token))
+    live.eager_load(:user).merge(User.active).find_by(token_digest: digest(token))
   end
 
   def touch_last_used!
     update_column(:last_used_at, Time.current)
+  end
+
+  # Retire this key: the token stops authenticating, and the ROW STAYS — the `destroy!` this
+  # method retired is exactly the move that made the two promises in this file's header false.
+  # The reason for retention is attribution, the same reason `ApiKey#revoke!` gives: a hard delete
+  # made a revoked token's 401 unreportable — `authenticate` resolving nothing leaves nothing to
+  # attach a record to, so a revoked key presented by an agent or an MCP client read, at best,
+  # "this was never a key". Keeping the row keeps the artifact the failure path needs (see
+  # `Api::BaseController#attribute_refused_revocation`, which stamps `last_refused_at` on exactly
+  # this row), and is what finally makes "an audit trail that says which was retired when" true.
+  #
+  # `update_column` rather than `save!`, exactly as `touch_last_used!` and `ApiKey#revoke!` both
+  # do: revocation is a stamp on the row's existing state, not a validation event, and it must not
+  # be able to fail on a validation this gesture does not carry. Idempotent — a replayed DELETE
+  # re-stamps, which is unobservable, because the Revoke button is rendered only on live keys.
+  #
+  # `revoked_at` is never cleared by anything: there is no un-revoke, and a token that was retired
+  # once can never authenticate again (`authenticate` filters to `live`).
+  def revoke!
+    update_column(:revoked_at, Time.current)
+    self
+  end
+
+  # Whether THIS row has been retired. Read by the account page, which must show retired rows AS
+  # retired (and offer no Revoke on them), via this predicate once the rows are loaded and the
+  # `live`/`revoked` scopes at the SQL layer.
+  def revoked?
+    revoked_at.present?
+  end
+
+  # Whether a client is STILL PRESENTING this retired token — the platform has seen the digest it
+  # carries arrive and be refused since `revoke!` stamped the retirement. The epistemics are
+  # `ApiKey#revoked_and_still_presented?`'s verbatim: there is no ordering question (a refusal can
+  # only be stamped on an already-revoked row, so the stamp always postdates the revocation) and
+  # no recovery — a revoked token never authenticates again, so the state has no window to clear
+  # and no threshold to cross. What the pair cannot prove is that a client is presenting the token
+  # AT THIS MOMENT: `last_refused_at` is the last time the platform saw it, so a client that gave
+  # up hours ago reads the same as one presenting right now. Every surface that renders this state
+  # serves the recency beside it rather than letting the badge claim a present tense the data does
+  # not carry.
+  def revoked_and_still_presented?
+    revoked? && last_refused_at.present?
+  end
+
+  def touch_last_refused!
+    update_column(:last_refused_at, Time.current)
   end
 
   # Safe to show anywhere: identifies the key without revealing it. Same construction as

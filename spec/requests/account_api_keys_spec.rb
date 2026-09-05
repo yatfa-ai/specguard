@@ -65,13 +65,20 @@ RSpec.describe "Account API keys", type: :request do
   end
 
   # The half of criterion 1 that is about the OTHER keys: resolution is a lookup of one digest on a
-  # unique index, so revoking one must not disturb any sibling.
-  # @intent: {"entity": "UserApiKey", "action": "revoke one key", "behavior": "DELETE on one key makes its own Bearer token answer 401 on /api/v1/repositories while a sibling key minted alongside it still answers 200.", "layer": "request"}
+  # unique index, so revoking one must not disturb any sibling. And since SPGD-943 the revocation is
+  # a RETIREMENT: the row this button acted on stays, stamped with the instant it was retired — the
+  # audit trail the mint surface has promised since the no-regenerate decision.
+  # @intent: {"entity": "UserApiKey", "action": "revoke one key", "behavior": "DELETE on one key retires it with a revoked_at stamp instead of deleting the row, and its own Bearer token answers 401 on /api/v1/repositories while a sibling key minted alongside it still answers 200.", "layer": "request"}
   it "revokes one key and leaves every other one working" do
     doomed = mint("Laptop")
     survivor = mint("Agent")
 
     delete account_api_key_path(person.user_api_keys.find_by!(name: "Laptop"))
+
+    # Retired, not deleted. Under the old hard delete this line cannot even find the row — which is
+    # what makes the change from destroy! visible here rather than assumed.
+    retired = person.user_api_keys.find_by!(name: "Laptop")
+    expect(retired.revoked_at).to be_present
 
     get "/api/v1/repositories", headers: { "Authorization" => "Bearer #{doomed}" }
     expect(response).to have_http_status(:unauthorized)
@@ -87,6 +94,58 @@ RSpec.describe "Account API keys", type: :request do
     get account_path
 
     expect(response.body).not_to include("Regenerate")
+  end
+
+  # SPGD-943: retirement is VISIBLE on the page it happened from. A revoked row stays listed —
+  # rendered retired, with no Revoke button on it (there is nothing left to revoke), and a
+  # revoked-and-still-presented row says so with the recency beside it. The honest bound travels
+  # from `ApiKey#revoked_and_still_presented?` verbatim: `last_refused_at` is the LAST observed
+  # presentation, so the note dates it and never claims a present tense the data does not carry.
+  describe "a retired key on the page" do
+    def row_for(name)
+      Capybara.string(response.body).find("tr", text: name)
+    end
+
+    # @intent: {"entity": "UserApiKey", "action": "render a retired key", "behavior": "the account page lists a revoked key visibly retired with no Revoke button on its row, while a live sibling keeps its button", "layer": "request"}
+    it "renders the retired row visibly retired, with no Revoke button on it" do
+      create_user_api_key(user: person, name: "Retired").tap(&:revoke!)
+      create_user_api_key(user: person, name: "Working")
+
+      get account_path
+
+      expect(response).to have_http_status(:ok)
+      expect(row_for("Retired")).to have_content("Revoked")
+      expect(row_for("Retired")).to have_no_button("Revoke")
+      # The retirement did not take the lever away from the live sibling beside it.
+      expect(row_for("Working")).to have_button("Revoke")
+    end
+
+    # @intent: {"entity": "UserApiKey", "action": "report a still-presented retired key", "behavior": "a revoked key whose dead token was refused since carries the still-presented note with the recency beside it", "layer": "request"}
+    it "reports a revoked key that is still being presented, with the recency beside it" do
+      presented = create_user_api_key(user: person, name: "Agent")
+      presented.revoke!
+      presented.touch_last_refused!
+
+      get account_path
+
+      expect(row_for("Agent")).to have_content("Still being presented")
+      # Whitespace-tolerant on purpose: the note's ERB breaks the sentence across source lines,
+      # and Capybara matches Regexp text against the node's UN-normalized text — `.` will not
+      # cross the newlines a String match normalizes away.
+      expect(row_for("Agent")).to have_text(/last\s+seen\s+.+ago/)
+    end
+
+    # The honest bound: a key revoked and never presented again is NOT a finding, and nothing is
+    # synthesized for it — the note exists only when the failure path stamped a refusal.
+    # @intent: {"entity": "UserApiKey", "action": "synthesize no presentation", "behavior": "a key revoked and never presented again carries no still-presented claim on the page", "layer": "request"}
+    it "claims no presentation for a key revoked and never presented again" do
+      create_user_api_key(user: person, name: "Quiet").tap(&:revoke!)
+
+      get account_path
+
+      expect(row_for("Quiet")).to have_no_text("still being presented")
+      expect(row_for("Quiet")).to have_no_button("Revoke")
+    end
   end
 
   # @intent: {"entity": "UserApiKey", "action": "scope keys to owner", "behavior": "DELETE on another user's key answers 404 rather than 403, leaves the row in place, and never discloses that the id exists to somebody guessing it.", "layer": "request"}

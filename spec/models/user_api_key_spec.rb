@@ -119,6 +119,86 @@ RSpec.describe UserApiKey do
     end
   end
 
+  # SPGD-943: revocation is a RETIREMENT, ported from `ApiKey` (SPGD-804). The row is retained and
+  # `revoked_at` stamps the instant the token was retired — the artifact a refused presentation is
+  # attributed to (`Api::BaseController`'s failure path), and the audit trail this model's own
+  # header has promised since the no-`regenerate!` decision. The security half lives in
+  # `authenticate` and is pinned with its own example: retention must never read as resurrection.
+  describe "a revoked key" do
+    # Mirrors the archived-owner pair above, and `ApiKey`'s own retirement example.
+    # @intent: { entity: "UserApiKey", action: "retire a key", behavior: "revoke! stamps revoked_at and keeps the row — a retirement, not a deletion", layer: "unit" }
+    it "retires without deleting: the row and its name survive the revoke" do
+      user_api_key = create_user_api_key(user: user, name: "Laptop")
+
+      expect { user_api_key.revoke! }.not_to change(described_class, :count)
+
+      reloaded = described_class.find(user_api_key.id)
+      expect(reloaded.revoked_at).to be_present
+      expect(reloaded.name).to eq("Laptop")
+    end
+
+    # @intent: { entity: "UserApiKey", action: "refuse a revoked token", behavior: "a token that answered a moment earlier stops resolving the moment revoke! stamps its row — retention must never read as resurrection", layer: "unit" }
+    it "stops the token authenticating that worked a moment earlier" do
+      user_api_key = create_user_api_key(user: user)
+      raw = user_api_key.raw_token
+      expect(described_class.authenticate(raw)).to eq(user_api_key)
+
+      user_api_key.revoke!
+
+      # Asserted through `authenticate` — the only caller-facing consequence — and reloaded, so a
+      # predicate answering from stale in-memory state could not pass it.
+      expect(described_class.authenticate(raw)).to be_nil
+      expect(described_class.find(user_api_key.id)).to be_revoked
+    end
+
+    # The retention does not leak into the resolution scopes: `live` and `revoked` partition the
+    # table, every scoping consumer stands on exactly one side, and NO default scope decides for
+    # them — the rule `ApiKey` states where it names its own scopes.
+    # @intent: { entity: "UserApiKey", action: "partition live and revoked", behavior: "the live and revoked scopes split the table exactly, with no row in both, none in neither, and no default scope hiding either side", layer: "unit" }
+    it "partitions the table into live and revoked rows, deciding for nobody" do
+      live_key = create_user_api_key(user: user, name: "Live")
+      revoked_key = create_user_api_key(user: user, name: "Retired").tap(&:revoke!)
+
+      expect(described_class.count).to eq(2)
+      expect(described_class.live).to contain_exactly(live_key)
+      expect(described_class.revoked).to contain_exactly(revoked_key)
+    end
+
+    # @intent: { entity: "UserApiKey", action: "attribute a refusal", behavior: "touch_last_refused! stamps last_refused_at, and revoked_and_still_presented? is false before it and true after", layer: "unit" }
+    it "reports a refused presentation only once one has been stamped" do
+      user_api_key = create_user_api_key(user: user).tap(&:revoke!)
+
+      # A revoked key nobody has presented again is NOT a finding — nothing is synthesized for it.
+      expect(user_api_key).not_to be_revoked_and_still_presented
+
+      user_api_key.touch_last_refused!
+
+      expect(user_api_key.reload.last_refused_at).to be_present
+      expect(user_api_key).to be_revoked_and_still_presented
+    end
+
+    # The two grounds on which a token is refused are INDEPENDENTLY sufficient, and this pairs with
+    # the archived-owner examples above (live key, archived owner) so neither filter can silently
+    # do the other's work: this pins a key refused on revocation ALONE — an active owner, so only
+    # the `live` filter can refuse it — and a key refused with both grounds at once.
+    # @intent: { entity: "UserApiKey", action: "refuse independently on either ground", behavior: "a revoked key with a live owner is refused on revocation alone, and both grounds together still refuse", layer: "unit" }
+    it "is refused on revocation alone, and on both grounds together" do
+      revoked_only = create_user_api_key(user: user)
+      revoked_and_archived = create_user_api_key(user: user)
+
+      revoked_only.revoke!
+      revoked_and_archived.revoke!
+
+      expect(described_class.authenticate(revoked_only.raw_token)).to be_nil
+      expect(described_class.authenticate(revoked_and_archived.raw_token)).to be_nil
+
+      # Adding the archived owner changes nothing observable: the refusal was already total on the
+      # revocation alone.
+      user.update!(archived_at: Time.current)
+      expect(described_class.authenticate(revoked_and_archived.raw_token)).to be_nil
+    end
+  end
+
   # SPGD-752 success criterion 5, and the contrast the criterion names: `created_api_keys` is
   # `:nullify` because a repository key merely RECORDS who minted it, and none of that reasoning
   # survives a credential whose whole meaning is the person.
