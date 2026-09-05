@@ -79,9 +79,12 @@ class ApiKeysController < ApplicationController
   end
 
   # The name a key gets when the mint form's name field was left blank. Reads `ApiKey::DEFAULT_NAME`
-  # rather than repeating the literal: three paths now mint an unnamed key — this form, an agent
-  # registering over the API, and a browser registering a whole organization — and
-  # `Api::V1::UserRepositoriesController::FIRST_KEY_NAME` states why they must not drift apart.
+  # rather than repeating the literal: the Ruby paths that fill in a blank name all read the shared
+  # constant — e.g. this form, an agent registering over the API, a browser registering a whole
+  # organization, an agent minting a subsequent key — and
+  # `Api::V1::UserRepositoriesController::FIRST_KEY_NAME` states why they must not drift apart. A
+  # mint that passes no name at all never reaches this constant: it takes the `api_keys.name`
+  # column default instead (see `db/schema.rb`).
   def api_key_name
     params.dig(:api_key, :name).presence || ApiKey::DEFAULT_NAME
   end
