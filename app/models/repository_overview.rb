@@ -723,9 +723,10 @@ class RepositoryOverview
   # WHICH FILE the run spent its wall clock in — the same decomposition `repositories#show` has
   # rendered since SPGD-275, served to the client that has no page to read.
   #
-  # This is `serialized_shards`' argument one axis over, and the substitution is exact. The scalars
-  # above say a run cost 253.75s; not one of them is a file, so an agent reading only those cannot
-  # learn WHERE the suite is slow — it can learn that it is. And a shard is not the answer: a shard
+  # This is `LatestRunSerializer#serialized_shards`' argument one axis over, and the substitution
+  # is exact. The scalars above say a run cost 253.75s; not one of them is a file, so an agent
+  # reading only those cannot learn WHERE the suite is slow — it can learn that it is.
+  # And a shard is not the answer: a shard
   # is a CI partition, `TestRun#shard_durations`' own comment is explicit that it is not a code
   # area, and "shard 3 was slow" names a machine while "spec/models/invoice_spec.rb was slow" names
   # something a reader can go and edit.
@@ -736,14 +737,16 @@ class RepositoryOverview
   # governing rule at the top and the one thing a second copy of the query could not promise.
   #
   # `rows` MIRRORS `SpecFileDurations#rows` VERBATIM and re-sorts nothing, on the rule
-  # `serialized_shard_rows` follows: the aggregate orders `SUM(duration_seconds) DESC NULLS LAST,
-  # spec_file_path ASC`, and that NULLS LAST is load-bearing rather than incidental — a re-sort
+  # `LatestRunSerializer#serialized_shard_rows` follows: the aggregate orders
+  # `SUM(duration_seconds) DESC NULLS LAST, spec_file_path ASC`, and that NULLS LAST is
+  # load-bearing rather than incidental — a re-sort
   # here on a plain `desc` would put the file that reported NOTHING at the head of a list whose
   # whole contract is "heaviest first". Inheriting the order is what makes `rows.first` and the
   # panel's heaviest file the same file by construction instead of by coincidence.
   #
-  # STRUCTURED COUNTS, NOT PROSE, the rule `serialized_shards` states and this block obeys one
-  # grain down. `Row#coverage_label` words this same coverage as `"4 of 12"` and `#duration_label`
+  # STRUCTURED COUNTS, NOT PROSE, the rule `LatestRunSerializer#serialized_shards` states and
+  # this block obeys one grain down. `Row#coverage_label` words this same coverage as `"4 of 12"`
+  # and `#duration_label`
   # words the total as `"1.23s"` / `"not reported"`; a machine-readable client cannot act on either
   # without parsing it. So `recorded_count` and `timed_count` go out as the integers those
   # sentences are built from and `total_seconds` as a raw float. This is also how the honesty
@@ -790,7 +793,7 @@ class RepositoryOverview
   # rather than minimal: one grouped aggregate behind
   # `index_spec_observations_on_test_run_id_and_spec_file_path`, EXPLAIN-certified in
   # `spec/models/spec_observation_spec.rb`, so a 20,000-example suite costs exactly what a
-  # 40-example one does. It sits inside the budget `serialized_shards` states above.
+  # 40-example one does. It sits inside the budget `LatestRunSerializer#serialized_shards` states.
   def serialized_spec_files(test_run)
     limit = requested_limit || SpecObservation::HEAVIEST_FILES_LIMIT
     durations = SpecFileDurations.for(test_run, limit: limit)
@@ -1938,10 +1941,11 @@ class RepositoryOverview
   # differenced against its neighbour AND what each figure on it was measured over.
   #
   # TWO COUNTS AND NO COST FIGURE — deliberately not the whole `shards` sub-block
-  # `serialized_shards` builds for the latest run. `machine_seconds` stays off the row on the
-  # argument this comment has always made: a client differencing two rows needs to know they were
-  # assembled from the same number of parts, not what each part cost, and the per-run cost figures
-  # stay available in full on `latest_run`, which is one row and pays one `pick` for them.
+  # `LatestRunSerializer#serialized_shards` builds for the latest run. `machine_seconds` stays off
+  # the row on the argument this comment has always made: a client differencing two rows needs to
+  # know they were assembled from the same number of parts, not what each part cost, and the
+  # per-run cost figures stay available in full on `latest_run`, which is one row and pays one
+  # `pick` for them.
   #
   # `timed_shard_count` is the exception that argument never covered, and it is not "what a part
   # cost" — it is THE DENOMINATOR OF A FIGURE THIS ROW ALREADY SERVES. `duration_seconds` on a
@@ -1949,8 +1953,9 @@ class RepositoryOverview
   # never `shard_count`; a row serving the numerator beside the wrong denominator lets a client
   # difference four timed shards (MAX 600s) against four shards whose two slowest were cancelled
   # (MAX 180s) — identical `shard_count`, identical `suite_size_measured` — and report a 70%
-  # speedup produced entirely by telemetry loss. That is the same honesty gap `serialized_shards`'
-  # `coverage` block exists to close: a figure whose coverage is inferred from a neighbour.
+  # speedup produced entirely by telemetry loss. That is the same honesty gap
+  # `LatestRunSerializer#serialized_shards`' `coverage` block exists to close: a figure whose
+  # coverage is inferred from a neighbour.
   #
   # `shard_count` is the right denominator for `total_specs` — a SUM over the shards RECORDED — and
   # is served for that reason; `TestRun#assembled_like?` decides differenceability on shard-count
@@ -1971,7 +1976,7 @@ class RepositoryOverview
   # `total_specs`, so the endpoint and the panel cannot drift on what "measured" means.
   #
   # Counts and booleans, never prose: `TestRun#delivery_description` and `#wall_clock_coverage`
-  # word these same shard facts in English for the panel, and `serialized_shards` above already
+  # word these same shard facts in English for the panel, and `LatestRunSerializer#serialized_shards` already
   # settled that a machine-readable client cannot act on a sentence without parsing it.
   def serialized_history_row(run)
     {
