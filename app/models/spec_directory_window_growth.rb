@@ -103,20 +103,30 @@
 class SpecDirectoryWindowGrowth
   # Builds the comparison, or the stated reason there isn't one.
   #
-  # @param runs [Array<TestRun>] the window, ALREADY LOADED and OLDEST FIRST — the same rows the
-  #   "Suite growth" chart and the "Tests whose outcome changed" panel were loaded for, handed in
-  #   rather than re-queried. Every panel that fetched "the last thirty runs on this branch" for
-  #   itself would be its own window, with no structural reason to keep agreeing, on a page where
-  #   each of them captions the others' branch.
+  # @param runs [RunWindow, Array<TestRun>] the window, ALREADY LOADED, handed in as a {RunWindow}
+  #   so its ORIENTATION travels with the rows instead of being re-asserted here in prose — the
+  #   same rows the "Suite growth" chart and the "Tests whose outcome changed" panel were loaded
+  #   for, handed in rather than re-queried. This object asks the window for
+  #   {RunWindow#oldest_first}, because the anchor below is read off the NEWEST end as `runs.last`
+  #   and the baseline walk starts at index 0 — the two ends are load-bearing, and a window read
+  #   the wrong way round sign-flips every `change` without raising. The web surface builds
+  #   `RunWindow.oldest_first`, the API asks `history_runs.oldest_first` off its newest-first
+  #   window, and both name the order at their own load rather than here. A bare array is still
+  #   accepted and read as oldest first — the contract this parameter used to carry in prose alone.
+  #   Every panel that fetched "the last thirty runs on this branch" for itself would be its own
+  #   window, with no structural reason to keep agreeing, on a page where each of them captions
+  #   the others' branch.
   # @param branch [String, nil] the branch every figure is drawn on, for the caption.
   def self.for(runs, branch: nil, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT)
-    anchor = runs.last
+    runs = RunWindow.wrap(runs)
+    window_runs = runs.oldest_first
+    anchor = window_runs.last
     context = { branch: branch, window_run_count: runs.size, anchor_run: anchor }
 
     return new(state: :anchor_unmeasured, **context) unless anchor&.suite_size_measured?
     return new(state: :no_earlier_run, **context) if runs.size < 2
 
-    compare(runs, anchor, context, limit)
+    compare(window_runs, anchor, context, limit)
   end
 
   # The walk, and what it found. Separate from `.for` so the two questions asked of the anchor alone

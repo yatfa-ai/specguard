@@ -106,14 +106,22 @@
 class SlowestTests
   # @param repository [Repository] the grain of the RANKING, and the tenant the anchor is checked
   #   against — see `.validate_anchor!`.
-  # @param runs [Array<TestRun>] the window, ALREADY LOADED and OLDEST FIRST — the same rows the
-  #   "Suite growth" chart, the "Tests whose outcome changed" panel and the window growth panel are
-  #   drawn on, handed in rather than re-queried. Every panel that fetched "the last thirty runs on
-  #   this branch" for itself would be its own window, agreeing today with no structural reason to
-  #   keep agreeing, on a page where each captions the others' branch.
+  # @param runs [RunWindow, Array<TestRun>] the window, ALREADY LOADED, handed in as a {RunWindow}
+  #   so its ORIENTATION travels with the rows instead of being re-asserted here in prose — the
+  #   same rows the "Suite growth" chart, the "Tests whose outcome changed" panel and the window
+  #   growth panel are drawn on, handed in rather than re-queried. This object asks the window for
+  #   {RunWindow#oldest_first}, because the anchor below is read off the NEWEST end as `runs.last`;
+  #   the web surface builds `RunWindow.oldest_first`, the API asks
+  #   `history_runs.oldest_first` off its newest-first window, and both name the order at their own
+  #   load rather than here. A bare array is still accepted and read as oldest first — the contract
+  #   this parameter used to carry in prose alone. Every panel that fetched "the last thirty runs
+  #   on this branch" for itself would be its own window, agreeing today with no structural reason
+  #   to keep agreeing, on a page where each captions the others' branch.
   # @param branch [String, nil] the branch every figure is drawn on, for the caption.
   def self.for(repository, runs, branch: nil, limit: SpecObservation::SLOWEST_LIMIT)
-    anchor = runs.last
+    runs = RunWindow.wrap(runs)
+    window_runs = runs.oldest_first
+    anchor = window_runs.last
     window = { branch: branch, run_count: runs.size, anchor_run: anchor }
 
     # No run, no anchor, no partition — and nothing asked of the database. `UNREAD` rather than
@@ -121,7 +129,7 @@ class SlowestTests
     return new(state: :no_runs, **window, **UNREAD) if anchor.nil?
 
     validate_anchor!(repository, anchor)
-    rank(runs, anchor, window, limit)
+    rank(window_runs, anchor, window, limit)
   end
 
   # What a state that never reached a read reports for the figures that read would have produced:

@@ -68,12 +68,19 @@
 # failures at all never runs the composition — which is the point of asking the gating question
 # first rather than a shape to be tidied away.
 class UnstableTests
-  # @param runs [Array<TestRun>] the window, ALREADY LOADED — the same rows the "Suite growth"
-  #   panel is drawn on, handed in rather than re-queried. Every panel that fetched "the last thirty
-  #   runs on this branch" separately would be its own window, agreeing today with no structural
-  #   reason to keep agreeing, and this one's captions name the others' branch.
+  # @param runs [RunWindow, Array<TestRun>] the window, ALREADY LOADED, handed in as a {RunWindow}
+  #   so its ORIENTATION travels with the rows — the same rows the "Suite growth" panel is drawn
+  #   on, handed in rather than re-queried. This is the one presenter on the ladder that is
+  #   genuinely order-INDIFFERENT: it reads the runs' ids and their count and nothing else, so it
+  #   asks the window for {RunWindow#runs} — the rows as handed, no end named — rather than for an
+  #   orientation it does not depend on. (Order-indifferent is a DESCRIPTION of this object, not a
+  #   licence for the caller: see `RunWindow`.) A bare array is still accepted. Every panel that
+  #   fetched "the last thirty runs on this branch" separately would be its own window, agreeing
+  #   today with no structural reason to keep agreeing, and this one's captions name the others'
+  #   branch.
   def self.for(repository, runs, branch: nil)
-    run_ids = runs.map(&:id)
+    runs = RunWindow.wrap(runs)
+    run_ids = runs.runs.map(&:id)
     reporting = SpecObservation.window_outcome_reporting(run_ids)
 
     window = { branch: branch, run_count: runs.size, **reporting }

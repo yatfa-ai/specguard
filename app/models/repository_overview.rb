@@ -1931,7 +1931,11 @@ class RepositoryOverview
   # restated in `history_window.branch`, `returned` says `0`, and the client can tell "that branch
   # has no runs" from "here is some other branch" because the second never happens.
   def serialized_history
-    history_runs.map { |run| serialized_history_row(run) }
+    # The served order is named here rather than implied: `history_window` declares
+    # `ingested_at_desc,ingest_sequence_desc`, and `newest_first` is that same statement at the
+    # read. The window was BUILT newest first, so this is the memoized array itself — no copy, no
+    # re-sort.
+    history_runs.newest_first.map { |run| serialized_history_row(run) }
   end
 
   # What the human panel's row carries, plus the composition facts that say whether the row may be
@@ -2023,9 +2027,18 @@ class RepositoryOverview
   # returns zero `main` rows on a repository whose ten newest runs are all feature branches, which
   # is precisely what a client was left to do before this. `Repository#recent_test_runs` carries
   # the rest of that argument, and the index it relies on.
+  #
+  # ONE window read, memoized, and its ORIENTATION IS THE QUERY'S: `recent_test_runs` orders
+  # `(created_at, id) DESC` — newest first — so the rows are wrapped `RunWindow.newest_first` and
+  # that fact travels with the object. Every reader below asks the window for the end it needs
+  # (`history` serializes `newest_first`; the two anchor presenters ask `oldest_first`;
+  # `UnstableTests` and `UnstableTestRuns` read it as handed) instead of each remembering which way
+  # this array points.
   def history_runs
-    @history_runs ||= preload_shard_counts(
-      repository.recent_test_runs(limit: history_limit, branch: requested_branch).to_a
+    @history_runs ||= RunWindow.newest_first(
+      preload_shard_counts(
+        repository.recent_test_runs(limit: history_limit, branch: requested_branch).to_a
+      )
     )
   end
 
@@ -2277,6 +2290,10 @@ class RepositoryOverview
   def serialized_unstable_test_runs
     return nil if requested_unstable_test.nil?
 
+    # Handed the window AS-IS, deliberately: `UnstableTestRuns` is order-PROPAGATING — the sequence
+    # follows the handed orientation, so these rows read newest run first, the same direction as
+    # the `history` rows they sit beside. The two anchor sites ask `oldest_first`; this one must
+    # not. See `RunWindow`.
     sequence = UnstableTestRuns.for(repository, history_runs, requested_unstable_test)
 
     {
@@ -2591,27 +2608,36 @@ class RepositoryOverview
   # this gate is NOT a copy of its flakiness sibling, which sits ten lines below and is otherwise
   # line-for-line identical.
   #
-  # `SlowestTests.for` documents its parameter as *"the window, ALREADY LOADED and OLDEST FIRST"*
-  # and takes `runs.last` as its ANCHOR — the run that decides WHICH TESTS ARE IN THE LIST AT ALL
-  # (its ⭐ PARTITION section). `history_runs` is `Repository#recent_test_runs`, ordered
-  # `(created_at, id) DESC` — NEWEST first. Handing it in unreversed DOES NOT RAISE:
-  # `validate_anchor!` checks tenancy only, and an old run of the same repository passes it. What
-  # comes back is a fully-populated, plausible block that ranks the OLDEST run's slowest tests,
-  # reports THAT run's figures in `recorded_count` / `resolved_count` / `timed_count`, and names it
-  # in `anchor_run` — an answer to a question nobody asked, wearing the shape of the right one.
-  # `spec/requests/api/v1/repository_slowest_tests_spec.rb` guards it by asserting the served
-  # `anchor_run` is the NEWEST run of the window, which fails if this `.reverse` is dropped.
+  # `SlowestTests.for` needs the window OLDEST FIRST — it takes `runs.last` as its ANCHOR, the run
+  # that decides WHICH TESTS ARE IN THE LIST AT ALL (its ⭐ PARTITION section) — and says so by
+  # asking `history_runs.oldest_first`. The orientation itself was decided once, at the load: the
+  # query orders `(created_at, id) DESC` — NEWEST first — and the window carries that fact, so
+  # this site asks for the end it needs instead of performing a remembered `.reverse`. What the
+  # orientation is worth naming for has not changed: handing the anchor the wrong end DOES NOT
+  # RAISE — `validate_anchor!` checks tenancy only, and an old run of the same repository passes
+  # it. What comes back is a fully-populated, plausible block that ranks the OLDEST run's slowest
+  # tests, reports THAT run's figures in `recorded_count` / `resolved_count` / `timed_count`, and
+  # names it in `anchor_run` — an answer to a question nobody asked, wearing the shape of the
+  # right one. `spec/requests/api/v1/repository_slowest_tests_spec.rb` guards it by asserting the
+  # served `anchor_run` is the NEWEST run of the window, which fails if this site ever asks for
+  # the wrong orientation.
   #
-  # The adjacent precedent is what makes it easy to walk into and is NOT a licence: `UnstableTests.for`
-  # documents the same parameter with no ordering clause and is order- and anchor-indifferent — it
-  # reads `runs.map(&:id)` and `runs.size` and nothing else, and says so — so `unstable_tests` hands
-  # `history_runs` straight in and is right to. `spec_directory_window_growth` further down is the
-  # OTHER call site that must reverse, and carries the same warning.
+  # The adjacent precedent is what made it easy to walk into and is NOT a licence: `UnstableTests.for`
+  # is order-INDIFFERENT — it reads `runs.map(&:id)` and `runs.size` and nothing else, and says so —
+  # so `unstable_tests` below hands the window straight in, asking for no end, and is right to.
+  # `spec_directory_window_growth` further down is the OTHER anchor site, and asks for the same
+  # orientation this one does.
   #
-  # `.reverse` AND NEVER `.reverse!`. `serialized_history` maps the same memoized array and
-  # `serialized_history_window` declares `order: "ingested_at_desc,ingest_sequence_desc"` over it;
-  # reversing in place would make the endpoint's own ordering contract a lie, in the same response
-  # body, for every client reading `history`.
+  # The no-mutation rule is structural rather than warned-about: `RunWindow` freezes its loaded
+  # array, and hands back either that frozen array (the orientation the window carries, and
+  # `#runs`) or a fresh copy nobody else holds (the opposite orientation). A caller-side
+  # `reverse!`, `sort!` or `<<` therefore either raises FrozenError at the mutating line or
+  # mutates an unshared copy — in neither case can a consumer reorder the memoized rows. That is
+  # the hazard this comment used to spend a paragraph on (`serialized_history` maps the same
+  # memoized rows under the declared `ingested_at_desc,ingest_sequence_desc` contract, and an
+  # in-place reversal would make that contract a lie in the same response body): it now ends in
+  # an exception, never in a silently reordered response. The reasoning stays because the
+  # contract it protects is still the one every client reads.
   #
   # NO SECOND WINDOW QUERY, and that is deliberate rather than incidental: `history_runs` is
   # materialized once, and both `UnstableTests` and `SlowestTests` document their window as handed
@@ -2625,7 +2651,7 @@ class RepositoryOverview
     return @slowest_tests if defined?(@slowest_tests)
 
     @slowest_tests =
-      requested_branch && SlowestTests.for(repository, history_runs.reverse, branch: requested_branch)
+      requested_branch && SlowestTests.for(repository, history_runs.oldest_first, branch: requested_branch)
   end
 
   # The presenter, or `nil` when no comparison was allowed — memoized, because `show` reads it
@@ -3814,25 +3840,33 @@ class RepositoryOverview
   # rather than `||=`, for the reason `unstable_tests` states above and under the same double read
   # (`show` asks for the window block's `grouped` and then for the rows).
   #
-  # ⭐ THE WINDOW IS HANDED IN REVERSED, AND THAT IS THIS METHOD'S WHOLE SUBTLETY.
-  # `SpecDirectoryWindowGrowth.for` documents its parameter as *"the window, ALREADY LOADED and
-  # OLDEST FIRST"*, takes `runs.last` as its ANCHOR and walks from index 0 for the BASELINE.
-  # `history_runs` is `Repository#recent_test_runs`, ordered `(created_at, id) DESC` — NEWEST first.
-  # Handing it in unreversed does not raise: `runs.last` becomes the OLDEST run, the walk finds a
-  # baseline among the NEWER ones, and every `change` comes back SIGN-FLIPPED — a suite that grew
+  # ⭐ THIS SITE ASKS FOR THE WINDOW OLDEST FIRST, AND THAT IS ITS WHOLE SUBTLETY.
+  # `SpecDirectoryWindowGrowth.for` takes `runs.last` as its ANCHOR and walks from index 0 for the
+  # BASELINE — both ends load-bearing — so it asks `history_runs.oldest_first` by name. The
+  # orientation was decided once, at the load (`recent_test_runs` orders `(created_at, id) DESC` —
+  # NEWEST first — and the window carries that fact), so there is no `.reverse` here to drop; what
+  # this site can still get wrong is ask for the WRONG END, and the failure that buys is worth
+  # pricing: handed the other way the presenter does not raise — it anchors on the OLDEST run,
+  # baselines against a NEWER one, and every `change` comes back SIGN-FLIPPED — a suite that grew
   # reports its areas shrinking, under a block that looks perfectly well-formed. The human panel
-  # avoids this by construction because `Repository#suite_size_trajectory` ends `.to_a.reverse`; this
-  # call site has to do it deliberately.
+  # avoids this by construction because `Repository#suite_size_trajectory` ends `.to_a.reverse`;
+  # this site says which end it wants out loud instead.
   #
-  # The adjacent precedent is what makes it easy to walk into and is NOT a licence: `UnstableTests.for`
-  # documents the same parameter with no ordering clause and is order-indifferent — it reads
-  # `runs.map(&:id)` and groups — so `unstable_tests` above hands `history_runs` straight in and is
-  # right to. This one is not order-indifferent, and the two lines are otherwise identical.
+  # The adjacent precedent is what made it easy to walk into and is NOT a licence: `UnstableTests.for`
+  # is order-indifferent — it reads `runs.map(&:id)` and groups — so `unstable_tests` above hands
+  # the window straight in and is right to. This one is not order-indifferent, and the two lines
+  # are otherwise identical.
   #
-  # `.reverse` AND NEVER `.reverse!`. `serialized_history` maps the same memoized array and
-  # `serialized_history_window` declares `order: "ingested_at_desc,ingest_sequence_desc"` over it;
-  # reversing in place would make the endpoint's own ordering contract a lie, in the same response
-  # body, for every client reading `history`.
+  # The no-mutation rule is structural rather than warned-about: `RunWindow` freezes its loaded
+  # array, and hands back either that frozen array (the orientation the window carries, and
+  # `#runs`) or a fresh copy nobody else holds (the opposite orientation). A caller-side
+  # `reverse!`, `sort!` or `<<` therefore either raises FrozenError at the mutating line or
+  # mutates an unshared copy — in neither case can a consumer reorder the memoized rows. That is
+  # the hazard this comment used to spend a paragraph on (`serialized_history` maps the same
+  # memoized rows under the declared `ingested_at_desc,ingest_sequence_desc` contract, and an
+  # in-place reversal would make that contract a lie in the same response body): it now ends in
+  # an exception, never in a silently reordered response. The reasoning stays because the
+  # contract it protects is still the one every client reads.
   #
   # The branch gate lives HERE, in one place, so the boolean the window serves and the decision that
   # produced it cannot come apart — see `serialized_directory_growth_window` for why an unfiltered
@@ -3841,7 +3875,7 @@ class RepositoryOverview
     return @spec_directory_window_growth if defined?(@spec_directory_window_growth)
 
     @spec_directory_window_growth =
-      requested_branch && SpecDirectoryWindowGrowth.for(history_runs.reverse, branch: requested_branch)
+      requested_branch && SpecDirectoryWindowGrowth.for(history_runs.oldest_first, branch: requested_branch)
   end
 
   # The contract the `branches` catalogue is served under, on the same rule `history_window`

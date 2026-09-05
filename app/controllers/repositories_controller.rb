@@ -451,7 +451,12 @@ class RepositoriesController < ApplicationController
     # panel that fetched "the last thirty runs on this branch" for itself would be its own window, with
     # no structural reason to keep agreeing, on a page where they caption each other's branch — and
     # each would be another copy of a query that is already the page's most carefully bounded read.
-    trajectory_runs = @repository.suite_size_trajectory(@trajectory_run)
+    # Wrapped as a {RunWindow} built `oldest_first` rather than left a bare array, so the ORDER the
+    # `.to_a.reverse` above produced is carried IN the object: every panel below asks the window
+    # for the end it needs (the two anchor sites ask `oldest_first`; the order-indifferent and
+    # order-propagating ones read it as handed) instead of each remembering what order this local
+    # happens to be in.
+    trajectory_runs = RunWindow.oldest_first(@repository.suite_size_trajectory(@trajectory_run))
     @suite_trajectory = SuiteTrajectory.new(runs: trajectory_runs, branch: @trajectory_run&.branch)
     # The slowest examples of the run every panel above names, with the coverage the panel states
     # them to. The first read this application has ever made of `spec_observations` — until those
