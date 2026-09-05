@@ -165,8 +165,8 @@ module GithubHelper
   # POST for the same reason, so this is the affordance agreeing with the gate rather than a second
   # opinion about it: what a reader cannot do, they are told about instead of offered.
   #
-  # One place rather than a branch at each of the three call sites, because three copies of "is the
-  # App configured" is three chances for one of them to keep offering a button that cannot work.
+  # One place rather than a branch at each call site, because every extra copy of "is the App
+  # configured" is another chance for one of them to keep offering a button that cannot work.
   def github_install_button(label = "Connect repositories on GitHub", return_to: nil, variant: :primary)
     return github_app_unconfigured_notice unless SpecGuard::GithubApp.configured?
 
