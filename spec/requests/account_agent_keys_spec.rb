@@ -184,6 +184,28 @@ RSpec.describe "Account agent keys", type: :request do
       expect(response.body).to include("agent_api_key_permissions_keys-manage")
     end
 
+    # `repo.delete` is a STORABLE permission, not an owner-only one — `RepositoryPolicy::CAPABILITIES`
+    # maps `:repo_delete` to the stored string (only `:owner` maps to the `OWNER_ONLY` sentinel),
+    # the policy answers `can?(:repo_delete)` off the row, and `RepositoriesController#destroy`
+    # gates at it for exactly that reason. A member holding it may hand it to a human colleague
+    # through the members form, so this grid must offer it too: subtracting it here would hide a
+    # box the model accepts — the inverse of the over-offer the grid exists to prevent, and it
+    # diverges from the policy on every row shape carrying `repo.delete`. The regression this
+    # guards is a rewrite "simplifying" the union by assuming only owners can hold it.
+    # @intent: { entity: "AgentApiKey", action: "offer repo.delete to a member who holds it", behavior: "a membership row carrying repo.delete is offered the repo.delete checkbox beside view, and no permission the member does not hold", layer: "request" }
+    it "offers repo.delete to a member whose row carries it" do
+      owner = create_user(github_uid: "91008", github_handle: "deletable-owner")
+      repository = create_repository(user: owner, github_full_name: "acme/deletable")
+      create_membership(repository: repository, user: person, permissions: ["view", "repo.delete"])
+
+      get account_path
+
+      expect(response.body).to include("agent_api_key_permissions_view")
+      expect(response.body).to include("agent_api_key_permissions_repo-delete")
+      expect(response.body).not_to include("keys.manage")
+      expect(response.body).not_to include("members.manage")
+    end
+
     # Ownership of ANY accessible repository dominates the union — the positive control above,
     # exercised over a mixed set so the owner branch is taken across the whole offered list and
     # not only beside an otherwise empty one.

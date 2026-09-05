@@ -97,45 +97,6 @@ class AccountsController < ApplicationController
     @github_installations = current_user.github_installations.recent_first
   end
 
-  # THE UNION THE MINT GRID OFFERS — `RepositoryPolicy#grantable_permissions` for every accessible
-  # repository at once, read in ONE pass over `repository_memberships` rather than one query per
-  # repository. The per-repository spelling this replaces built a fresh `RepositoryPolicy` per
-  # accessible repository, and each instance's memoized `find_by` cost one query — the exact cost
-  # `RepositoriesController#key_count_visible?` declines in writing for the same call, with
-  # `shared_permissions` there as the settled one-read alternative. The answer is the union's,
-  # byte for byte; the two rules the policy owns are RESTATED here rather than inherited, because
-  # a hand-rolled union that silently drops either would answer a page the policy never would:
-  #
-  #   * OWNER ⇒ THE WHOLE VOCABULARY. `can?` returns true on `owner?` before consulting any row,
-  #     so a person owning any accessible repository may grant all four. `repo.delete` is
-  #     reachable ONLY this way — it is the OWNER_ONLY capability, so no membership row can
-  #     contribute it and the row branch below never reads it back.
-  #   * MEMBERSHIP IMPLIES `view`. A row holding only `keys.manage` — or holding nothing at all —
-  #     still contributes `view`, because the membership itself grants it
-  #     (`RepositoryPolicy#can?`); this is what keeps the answer honest for a member whose row
-  #     omits "view".
-  #
-  # `Array#&` hands the grid the vocabulary's own order (`PERMISSIONS` on the left) rather than
-  # whatever order the rows happened to produce, so the grid does not reshuffle as memberships
-  # change. The BOUND itself stays per-repository on the model — this union widens only what the
-  # form offers, never what a mint may contain.
-  def grantable_permissions_for(repositories)
-    repository_ids = repositories.map(&:id)
-    return [] if repository_ids.empty?
-
-    return RepositoryMembership::PERMISSIONS.dup if repositories.any? { |r| r.user_id == current_user.id }
-
-    RepositoryMembership::PERMISSIONS &
-      current_user.repository_memberships
-                  .where(repository_id: repository_ids)
-                  .flat_map { |membership|
-                    [RepositoryMembership::VIEW] +
-                      (membership.permissions - [RepositoryMembership::REPO_DELETE])
-                  }
-  end
-
-  private :grantable_permissions_for
-
   # Closes the signed-in person's own account (SPGD-853) — the first writer `users.archived_at`
   # has ever had. SPGD-358 shipped three enforcement points for this state (sign-in refused,
   # live sessions killed, `sgu_` tokens 401'd) and no way to enter it; this action is that way,
@@ -160,5 +121,53 @@ class AccountsController < ApplicationController
     redirect_to root_path,
                 notice: "Your account is closed. You have been signed out, and SpecGuard can no " \
                         "longer sign you in. Nothing of yours was deleted."
+  end
+
+  private
+
+  # THE UNION THE MINT GRID OFFERS — `RepositoryPolicy#grantable_permissions` for every accessible
+  # repository at once, read in ONE pass over `repository_memberships` rather than one query per
+  # repository. The per-repository spelling this replaces built a fresh `RepositoryPolicy` per
+  # accessible repository, and each instance's memoized `find_by` cost one query — the exact cost
+  # `RepositoriesController#key_count_visible?` declines in writing for the same call, with
+  # `shared_permissions` there as the settled one-read alternative. The answer is the union's,
+  # byte for byte; the three rules the policy owns are RESTATED here rather than inherited, because
+  # a hand-rolled union that silently drops any of them would answer a page the policy never would:
+  #
+  #   * OWNER ⇒ THE WHOLE VOCABULARY. `can?` returns true on `owner?` before consulting any row,
+  #     so a person owning any accessible repository may grant all four.
+  #   * MEMBERSHIP IMPLIES `view`. A row holding only `keys.manage` — or holding nothing at all —
+  #     still contributes `view`, because the membership itself grants it
+  #     (`RepositoryPolicy#can?`); this is what keeps the answer honest for a member whose row
+  #     omits "view".
+  #   * A ROW'S STORED PERMISSIONS CONTRIBUTE THEMSELVES — `repo.delete` included. It is a
+  #     storable permission like the other three: `RepositoryPolicy::CAPABILITIES` maps
+  #     `:repo_delete` to the stored string and only `:owner` maps to the `OWNER_ONLY` sentinel,
+  #     so `can?(:repo_delete)` reads the row. That is why `RepositoriesController#destroy` gates
+  #     at `:repo_delete` rather than `:owner` — a member granted it may destroy the owner's
+  #     repository — and why the members form offers it to that same member. Subtracting it here
+  #     would hide a box the model accepts and the membership grid offers: the inverse of the
+  #     over-offer this grid exists to prevent, and just as false to the policy.
+  #
+  # `Array#&` hands the grid the vocabulary's own order (`PERMISSIONS` on the left) rather than
+  # whatever order the rows happened to produce, so the grid does not reshuffle as memberships
+  # change. The BOUND itself stays per-repository on the model — this union widens only what the
+  # form offers, never what a mint may contain.
+  def grantable_permissions_for(repositories)
+    repository_ids = repositories.map(&:id)
+    return [] if repository_ids.empty?
+
+    # The ownership dominance check reads the LOADED set deliberately: the `map(&:id)` above has
+    # already materialized the relation, so this `user_id` scan runs in memory and costs no query.
+    # Reordering the two lines — or handing the method a relation nobody has enumerated — turns
+    # the scan into a second `repository_memberships` read for nothing.
+    return RepositoryMembership::PERMISSIONS.dup if repositories.any? { |r| r.user_id == current_user.id }
+
+    RepositoryMembership::PERMISSIONS &
+      current_user.repository_memberships
+                  .where(repository_id: repository_ids)
+                  .flat_map { |membership|
+                    [RepositoryMembership::VIEW] + membership.permissions
+                  }
   end
 end
