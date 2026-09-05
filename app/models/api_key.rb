@@ -14,17 +14,19 @@ class ApiKey < ApplicationRecord
 
   # What a key is called when nobody chose a name for it.
   #
-  # Here rather than at any one of the three call sites, because all three mint a key the person
-  # never named and the string is what makes those keys recognisably the same thing:
+  # Here rather than at any one of the mint sites, because each mints a key the person never named
+  # and the string is what makes those keys recognisably the same thing:
   # `ApiKeysController#api_key_name`'s default (a browser mint with the name field left blank),
-  # `Api::V1::UserRepositoriesController::FIRST_KEY_NAME` (an agent registering over the API), and
-  # `BulkRegistration`'s per-repository first key (a browser registering a whole organization).
+  # `Api::V1::UserRepositoriesController::FIRST_KEY_NAME` (an agent registering over the API),
+  # `BulkRegistration`'s per-repository first key (a browser registering a whole organization), and
+  # `Api::V1::UserRepositoryApiKeysController#key_name` (an agent minting a subsequent key).
   #
   # It was two literals agreeing by hand until the third caller arrived, and
   # `Api::V1::UserRepositoriesController` already states why the agreement is deliberate: "so a
   # repository registered by an agent and one registered in a browser have identically-named keys
-  # rather than two conventions a person has to learn." Three hand-typed copies is three chances to
-  # change two of them, and nothing in the suite would see the third drift.
+  # rather than two conventions a person has to learn." Every default-naming mint site reads this
+  # constant rather than repeating the literal, so a rename cannot leave one path spelling the name
+  # differently — a hand-typed copy would be exactly the drift nothing in the suite would see.
   DEFAULT_NAME = "Default CI Key"
 
   belongs_to :repository
