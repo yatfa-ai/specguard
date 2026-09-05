@@ -2027,11 +2027,6 @@ class RepositoryOverview
   # returns zero `main` rows on a repository whose ten newest runs are all feature branches, which
   # is precisely what a client was left to do before this. `Repository#recent_test_runs` carries
   # the rest of that argument, and the index it relies on.
-  # The branch predicate is passed INTO the model call, and that placement is the whole feature. The
-  # `WHERE` and the `LIMIT` have to be one query: bounding first and filtering the result is what
-  # returns zero `main` rows on a repository whose ten newest runs are all feature branches, which
-  # is precisely what a client was left to do before this. `Repository#recent_test_runs` carries
-  # the rest of that argument, and the index it relies on.
   #
   # ONE window read, memoized, and its ORIENTATION IS THE QUERY'S: `recent_test_runs` orders
   # `(created_at, id) DESC` — newest first — so the rows are wrapped `RunWindow.newest_first` and
@@ -2633,12 +2628,16 @@ class RepositoryOverview
   # `spec_directory_window_growth` further down is the OTHER anchor site, and asks for the same
   # orientation this one does.
   #
-  # The no-mutation rule is now structural rather than warned-about: `RunWindow`'s accessors never
-  # `reverse!` — the mismatched orientation comes back as a fresh copy — so the hazard this comment
-  # used to spend a paragraph on (`serialized_history` maps the same memoized rows under the
-  # declared `ingested_at_desc,ingest_sequence_desc` contract, and an in-place reversal would make
-  # that contract a lie in the same response body) has nowhere to happen. The reasoning stays
-  # because the contract it protects is still the one every client reads.
+  # The no-mutation rule is structural rather than warned-about: `RunWindow` freezes its loaded
+  # array, and hands back either that frozen array (the orientation the window carries, and
+  # `#runs`) or a fresh copy nobody else holds (the opposite orientation). A caller-side
+  # `reverse!`, `sort!` or `<<` therefore either raises FrozenError at the mutating line or
+  # mutates an unshared copy — in neither case can a consumer reorder the memoized rows. That is
+  # the hazard this comment used to spend a paragraph on (`serialized_history` maps the same
+  # memoized rows under the declared `ingested_at_desc,ingest_sequence_desc` contract, and an
+  # in-place reversal would make that contract a lie in the same response body): it now ends in
+  # an exception, never in a silently reordered response. The reasoning stays because the
+  # contract it protects is still the one every client reads.
   #
   # NO SECOND WINDOW QUERY, and that is deliberate rather than incidental: `history_runs` is
   # materialized once, and both `UnstableTests` and `SlowestTests` document their window as handed
@@ -3858,12 +3857,16 @@ class RepositoryOverview
   # the window straight in and is right to. This one is not order-indifferent, and the two lines
   # are otherwise identical.
   #
-  # The no-mutation rule is now structural rather than warned-about: `RunWindow`'s accessors never
-  # `reverse!` — the mismatched orientation comes back as a fresh copy — so the hazard this comment
-  # used to spend a paragraph on (`serialized_history` maps the same memoized rows under the
-  # declared `ingested_at_desc,ingest_sequence_desc` contract, and an in-place reversal would make
-  # that contract a lie in the same response body) has nowhere to happen. The reasoning stays
-  # because the contract it protects is still the one every client reads.
+  # The no-mutation rule is structural rather than warned-about: `RunWindow` freezes its loaded
+  # array, and hands back either that frozen array (the orientation the window carries, and
+  # `#runs`) or a fresh copy nobody else holds (the opposite orientation). A caller-side
+  # `reverse!`, `sort!` or `<<` therefore either raises FrozenError at the mutating line or
+  # mutates an unshared copy — in neither case can a consumer reorder the memoized rows. That is
+  # the hazard this comment used to spend a paragraph on (`serialized_history` maps the same
+  # memoized rows under the declared `ingested_at_desc,ingest_sequence_desc` contract, and an
+  # in-place reversal would make that contract a lie in the same response body): it now ends in
+  # an exception, never in a silently reordered response. The reasoning stays because the
+  # contract it protects is still the one every client reads.
   #
   # The branch gate lives HERE, in one place, so the boolean the window serves and the decision that
   # produced it cannot come apart — see `serialized_directory_growth_window` for why an unfiltered

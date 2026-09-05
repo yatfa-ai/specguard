@@ -56,13 +56,16 @@ RSpec.describe RunWindow do
     end
   end
 
-  # THE LOAD-BEARING PIN. `.reverse!` at either accessor would flip the source array in place and
-  # corrupt every other reader of the window — the API's `history` block maps the same memoized
-  # array under a declared `ingested_at_desc` contract, so an in-place reversal there would make
-  # the endpoint's own ordering contract a lie in the same response body. These examples hold
-  # that line three ways: the source is unchanged after asking, the reversed answer is a distinct
-  # object, and asking twice in a row keeps answering the same thing (which a flip-flopping
-  # `reverse!` would not).
+  # THE LOAD-BEARING PIN. The hazard has two directions and both are held. Inside the accessors:
+  # `.reverse!` would flip the source array in place and corrupt every other reader of the window —
+  # the API's `history` block maps the same memoized array under a declared `ingested_at_desc`
+  # contract, so an in-place reversal there would make the endpoint's own ordering contract a lie
+  # in the same response body. And at the CALL SITE: the accessor whose orientation the window
+  # carries hands back the memoized array ITSELF, so a caller "tidying" what it was handed
+  # (`reverse!`, `sort!`, `<<`, `shift`) would corrupt the same rows through the same alias. The
+  # first direction is held by the `.reverse`-not-`reverse!` discipline below; the second is
+  # structural — the loaded array is frozen at construction, so a mutating caller gets a
+  # FrozenError at its own line rather than a window that silently reorders under its readers.
   describe "never mutates the rows it was built from" do
     # @intent: { entity: "RunWindow", action: "hand back either orientation", behavior: "asking for the orientation the window does not carry returns a fresh copy and leaves the source array in its original order", layer: "unit" }
     it "returns a fresh reversed copy and leaves the source order untouched" do
@@ -81,6 +84,50 @@ RSpec.describe RunWindow do
       expect(newest_first_rows).to eq(%w[newest middle oldest])
       expect(oldest_first_window.runs).to eq(%w[oldest middle newest])
       expect(newest_first_window.runs).to eq(%w[newest middle oldest])
+    end
+  end
+
+  # The caller-mutation direction of the same hazard, now closed by construction: the loaded array
+  # is frozen at construction, so a consumer that "tidies" what a `RunWindow` hands back — the
+  # exact accident a remembered `.reverse` invited — gets a FrozenError at its own line instead of
+  # reordering the memoized window under every other reader of it. Both aliased accessors and
+  # `#runs` are pinned; the copied accessor is pinned the other way, because its freshness is the
+  # OTHER half of the guarantee — mutating a reversed copy is allowed and reaches nothing.
+  describe "hands back rows a caller cannot corrupt" do
+    # @intent: { entity: "RunWindow", action: "hand back either orientation", behavior: "mutating the array handed back in the window's own orientation raises FrozenError and leaves the window answering its original order", layer: "unit" }
+    it "freezes the array handed back in the orientation the window carries" do
+      oldest_first_window = described_class.oldest_first(oldest_first_rows)
+      newest_first_window = described_class.newest_first(newest_first_rows)
+
+      expect { oldest_first_window.oldest_first.reverse! }.to raise_error(FrozenError)
+      expect { newest_first_window.newest_first.reverse! }.to raise_error(FrozenError)
+
+      expect(oldest_first_window.oldest_first).to eq(%w[oldest middle newest])
+      expect(newest_first_window.newest_first).to eq(%w[newest middle oldest])
+    end
+
+    # `#runs` is the same loaded array under a different name — the order-propagating reader's
+    # accessor — so it carries the same freeze.
+    # @intent: { entity: "RunWindow", action: "hand back the rows as handed", behavior: "mutating #runs raises FrozenError; the rows the window answers stay in their constructed orientation", layer: "unit" }
+    it "freezes #runs against in-place mutation" do
+      window = described_class.oldest_first(oldest_first_rows)
+
+      expect { window.runs << "sneaky" }.to raise_error(FrozenError)
+      expect(window.runs).to eq(%w[oldest middle newest])
+    end
+
+    # The copy direction is unshared, and that is the guarantee pinned here: a caller mutating the
+    # reversed copy is mutating an array nobody else holds, so it neither raises nor reaches the
+    # window.
+    # @intent: { entity: "RunWindow", action: "hand back either orientation", behavior: "mutating the reversed copy neither raises nor reaches the window — the copy is fresh and unshared", layer: "unit" }
+    it "leaves the reversed copy unshared with the window" do
+      oldest_first_window = described_class.oldest_first(oldest_first_rows)
+
+      copy = oldest_first_window.newest_first
+      copy.reverse!
+
+      expect(oldest_first_window.newest_first).to eq(%w[newest middle oldest])
+      expect(oldest_first_window.oldest_first).to eq(%w[oldest middle newest])
     end
   end
 
