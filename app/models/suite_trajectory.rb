@@ -33,11 +33,15 @@
 # run is a one-shard row, and anchoring on it would withhold the twelve complete runs and plot the
 # fragments. The cohort rule inverts correctly there — the fragment is a cohort of one and loses.
 class SuiteTrajectory
-  # `runs` oldest-first, each already primed with its shard count (see
-  # `Repository#suite_size_trajectory`). `branch` is passed rather than read off the runs so an
-  # empty series can still name the branch it found nothing on.
+  # `runs` is handed in as a {RunWindow} built `RunWindow.oldest_first(...)`, each run already
+  # primed with its shard count (see `Repository#suite_size_trajectory`); the orientation is asked
+  # for by name ({RunWindow#oldest_first}) rather than remembered, so a window whose rows arrived
+  # newest first cannot be handed here with only the prose the wiser. A bare array is still
+  # accepted and read as oldest first — the contract this parameter carried before the type
+  # existed. `branch` is passed rather than read off the runs so an empty series can still name
+  # the branch it found nothing on.
   def initialize(runs:, branch:)
-    @runs = Array(runs)
+    @runs = RunWindow.wrap(runs).oldest_first
     @branch = branch
   end
 
