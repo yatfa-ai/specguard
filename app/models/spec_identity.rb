@@ -274,9 +274,11 @@ class SpecIdentity < ApplicationRecord
   # == What this is NOT
   #
   # Not `hnsw.ef_search`, not `hnsw.iterative_scan`, and not a recall decision of any kind. Those
-  # decide how HARD the index looks and are handed to **SPGD-72** by name at {Ingest::IdentityResolver#nearest};
-  # nothing here touches them, and this setting changes only WHICH plan is chosen, never what a
-  # chosen plan returns. Left alone, the recall question stays exactly where that method put it.
+  # decide how HARD the index looks: `iterative_scan` is issued — not decided — at
+  # {SpecIdentity.with_hnsw_planner_setup}, the one seam both tenant-filtered ANN reads on this
+  # table go through, and `ef_search` is issued nowhere at all, running at pgvector's default.
+  # Nothing here touches either, and this setting changes only WHICH plan is chosen, never what a
+  # chosen plan returns. The recall decision itself stays **SPGD-72's**.
   #
   # Not `enable_sort = off` or any other `enable_*` switch either, and deliberately. Those assert
   # that the planner is wrong; these two corrections assert that it was misinformed, and then inform
@@ -482,45 +484,97 @@ class SpecIdentity < ApplicationRecord
       ORDER BY a.id, b.distance, b.neighbour_id
     SQL
 
-    # A transaction of its own, because the corrected price is transaction-scoped and outside one
-    # Postgres would discard it — the read would silently revert to the plan that takes 69 seconds.
-    # Read-only, so it costs a BEGIN/COMMIT pair and nothing else.
-    #
-    # == And the price is restored, because the scope is narrower than it looks
-    #
-    # `SET LOCAL` binds to the TRANSACTION, not to the block that issued it, and
-    # `ActiveRecord::Base.transaction` JOINS an ambient transaction rather than opening its own. So
-    # a caller that wraps this read in a transaction of theirs would carry `cpu_operator_cost = 2.56`
-    # into every statement they ran afterwards — re-pricing queries that have no 1024-dimension
-    # operator anywhere in them, from a method they called for its return value. `requires_new:` is
-    # not the fix either: a savepoint is not a new transaction as far as a GUC is concerned.
-    #
-    # So the previous value is read first and put back after, through `set_config(…, true)` — the
-    # function spelling of `SET LOCAL`, which takes the value as a bind instead of as string
-    # interpolation and does not warn when there is no transaction to be local to. The restore is on
-    # the success path only, and that is sufficient rather than an oversight: a statement that
-    # raised has aborted the transaction, and an aborted transaction can only be rolled back, which
-    # discards the setting outright.
-    previous_cost = connection.select_value("SHOW cpu_operator_cost")
+    # The transaction, the recall directive and the price bookends are all
+    # {SpecIdentity.with_hnsw_planner_setup}'s — this site answers the seam's one question.
+    # `correct_operator_price: true`, because this read needs BOTH corrections for its plan:
+    # without the price Postgres never chooses the index for this shape at all (the 2×2 at
+    # {VECTOR_OPERATOR_COST}), the seam's directive would be inert on the sort plan it falls
+    # back to, and the read would silently revert to the 64.8-second all-pairs sort.
+    with_hnsw_planner_setup(correct_operator_price: true) do
+      connection.select_all(sql).cast_values
+    end
+  end
+
+  # The planner setup for a tenant-filtered ANN read on this table, at ONE seam (SPGD-958). Both
+  # vector reads on `spec_identities` come through here — {.near_duplicate_pairs_in} and
+  # {Ingest::IdentityResolver#nearest} — so a correction designed once lands on every read at
+  # once, instead of arriving at each site on the day an unrelated PR goes red. That is literally
+  # how the recall directive reached the second site: SPGD-375 installed it on
+  # {Ingest::IdentityResolver#nearest} (2026-08-28, chosen from a measured grid — recall 0.91 →
+  # 1.000 at the 20k-per-tenant design point, PG 17.9 / pgvector 0.8.6), and SPGD-879 installed
+  # the SAME directive on `.near_duplicate_pairs_in` a day later, as a CI-failure fix on main at
+  # c192b15 (run 33222056930) — `repository_near_duplicates_spec.rb` saw cluster_count 0 and 7
+  # of 10 pairs, a comment-only commit, unreproducible locally across three full-suite seeds —
+  # rather than when the correction was designed. Same shape as `SIGHTING_NOT_OLDER`: the model
+  # owns the rule, callers get a shaped seam rather than formatting their own copy.
+  #
+  # == The recall directive
+  #
+  # The HNSW descent applies `repository_id` AFTER the scan, so whenever the planner hands a
+  # tenant-filtered read the index — a plan choice that moves with catalog statistics (the
+  # poisoning `spec/support/relation_statistics.rb` documents at length) and with pgvector
+  # version — a small tenant's qualifying neighbours can fall outside the `hnsw.ef_search`
+  # candidates. The directive — `iterative_scan = 'relaxed_order'`, issued as `SET LOCAL` on the
+  # read's own transaction and before its statement, so it is scoped to that statement and
+  # undone at commit — iterates past the first candidate page until the filters are satisfied,
+  # measured at recall 1.000 on SPGD-375's grid, and it is inert whenever the planner declines
+  # the index, which is the plan a small tenant honestly stat'ed gets. The recall DECISION itself
+  # — `relaxed_order` vs `strict_order`, and `ef_search` — remains **SPGD-72's**; this seam only
+  # fixes where the decision is applied, one executable line, and no read re-derives it.
+  #
+  # == The operator price is the caller's answer, named at the call site
+  #
+  # `correct_operator_price` exists so that "does this read ALSO get the {VECTOR_OPERATOR_COST}
+  # correction?" has one visible answer per call instead of being a property of which method a
+  # maintainer happened to edit. Today the answers differ:
+  #
+  # * `.near_duplicate_pairs_in` answers `true`: its plan choice needs BOTH corrections, price
+  #   and count (see its comment and the constant's).
+  # * `#nearest` answers `false`, and that is a preservation, not an oversight: it is the setup
+  #   SPGD-375 measured and installed — directive only — and this seam exists to move the setup,
+  #   not to change it. Whether the price SHOULD also apply there is a real question this slice
+  #   does not answer, because unlike the directive the price can change WHICH plan that query
+  #   gets and would be a behaviour change needing its own measurement. If it is ever answered,
+  #   it is answered at that one call site — not by a second hand-rolled setup.
+  #
+  # == Scope mechanics, and why the bookends are shaped the way they are
+  #
+  # A transaction of its own, because the corrections are transaction-scoped and outside one
+  # Postgres would discard them. Read-only reads, so it costs a BEGIN/COMMIT pair and nothing
+  # else.
+  #
+  # `SET LOCAL` binds to the TRANSACTION, not to the block that issued it, and
+  # `ActiveRecord::Base.transaction` JOINS an ambient transaction rather than opening its own. So
+  # a caller that wraps a read in a transaction of theirs would carry this read's settings into
+  # every statement they ran afterwards — `cpu_operator_cost = 2.56` re-pricing queries that
+  # have no 1024-dimension operator anywhere in them, from a method they called for its return
+  # value, and the `iterative_scan` value riding to the OUTER transaction's COMMIT. That ride is
+  # harmless so far as it goes — `iterative_scan` only alters how an HNSW scan gathers
+  # candidates, and neither caller's surrounding statements are vector scans — but it is why
+  # this seam opens a transaction of its own whenever nothing outer holds one. `requires_new:` is
+  # not the fix either: a savepoint is not a new transaction as far as a GUC is concerned.
+  #
+  # So the price's previous value is read first and put back after, through `set_config(…, true)`
+  # — the function spelling of `SET LOCAL`, which takes the value as a bind instead of as string
+  # interpolation and does not warn when there is no transaction to be local to. The restore is
+  # on the success path only, and that is sufficient rather than an oversight: a statement that
+  # raised has aborted the transaction, and an aborted transaction can only be rolled back, which
+  # discards the setting outright.
+  #
+  # @param correct_operator_price [Boolean] whether the read also gets the {VECTOR_OPERATOR_COST}
+  #   plan correction for the transaction's duration — see "The operator price" above for who
+  #   answers yes and why.
+  # @return [Object] whatever the block returns — the pair rows for {.near_duplicate_pairs_in},
+  #   the nearest identity for {Ingest::IdentityResolver#nearest}.
+  def self.with_hnsw_planner_setup(correct_operator_price:)
+    previous_cost = connection.select_value("SHOW cpu_operator_cost") if correct_operator_price
 
     transaction do
-      set_operator_cost(VECTOR_OPERATOR_COST)
-      # The recall mitigation {Ingest::IdentityResolver#nearest} established (SPGD-375), for the
-      # same exposure on this read: the HNSW descent applies `repository_id` AFTER the scan, so
-      # whenever the planner hands the LATERAL the index (a plan choice that moves with catalog
-      # statistics — the poisoning `spec/support/relation_statistics.rb` documents at length —
-      # and with pgvector version), a small tenant's qualifying neighbours can fall outside the
-      # `hnsw.ef_search` candidates and the cluster under-reports. `relaxed_order` iterates past
-      # the first candidate page until the filters are satisfied — measured at recall 1.000 on
-      # the resolver's own grid — and it is inert whenever the planner declines the index, which
-      # is the plan a small tenant honestly stat'ed gets. Observed failing in CI exactly this
-      # way on main at c192b15 (run 33222056930): `repository_near_duplicates_spec.rb` saw
-      # cluster_count 0 and 7 of 10 pairs, a comment-only commit, unreproducible locally across
-      # three full-suite seeds — the intermittent shape stats poisoning produces.
+      set_operator_cost(VECTOR_OPERATOR_COST) if correct_operator_price
       connection.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
-      rows = connection.select_all(sql).cast_values
-      set_operator_cost(previous_cost)
-      rows
+      result = yield
+      set_operator_cost(previous_cost) if correct_operator_price
+      result
     end
   end
 
