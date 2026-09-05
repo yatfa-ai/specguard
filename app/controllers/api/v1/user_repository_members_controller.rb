@@ -24,7 +24,7 @@
 # ## What is deliberately NOT here
 #
 # `keys_minted`. The web page gates that disclosure on `keys.manage` (see
-# `MembershipsController#keys_minted_by`); this read answers memberships to a `members.manage`
+# `MintedKeyCounts#keys_minted_by`); this read answers memberships to a `members.manage`
 # holder and nothing more — the two permissions are independent, and a viewer who may not know
 # how many credentials exist on the repository is told nothing, not told less.
 class Api::V1::UserRepositoryMembersController < Api::BaseController

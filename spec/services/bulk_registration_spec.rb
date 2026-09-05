@@ -573,7 +573,7 @@ RSpec.describe BulkRegistration do
 
     # Attribution has no second chance. `ApiKeysController#destroy` is a hard `destroy!` with no
     # audit row, so a key minted NULL is NULL forever: it renders "Unknown" in
-    # `repositories/_api_keys` and silently undercounts `MembershipsController#keys_minted_by`, the
+    # `repositories/_api_keys` and silently undercounts `MintedKeyCounts#keys_minted_by`, the
     # query behind the warning shown when somebody's access is revoked. This service holds `user`,
     # and that is exactly who minted it.
     # @intent: { entity: "BulkRegistration", action: "mint first keys", behavior: "every key's created_by_user_id is the submitting user, never nil", layer: "unit" }

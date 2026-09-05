@@ -358,7 +358,13 @@ RSpec.describe "Repository sharing", type: :request do
   describe "which controls repositories#show renders" do
     let!(:api_key) { repository.api_keys.create!(name: "CI") }
 
-    # Each control, identified by a marker that only appears when it actually rendered.
+    # Each control, identified by a marker that only appears when it actually rendered. The
+    # members marker is quote-anchored, and that is load-bearing rather than cosmetic: the Leave
+    # control's form action (`…/members/leave`) renders to every non-owner member, and an
+    # unanchored `include?` would read that action as the Members link — telling every member
+    # example the page offered a members-page affordance it refuses. The quote cannot match the
+    # leave action, whose path continues "/leave" after "members"; it matches the link's own
+    # `href="…"` and nothing else on the page.
     def rendered_controls
       {
         rename: response.body.include?(edit_repository_path(repository)),
@@ -366,7 +372,7 @@ RSpec.describe "Repository sharing", type: :request do
         new_key: response.body.include?("New API key"),
         revoke: response.body.include?(repository_api_key_path(repository, api_key)),
         key_inventory: response.body.include?(api_key.token_hint),
-        members: response.body.include?(repository_members_path(repository))
+        members: response.body.include?("\"#{repository_members_path(repository)}\"")
       }
     end
 
@@ -417,6 +423,167 @@ RSpec.describe "Repository sharing", type: :request do
       expect(rendered_controls).to eq(
         rename: false, remove: true, new_key: false, revoke: false, key_inventory: false, members: false
       )
+    end
+  end
+
+  # The Leave control (SPGD-838) — the acting half of the "Your access" row. SPGD-185 established
+  # that this page must tell a member what they hold; the unstated corollary is that one of the
+  # things every member holds is the right to give it up, and until now no surface rendered that
+  # control — so `held_access_description`'s closing sentence was quietly false for exactly one
+  # control. These examples pin the two halves that live on THIS page: that the control renders
+  # for exactly the population the row renders for (every non-owner, whatever their grant), and
+  # what its dialog says.
+  #
+  # The action's own behavior — session resolution, the 404s, what survives afterwards — is pinned
+  # in spec/requests/repository_members_spec.rb, beside the `#destroy` examples it mirrors.
+  describe "the Leave control" do
+    # The dialog lives in the Leave form's own HTML attribute (turbo_confirm), so the whole
+    # sentence arrives escaped; like the Remove examples below, assertions read the unescaped copy.
+    # Anchored on the form whose ACTION is the leave path, and that anchor is load-bearing: the
+    # owner's page renders a second confirm (Remove) and the members page a third (Revoke), so a
+    # first-match over the page would read whichever of those rendered first. Returns nil when no
+    # Leave form is present — the owner's case, asserted below as absence.
+    def leave_dialog
+      action = leave_repository_members_path(repository)
+      form_tag = response.body[/<form[^>]*action="#{Regexp.escape(action)}"[^>]*>/]
+      return nil if form_tag.nil?
+
+      confirm = form_tag[/data-turbo-confirm="([^"]*)"/, 1]
+      CGI.unescapeHTML(confirm.to_s).squish
+    end
+
+    def leave_dialog!
+      dialog = leave_dialog
+      raise "no Leave dialog rendered on the page" if dialog.nil? || !dialog.start_with?("Leave acme/billing-service?")
+
+      dialog
+    end
+
+    # Every non-owner member holds this control — that is the point, and the reason the assertion
+    # is a `view`-only member rather than a powerful one. The dialog is the zero-key wording, since
+    # the viewer holds no `keys.manage` and `keys_minted_by` gates before any query: a dialog that
+    # mentioned keys to a viewer who may not know the number would break the disclosure rule this
+    # page already keeps for the whole API keys panel.
+    # @intent: {"entity": "RepositoryMembership", "action": "render leave control", "behavior": "a view-only member's page carries the leave form action and a confirm dialog naming no keys, and the members link is still absent", "layer": "request"}
+    it "renders Leave to a view-only member, with a dialog that mentions keys not at all" do
+      sign_in_as_member(%w[view])
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include(leave_repository_members_path(repository))
+      expect(leave_dialog!).to eq(
+        "Leave acme/billing-service? You will lose access immediately, and only an owner can add you back."
+      )
+      # The dialog is not merely keys-free here but the page must not grow a second, keys-quoting
+      # one: a `not_to include` on the shared disclosure phrase is what tells the two apart.
+      expect(response.body).not_to include("will keep authenticating")
+    end
+
+    # The control ends the reader's own access, so the person it renders for is exactly the person
+    # with a membership row — and the owner has none, structurally (`user_is_not_the_owner`). They
+    # also hold every capability implicitly and the "Owner" row already names them, so a control
+    # here would be an affordance for an act they cannot perform: there is nothing to leave.
+    # @intent: {"entity": "RepositoryMembership", "action": "withhold leave from owner", "behavior": "the owner's page renders no leave form action and no leave dialog", "layer": "request"}
+    it "renders no Leave control on the owner's own page" do
+      repository
+      sign_in_via_github
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).not_to include(leave_repository_members_path(repository))
+      expect(leave_dialog).to be_nil
+    end
+
+    # The leaver who minted keys is entitled to the same count the owner's Revoke dialog quotes,
+    # revoiced in the second person and routed through the same `minted_keys_agreement`. ONE key,
+    # deliberately: the plural is already pinned on the owner side, and the singular is where a
+    # hand-rolled agreement drifts ("1 API keys"). The sentence also names an OWNER as the revoker,
+    # not the leaver — the moment the row is gone they can no longer open the panel that holds the
+    # lever, so "until you revoke them" would promise an affordance the next page does not have.
+    # @intent: {"entity": "RepositoryMembership", "action": "disclose minted keys on leave", "behavior": "a keys.manage member who minted one key reads the singular keys warning in the leave dialog and in the flash after leaving", "layer": "request"}
+    it "tells a keys.manage leaver their key keeps authenticating, in dialog and flash" do
+      membership = sign_in_as_member(%w[view keys.manage])
+      repository.api_keys.create!(name: "CI", created_by_user: membership.user)
+
+      get repository_path(repository)
+
+      expect(leave_dialog!).to eq(
+        "Leave acme/billing-service? You will lose access immediately, and only an owner can add " \
+        "you back. The 1 API key you minted will keep authenticating until an owner revokes it."
+      )
+
+      delete leave_repository_members_path(repository)
+
+      expect(flash[:notice]).to eq(
+        "You no longer have access to acme/billing-service. The 1 API key you minted is still " \
+        "live — ask an owner to revoke it in the repository's API keys panel."
+      )
+    end
+  end
+
+  # The action behind the control, exercised from the member's own session: leaving really does
+  # end the access, the page they land on exists, and no submitted parameter can name whose row
+  # goes. (The refusal shapes — owner, non-member, cross-repository — are pinned beside `#destroy`
+  # in spec/requests/repository_members_spec.rb, where the rest of that controller's failures live.)
+  describe "leaving the shared repository" do
+    # The headline: a member holding only `view` — the population for which this whole ticket
+    # exists — can end their own access from a surface that never asked them for `members.manage`.
+    # The redirect is the destination `#destroy`'s self-revoke arm already reasoned about, and the
+    # two gets after it are the "really is gone afterwards" shape the revoke examples use: the row
+    # going away proves nothing on its own, because access is decided by the policy, not the table.
+    # @intent: {"entity": "RepositoryMembership", "action": "leave shared repository", "behavior": "a view-only member DELETEing the leave path drops RepositoryMembership.count by one, is redirected to the repositories index, and the repository is absent from that page and answers 404 afterwards", "layer": "request"}
+    it "lets a view-only member end their own access, and the repository is really gone afterwards" do
+      sign_in_as_member(%w[view])
+
+      expect {
+        delete leave_repository_members_path(repository)
+      }.to change(RepositoryMembership, :count).by(-1)
+
+      expect(response).to redirect_to(repositories_path)
+      expect(flash[:notice]).to eq("You no longer have access to acme/billing-service.")
+
+      # The page they land on exists — leaving must not dead-end. (The flash naming the repository
+      # is expected here; it IS the goodbye.)
+      follow_redirect!
+      expect(response).to have_http_status(:ok)
+
+      # And the access really went with the row: a fresh index (the flash now gone) renders no
+      # card for it, and the repository itself answers 404. This is the "really is gone afterwards"
+      # shape the revoke examples use — the row going away proves nothing on its own, because
+      # access is decided by the policy, not the table.
+      get repositories_path
+      expect(response.body).not_to include("acme/billing-service")
+
+      get repository_path(repository)
+      expect(response).to have_http_status(:not_found)
+    end
+
+    # The structural guarantee, pinned from the outside: the route carries no id and the action
+    # reads none, so NO parameter — under any name — can make the request destroy anybody else's
+    # row. What the caller's own row going away proves is that the action still did its own job;
+    # what the victim row surviving proves is that the smuggled ids were never consulted.
+    # @intent: {"entity": "RepositoryMembership", "action": "ignore submitted identity", "behavior": "a member DELETEing leave with another member's row id under several parameter names destroys only their own row and the named row survives untouched", "layer": "request"}
+    it "destroys only the session's row, however another member's id is smuggled in" do
+      own_membership = sign_in_as_member(%w[view])
+      victim = create_membership(
+        repository: repository,
+        user: create_user(github_uid: "7666", github_handle: "victim"),
+        permissions: %w[view]
+      )
+
+      expect {
+        delete leave_repository_members_path(repository),
+               params: { id: victim.id, membership_id: victim.id, membership: { id: victim.id } }
+      }.to change(RepositoryMembership, :count).by(-1)
+
+      expect(response).to redirect_to(repositories_path)
+      # Whose row went: the session's — not the one every parameter named.
+      expect(RepositoryMembership.exists?(own_membership.id)).to be(false)
+      # Whose row did not: the named one, byte for byte what it was.
+      expect(RepositoryMembership.exists?(victim.id)).to be(true)
+      expect(victim.reload.permissions).to eq(%w[view])
     end
   end
 
@@ -515,7 +682,7 @@ RSpec.describe "Repository sharing", type: :request do
   # matrix is for *controls*, things that 403 if they render ungated. This is a badge — it grants
   # nothing and 403s nowhere. What it discloses is who was removed from this repository, which is a
   # `members.manage` fact, so it is gated on `members.manage` even though the panel it sits in is
-  # gated on `keys.manage`. That is MembershipsController#keys_minted_by's rule applied
+  # gated on `keys.manage`. That is MintedKeyCounts#keys_minted_by's rule applied
   # symmetrically: the members page withholds a key count from a `members.manage`-only viewer, so
   # the keys panel withholds membership status from a `keys.manage`-only one. Both degrade to
   # silence rather than to a hedge.

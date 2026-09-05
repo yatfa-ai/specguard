@@ -37,7 +37,7 @@ class ApiKey < ApplicationRecord
 
   # The retirement split, named once and used everywhere a caller needs one side of it. NO
   # `default_scope` — the distinction exists precisely so each reader can pick a side and say so,
-  # and a default would silently flip `authenticate`, `MembershipsController#keys_minted_by` and
+  # and a default would silently flip `authenticate`, `MintedKeyCounts#keys_minted_by` and
   # every future reader without any of them naming the choice. `revoked_at` is written by `revoke!`
   # and never cleared: a revoked key cannot come back.
   scope :live, -> { where(revoked_at: nil) }
