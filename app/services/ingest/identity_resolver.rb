@@ -1954,21 +1954,20 @@ module Ingest
     # recall directive from {SpecIdentity.with_hnsw_planner_setup} — issued on the read's own
     # transaction, before the statement, scoped to it and undone at commit; a global `hnsw.*`
     # change would tax every other vector consumer for a fix only this query needs. On the same
-    # grid: `iterative_scan =
-    # relaxed_order` at stock `ef_search` returns recall **1.000**. Raising `ef_search` to 200
-    # also reaches 1.000, and is not preferred because it buys the same recall for the same
-    # latency (~148 ms/query against ~7.9 unmitigated) while making EVERY query dearer at the
-    # index level; iterative scan pays only when the filtered candidate list is short, which is
-    # exactly the under-recall case. What the fix costs on a miss — the axis it was left off for
-    # in the first place — is bounded and symmetric on this corpus (~140 ms miss vs ~138 ms hit
-    # for a large tenant), and it cannot tax the first-ingest run that made the old paragraph
-    # hesitate: a repository's first run inserts into a table its tenant does not yet dominate,
-    # the planner answers small-tenant shapes from the `repository_id` index, and the GUC is inert
-    # on a non-HNSW plan. Unchanged re-ingests never reach this method at all ({#identical_text}
-    # and the digest shortcut return first), so the ~18x per-query cost lands only on the changed
-    # and new tests of an already-large repository. Rerun the grid against a bigger corpus — or
-    # against real Voyage geometry rather than the synthetic cluster corpus the script documents —
-    # before trusting these numbers past 10^5 rows.
+    # grid: `iterative_scan = relaxed_order` at stock `ef_search` returns recall **1.000**. Raising
+    # `ef_search` to 200 also reaches 1.000, and is not preferred because it buys the same recall
+    # for the same latency (~148 ms/query against ~7.9 unmitigated) while making EVERY query dearer
+    # at the index level; iterative scan pays only when the filtered candidate list is short, which
+    # is exactly the under-recall case. What the fix costs on a miss — the axis it was left off for
+    # in the first place — is bounded and symmetric on this corpus (~140 ms miss vs ~138 ms hit for
+    # a large tenant), and it cannot tax the first-ingest run that made the old paragraph hesitate:
+    # a repository's first run inserts into a table its tenant does not yet dominate, the planner
+    # answers small-tenant shapes from the `repository_id` index, and the GUC is inert on a
+    # non-HNSW plan. Unchanged re-ingests never reach this method at all ({#identical_text} and the
+    # digest shortcut return first), so the ~18x per-query cost lands only on the changed and new
+    # tests of an already-large repository. Rerun the grid against a bigger corpus — or against
+    # real Voyage geometry rather than the synthetic cluster corpus the script documents — before
+    # trusting these numbers past 10^5 rows.
     #
     # What it cannot cost is the identical-text case — a moved test, or the same test ingested by
     # two shards. {#identical_text} answers that one before this method is called at all, and

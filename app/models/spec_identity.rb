@@ -274,10 +274,11 @@ class SpecIdentity < ApplicationRecord
   # == What this is NOT
   #
   # Not `hnsw.ef_search`, not `hnsw.iterative_scan`, and not a recall decision of any kind. Those
-  # decide how HARD the index looks and are issued by name at {SpecIdentity.with_hnsw_planner_setup},
-  # the one seam both tenant-filtered ANN reads on this table go through; nothing here touches
-  # them, and this setting changes only WHICH plan is chosen, never what a chosen plan returns.
-  # The recall decision itself stays **SPGD-72's**.
+  # decide how HARD the index looks: `iterative_scan` is issued — not decided — at
+  # {SpecIdentity.with_hnsw_planner_setup}, the one seam both tenant-filtered ANN reads on this
+  # table go through, and `ef_search` is issued nowhere at all, running at pgvector's default.
+  # Nothing here touches either, and this setting changes only WHICH plan is chosen, never what a
+  # chosen plan returns. The recall decision itself stays **SPGD-72's**.
   #
   # Not `enable_sort = off` or any other `enable_*` switch either, and deliberately. Those assert
   # that the planner is wrong; these two corrections assert that it was misinformed, and then inform
