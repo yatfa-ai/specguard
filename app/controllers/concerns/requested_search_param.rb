@@ -13,8 +13,9 @@
 # and `?q[a]=b` to `ActionController::Parameters`. On THIS parameter the hazard is the one the
 # spec-file sibling carries — an Array reaching an `ILIKE` would not raise; coerced somewhere it
 # would answer a question nobody asked, on a URL anyone can type into the bar. Anything that is not
-# a String is treated as no ask, the same answer an absent param gets. All three shapes are
-# pinned; see `spec/support/shared_examples/malformed_search_param.rb`.
+# a String is treated as no ask, the same answer an absent param gets. All three container shapes
+# are pinned, beside the blank string the `.presence` below settles the same way; see
+# `spec/support/shared_examples/malformed_search_param.rb`.
 #
 # `.presence` SECOND, so `?q=` — a browser's unfilled search field — is not an ask. An ask has to
 # carry text to find rather than merely be present in the URL: `WHERE github_full_name ILIKE '%%'`

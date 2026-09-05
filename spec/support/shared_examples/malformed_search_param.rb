@@ -4,8 +4,10 @@
 # for every surface that reads the parameter.
 #
 # `?q[]=x` is an Array, `?q[a]=b` is an `ActionController::Parameters` and `?q[][a]=b` is an Array
-# of them. None is a String, and the single guard they all land on is
-# `RequestedSearchParam#requested_search`.
+# of them. None is a String. `?q=` — a browser's unfilled search field — IS a String and is a
+# fourth shape rather than a fifth container: it is caught by the `.presence` half of the same
+# guard, because an ask has to carry text to find rather than merely be present in the URL. All
+# four land on `RequestedSearchParam#requested_search`, which is why they are pinned together.
 #
 # Its own file rather than a widening of any sibling `malformed_*_param.rb`, and one file per
 # parameter is the point of the split — each doc comment governs ONE parameter, and folding a
@@ -35,15 +37,16 @@
 # The host method is run as an ordinary example-group method, so its `let`s, its `before` hooks and
 # its own fixture helpers are all in scope. It must assert the NO-ASK answer specifically — every
 # card, default order — not merely a 200: a guard that swallowed every value would also answer 200
-# on all three shapes, and only the positive-path example beside the host group — the one that
+# on every shape here, and only the positive-path example beside the host group — the one that
 # proves `?q=<text>` IS honoured — separates the two. Keep that example beside the host group.
 RSpec.shared_examples "a surface that treats a malformed search parameter as no ask" do
   [
     ["an array", { q: ["acme/billing-service"] }],
     ["a nested hash", { q: { a: "b" } }],
-    ["an array of hashes", { q: [{ a: "b" }] }]
+    ["an array of hashes", { q: [{ a: "b" }] }],
+    ["a blank string", { q: "" }]
   ].each do |shape, query|
-    # @intent: { entity: "RequestedSearchParam", action: "treat non-string q as no ask", behavior: "a q parameter in a non-String shape answers 200 with the unfiltered page rather than 500 or a silently coerced match, matching an absent parameter", layer: "request" }
+    # @intent: { entity: "RequestedSearchParam", action: "treat a q that is not a search string as no ask", behavior: "a q parameter that carries no text to find — a non-String container shape, or a blank string — answers 200 with the unfiltered page rather than 500 or a silently coerced match, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when q arrives as #{shape}" do
       expect_search_param_treated_as_no_ask(query)
     end

@@ -67,13 +67,14 @@ module DeliveryHealthLookups
   # and the page it links to can never name different runs. Scoped to the ids handed in, so it never
   # scans `test_runs` globally.
   #
-  # ⚠️ NO SHARD PRIMING HERE, deliberately. `RepositoriesController#latest_test_runs` follows this
-  # read with `preload_shard_counts`, because ITS card prints how each suite was assembled and what
-  # it cost, and both of those are a memoized per-instance `pick`. That priming is a second
-  # aggregate over `test_run_shards`, and a caller that reads only `created_at` — which is all the
-  # refusal comparison above needs — would be paying for a column it never looks at on every
-  # request. So the priming stays at the call site that reads primed values, and this module serves
-  # the resolution both callers share.
+  # ⚠️ NO SHARD PRIMING HERE, deliberately. `RepositoriesController#latest_test_runs` and
+  # `Api::V1::UserRepositoriesController#index` both follow this read with `preload_shard_counts`,
+  # because BOTH now name how each suite was assembled and what it cost — and those are memoized
+  # per-instance `pick`s. But that priming is a second aggregate over `test_run_shards`, and a
+  # caller that reads only `created_at` — which is all the refusal comparison above needs, and is
+  # all `Api::V1::UserRepositoriesController#update`'s verdict asks for — would be paying for a
+  # column it never looks at on every request. So the priming stays at the call site that reads
+  # primed values, and this module serves the resolution both callers share.
   def latest_test_runs_for(repository_ids)
     return {} if repository_ids.empty?
 
