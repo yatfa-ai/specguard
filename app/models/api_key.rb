@@ -61,9 +61,12 @@ class ApiKey < ApplicationRecord
   #
   # `live` only, and that is the security half of the retirement: `revoke!` keeps the row (so a
   # revoked token stays attributable), which means the row would otherwise keep resolving. The
-  # filter rides the same `find_by` — still one indexed read on the unique digest index, and still
-  # the ONLY resolution site for a repository credential (verified by grep: the sole caller is
-  # `Api::BaseController#authenticate_api_key!`).
+  # filter rides the same `find_by` — still one indexed read on the unique digest index, and the
+  # security half holds by placement rather than by caller count: the `live` filter lives inside
+  # the model, so it covers every caller of this method, present and future —
+  # `Api::BaseController#authenticate_api_key!` and
+  # `Ingest::BoundaryRefusalRecorder#resolve_repository` among them — and there is no
+  # per-call-site re-statement of the `live` rule that could drift.
   def self.authenticate(token)
     return nil if token.blank?
 
