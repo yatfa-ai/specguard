@@ -182,13 +182,94 @@ module IntegrationGuideHelper
     SHELL
   end
 
-  # `npm install` is sufficient on its own — `package.json` declares `"prepare": "npm run build"`,
-  # which npm runs after install for a local checkout, so `dist/` exists before the reader is told to
-  # point an agent at it. Spelling the build out as a second command would suggest it is needed.
+  # -- The TypeScript client (@yatfa/specguard on npm) ----------------------------
+  #
+  # One snippet per runner because the wiring differs in kind, not in spelling: node:test has no
+  # config file, so the reporter is flags on the command line; Vitest and Jest take it in their
+  # existing configs. Every snippet is column-0 here for the same reason the rest are — the copy
+  # button must not paste the template's indentation.
+
+  def integration_guide_ts_install_snippet
+    <<~SHELL.strip
+      npm install --save-dev @yatfa/specguard
+    SHELL
+  end
+
+  # One invocation that runs unchanged from Node 20 (the package's engines floor) through 25:
+  # a quoted directory argument resolves as a module and dies from Node 24.19, and a quoted glob
+  # needs Node 22 — but the shell expands this unquoted glob into a plain file list on every
+  # line, and destinations are PAIRED per reporter, which Node 23+ enforces and every version
+  # accepts.
+  def integration_guide_ts_nodetest_snippet
+    <<~SHELL.strip
+      node --test --test-reporter=spec --test-reporter-destination=stdout \\
+        --test-reporter=./node_modules/@yatfa/specguard/dist/node-test/reporter.js \\
+        --test-reporter-destination=stdout
+    SHELL
+  end
+
+  def integration_guide_ts_vitest_snippet
+    <<~TS.strip
+      // vitest.config.ts
+      import { defineConfig } from "vitest/config";
+
+      export default defineConfig({
+        test: {
+          reporters: ["default", "@yatfa/specguard/vitest"],
+          includeTaskLocation: true, // without this, Vitest reports no line numbers
+        },
+      });
+    TS
+  end
+
+  def integration_guide_ts_jest_snippet
+    <<~JS.strip
+      // jest.config.mjs
+      export default {
+        reporters: ["default", "@yatfa/specguard/jest"],
+        testLocationInResults: true, // without this, Jest reports no line numbers
+      };
+    JS
+  end
+
+  def integration_guide_ts_actions_snippet(endpoint)
+    <<~YAML.strip
+      # .github/workflows/ci.yml
+      - name: Run the test suite
+        run: npm test   # the reporter is wired in the runner config above
+        env:
+          SPECGUARD_ENDPOINT: #{endpoint}
+          SPECGUARD_API_KEY: ${{ secrets.SPECGUARD_API_KEY }}
+    YAML
+  end
+
+  # The replay bin is the package's SECOND bin, so `npx @yatfa/specguard` alone would run the
+  # first one (the lint CLI); `npm exec` names the bin explicitly. Verified against the registry
+  # package, not a checkout.
+  def integration_guide_ts_replay_snippet
+    <<~SHELL.strip
+      npm exec --package=@yatfa/specguard -- specguard-ingest log/test_results.jsonl
+    SHELL
+  end
+
+  # Unlike the gem, the npm package does not download the validator binary itself — until an
+  # npm-distributed prebuilt is published it resolves `validate-intent` only through
+  # SPECGUARD_VALIDATE_INTENT. The gem's own auto-download (the cache default in the table
+  # above) is one such binary, which is why the snippet points there. Verified end to end
+  # against that cache: same schema digest on both sides.
+  def integration_guide_ts_lint_snippet
+    <<~SHELL.strip
+      SPECGUARD_VALIDATE_INTENT=~/.cache/specguard-ruby/validate-intent/<tag>/validate-intent-linux-amd64 \\
+        npx -y @yatfa/specguard lint
+    SHELL
+  end
+
+  # The MCP bridge is on npm: `npx` fetches and runs it — no checkout, no build step, and no
+  # absolute path for the config to go stale on. Verified against the registry package: it
+  # answers a stdio `initialize` handshake.
   def integration_guide_mcp_install_snippet
     <<~SHELL.strip
-      git clone https://github.com/yatfa-ai/specguard-mcp.git
-      cd specguard-mcp && npm install
+      npx -y specguard-mcp
     SHELL
   end
 
@@ -197,8 +278,8 @@ module IntegrationGuideHelper
       {
         "mcpServers": {
           "specguard": {
-            "command": "node",
-            "args": ["/path/to/specguard-mcp/dist/bin/specguard-mcp.js"],
+            "command": "npx",
+            "args": ["-y", "specguard-mcp"],
             "env": {
               "SPECGUARD_ENDPOINT": "#{endpoint}",
               "SPECGUARD_API_KEY": "sgk_…",
