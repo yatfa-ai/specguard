@@ -163,6 +163,29 @@ RSpec.describe "The public integration guide", type: :request do
       expect(text).to include("SPECGUARD_API_KEY")
     end
 
+    # The TypeScript client is a shipped, published npm package covering the three JavaScript
+    # runners. Asserted as a set for the same reason the field test below is: the failure being
+    # guarded is a panel going missing during an edit, which no single-string assertion catches.
+    it "documents the TypeScript client under its published npm name, for all three runners" do
+      text = Capybara.string(response.body).text.gsub(/\s+/, " ")
+
+      expect(text).to include("@yatfa/specguard")
+      expect(text).to include("node:test")
+      expect(text).to include("Vitest")
+      expect(text).to include("Jest")
+      expect(text).to include("npm exec --package=@yatfa/specguard -- specguard-ingest")
+    end
+
+    # Bare `specguard` on npm is an UNRELATED package. Install advice that dropped the scope
+    # would teach the one spelling that runs someone else's code — so the two bare forms a
+    # copy-paste reader would actually type are banned outright, scoped spellings aside.
+    it "never teaches an unscoped install or invocation of the TypeScript client" do
+      text = Capybara.string(response.body).text.gsub(/\s+/, " ")
+
+      expect(text).not_to include("npm install --save-dev specguard")
+      expect(text).not_to include("npx specguard lint")
+    end
+
     # A companion to the response-shape example above, and the reason both exist. That one pins what
     # the SERVER does; this one pins that the PAGE still says so. Either alone permits the drift this
     # ticket's review caught — the server answering null while the document promises a fraction — and

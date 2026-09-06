@@ -21,14 +21,15 @@
         reads back off this rendered HTML and POSTs to `/api/v1/ingest`, so the document is checked
         against the endpoint rather than against a copy of itself.
 
-    WHY RUBY IS FIRST AND WHY IT IS NOT THE WHOLE PAGE. There is a shipped Ruby client and there is
-    no client for anything else, so Ruby/RSpec is genuinely the shortest path and is presented as
-    it. But nothing in the ingest path is Ruby-specific: `file_path` is validated as a non-empty
-    string with no `_spec.rb` suffix and no `spec/` prefix rule anywhere, and the annotation
-    protocol states outright that nothing in its schema assumes RSpec or Minitest. A pytest or jest
-    reporter emitting the right JSON is accepted today. So the wire contract is published in full,
-    and the worked payload is deliberately a PYTHON suite — an example whose every path ended in
-    `_spec.rb` would teach by illustration the opposite of what the prose says.
+    WHY RUBY IS FIRST AND WHY IT IS NOT THE WHOLE PAGE. There are two shipped clients — the Ruby
+    gem and, since 2026-09, the TypeScript package — and Ruby is presented first because it is the
+    reference client: the env-var table lives in its panel, and both clients read those variables
+    identically. But nothing in the ingest path is Ruby-specific: `file_path` is validated as a
+    non-empty string with no `_spec.rb` suffix and no `spec/` prefix rule anywhere, and the
+    annotation protocol states outright that nothing in its schema assumes RSpec or Minitest. A
+    pytest or Go reporter emitting the right JSON is accepted today. So the wire contract is
+    published in full, and the worked payload is deliberately a PYTHON suite — an example whose
+    every path ended in `_spec.rb` would teach by illustration the opposite of what the prose says.
 
     WHAT IT DOES NOT DO. It promises no capability the API does not currently have. There are
     exactly two routes under `api/v1` (`get "repository"`, `post "ingest"`), and this page names
@@ -44,7 +45,7 @@
 <%= render UI::PageComponent.new do %>
   <%= render UI::PageHeaderComponent.new(
         title: "Integration guide",
-        subtitle: "Send your suite's runs to SpecGuard — from Ruby, or from any language that can POST JSON."
+        subtitle: "Send your suite's runs to SpecGuard — from Ruby, from TypeScript, or from any language that can POST JSON."
       ) %>
 
   <%= render UI::PanelComponent.new(title: "Start here", id: "start-here") do %>
@@ -59,7 +60,7 @@
       <%= render UI::DefListComponent.new(rows: [
             ["You need an endpoint", endpoint],
             ["You need an API key", "Mint one on your repository's page"],
-            ["You need a reporter", "The Ruby gem, or ~50 lines in your own language"]
+            ["You need a reporter", "The Ruby gem, the TypeScript package, or ~50 lines in your own language"]
           ]) %>
 
       <%# The read endpoint is on this page ONLY as a connectivity check and as the machine-readable
@@ -291,6 +292,82 @@
     </div>
   <% end %>
 
+  <%# The TypeScript panel sits beside the Ruby one rather than inside it, and the panel comment
+      above still holds: one page, verified against the server. The two clients differ in exactly
+      the places a reader would trip — install surface, per-runner wiring, and the validator, which
+      the gem downloads itself and the npm package resolves by env var — so the differences are
+      stated here, while the VARIABLES are the gem's to the letter and stay tabled once, in the
+      Ruby panel. %>
+  <%= render UI::PanelComponent.new(title: "TypeScript — node:test, Vitest and Jest", id: "typescript") do %>
+    <div class="space-y-5">
+      <p class="text-sm text-app-content-secondary">
+        The npm package <code>@yatfa/specguard</code> carries a reporter for each of the three
+        JavaScript runners, plus the annotation linter and a replay command. It never fails your
+        build — a delivery that is refused, times out or cannot connect writes one line to stderr
+        and lets the suite's own exit code stand. The variables are the
+        <a href="#ruby" class="underline">gem's, to the letter</a>: set the same two in CI and the
+        table above applies as it stands.
+      </p>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">1. Install</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_ts_install_snippet %><% end %>
+        <p class="text-xs text-app-muted">
+          Scope the name. Bare <code>specguard</code> on npm is an unrelated package — the one
+          spelling that installs someone else's code is the one without the <code>@yatfa/</code>.
+        </p>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">2. Wire the reporter</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_ts_nodetest_snippet %><% end %>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_ts_vitest_snippet %><% end %>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_ts_jest_snippet %><% end %>
+        <p class="text-xs text-app-muted">
+          The <code>includeTaskLocation</code> / <code>testLocationInResults</code> flag is not
+          optional: without it the runner reports no lines, and a row without a line cannot carry
+          an annotation — the reporter drops it with one stderr warning and ships the rest.
+        </p>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">3. Point it at SpecGuard in CI</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_ts_actions_snippet(endpoint) %><% end %>
+        <p class="text-xs text-app-muted">
+          Store the key as a CI secret — never in the repository. SpecGuard holds only a digest and
+          cannot show you an existing key again; if it is lost, regenerate it. Sharding works the
+          same as for the gem — <a href="#sharding" class="underline">see below</a>; the client
+          reads the same <code>SPECGUARD_RUN_ID</code> and <code>SPECGUARD_SHARD_ID</code>.
+        </p>
+      </div>
+
+      <%= render UI::AlertComponent.new(tone: :neutral, title: "With no API key set, the run is written to a file — the same two files") do %>
+        <p class="mt-1">
+          The sinks are the gem's: no key appends to <code>log/test_results.local.jsonl</code>, the
+          development record; a key that could not deliver lands in the replay queue
+          <code>log/test_results.jsonl</code>. That queue is re-delivered by the package's second
+          command:
+        </p>
+        <div class="mt-2" data-controller="copy-text">
+          <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_ts_replay_snippet %><% end %>
+        </div>
+      <% end %>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">The linter</p>
+        <p class="text-xs text-app-muted">
+          <code>specguard lint</code> ships in the package and enforces the
+          <a href="#annotations" class="underline">same schema</a> with the same exit codes as the
+          gem's linter. One difference: the package does not download the
+          <code>validate-intent</code> binary itself — it resolves it through
+          <code>SPECGUARD_VALIDATE_INTENT</code>, and the binary the gem auto-downloads (the cache
+          path in the table above) is exactly one such binary:
+        </p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_ts_lint_snippet %><% end %>
+      </div>
+    </div>
+  <% end %>
+
   <%= render UI::PanelComponent.new(title: "Intent annotations", id: "annotations") do %>
     <div class="space-y-5">
       <p class="text-sm text-app-content-secondary">
@@ -454,6 +531,11 @@ describe("expired-card checkout flow", () => {
         <%= render UI::CopyableCodeComponent.new(multiline: true) do %>bundle exec specguard-lint --changed   # CI mode: only files in the current diff
 bundle exec specguard-lint             # one-off audit: every *_spec.rb
 bundle exec specguard-lint spec/models/order_spec.rb<% end %>
+        <p class="text-xs text-app-muted">
+          The TypeScript client ships the same linter for JS/TS sources — same schema, same exit
+          codes — with one prerequisite of its own,
+          <a href="#typescript" class="underline">documented in its panel</a>.
+        </p>
       </div>
 
       <div class="space-y-2">
@@ -869,11 +951,12 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
   <%= render UI::PanelComponent.new(title: "Writing a reporter for another language", id: "other-languages") do %>
     <div class="space-y-4">
       <p class="text-sm text-app-content-secondary">
-        There is no packaged client for pytest, jest, Go's <code>testing</code> or anything else
-        today. There does not need to be: the contract above is the whole interface, and a reporter
-        is a hook that collects a few fields per test and one HTTP POST at the end. Everything
-        SpecGuard shows — per-test duration, suite growth, the heaviest files and directories,
-        repeated descriptions — is computed from exactly those fields and is not Ruby-aware.
+        Shipped clients already cover Ruby and TypeScript — the two panels above. For pytest, Go's
+        <code>testing</code> or anything else there is no packaged client, and does not need to be:
+        the contract above is the whole interface, and a reporter is a hook that collects a few
+        fields per test and one HTTP POST at the end. Everything SpecGuard shows — per-test
+        duration, suite growth, the heaviest files and directories, repeated descriptions — is
+        computed from exactly those fields and is not language-aware.
       </p>
 
       <div class="space-y-2">
@@ -881,8 +964,7 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
         <ol class="list-decimal space-y-2 pl-5 text-sm text-app-content-secondary">
           <li>
             Hook whatever your framework calls "a test finished" — pytest's
-            <code>pytest_runtest_logreport</code>, jest's custom reporter
-            <code>onTestCaseResult</code>, Go's <code>-json</code> output.
+            <code>pytest_runtest_logreport</code>, Go's <code>-json</code> output.
           </li>
           <li>
             Per test, record: the defining file and line, a run-unique <code>id</code>, the file that
@@ -931,9 +1013,9 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
 
   <%= render UI::PanelComponent.new(title: "The MCP bridge, for coding agents", id: "mcp") do %>
     <div class="space-y-4">
-      <%# Described honestly as bootstrap-stage. It is real and it works, and it installs from a
-          source checkout because it is not published to a package registry — so anything here that
-          implied `npx specguard-mcp` would be a promise the project cannot keep. %>
+      <%# On npm — `npx` fetches and runs it, and the agent config points at npx rather than at an
+          absolute path that goes stale on the next checkout move. Verified against the registry
+          package: it answers a stdio initialize handshake. %>
       <p class="text-sm text-app-content-secondary">
         <code>specguard-mcp</code> is a small MCP server that gives an AI coding agent direct access
         to two things: your repository's SpecGuard overview, and the annotation linter. It reuses
@@ -941,16 +1023,8 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
         the gem uses — so a repository that is already reporting runs is already configured for it.
       </p>
 
-      <%= render UI::AlertComponent.new(tone: :warning, title: "Bootstrap-stage: install from a checkout") do %>
-        <p class="mt-1">
-          It is not on npm. You clone it and build it yourself, and you point your MCP client at the
-          built file by absolute path. That is a deliberate statement of where it is, not a step
-          that is about to get shorter.
-        </p>
-      <% end %>
-
       <div class="space-y-2" data-controller="copy-text">
-        <p class="section-label text-app-content-secondary">Build it</p>
+        <p class="section-label text-app-content-secondary">Run it</p>
         <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_mcp_install_snippet %><% end %>
       </div>
 
