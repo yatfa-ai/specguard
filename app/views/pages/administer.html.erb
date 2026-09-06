@@ -424,9 +424,10 @@
       <ul class="list-disc space-y-1 pl-5 text-sm text-app-content-secondary">
         <li>Minting or revoking personal <code>sgu_</code> keys.</li>
         <li>Minting or revoking agent <code>sga_</code> keys.</li>
-        <li>Rotating a repository's CI key in place — the API can mint and revoke those keys, and
-            deliberately offers no rotate: replacement is mint-new-then-revoke, and that is a
-            browser gesture.</li>
+        <li>Rotating a repository's CI key <em>in place</em> — the API deliberately offers no
+            rotate, because a regenerated token stops the old one working with no grace window.
+            Replacing a key over the API is two calls rather than one: mint the new key, then
+            revoke the old.</li>
       </ul>
       <p class="text-sm text-app-content-secondary">
         Everything on this page is something the API does now. Where you need one of the above,

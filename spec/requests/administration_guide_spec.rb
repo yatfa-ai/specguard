@@ -349,6 +349,32 @@ RSpec.describe "The public administration guide", type: :request do
       expect(page_text).not_to match(/PATCH .{0,40}api\/v1/i)
       expect(page_text).not_to include("specguard-mcp")
     end
+
+    # The "What only the browser can do" panel is a list of absences in a file whose charter is
+    # "where the page and the server disagree, the page is wrong" — and the round-4 review caught
+    # one of its bullets doing exactly that: it sent readers to a browser to REPLACE a repository's
+    # CI key, while `UserRepositoryApiKeysController` serves the same recovery over the API
+    # (mint a replacement, revoke the orphan — its own header says so in those words). The honest
+    # residual for CI keys is narrower: IN-PLACE rotation alone is browser-only, because the API
+    # deliberately routes no `regenerate`.
+    #
+    # A text assertion against the prose cannot guard a list of absences — the prose can be edited
+    # into agreement while the claim stays false (SPGD-475's shape: a sentence wrong about the
+    # WORLD, with no mutation reaching it). So this reads the ROUTER, which is the ground the
+    # charter defers to, and pins both directions the CI-key claims rest on:
+    #
+    #   - the include limb: the API keeps serving mint/revoke for a repository's keys — the
+    #     capability the corrected bullet names. Red if that route vanishes, which would turn
+    #     the bullet's "replacing over the API is two calls" half false.
+    #   - the not_to limb: the API keeps refusing `regenerate` — the absence that makes
+    #     "in place" the one browser-only CI-key gesture. Red the day someone routes it, which
+    #     is the day the panel's residual goes stale.
+    it "claims nothing browser-only that the API in fact routes" do
+      api_v1 = Rails.application.routes.routes.map { |r| r.path.spec.to_s }.grep(%r{^/api/v1})
+
+      expect(api_v1).to include(a_string_matching(%r{/repositories/:repository_id/api_keys}))
+      expect(api_v1).not_to include(a_string_matching(/regenerate/))
+    end
   end
 
   # SPGD-762 criterion 6. The account page is where an `sgu_` key is minted, so it is the surface a
