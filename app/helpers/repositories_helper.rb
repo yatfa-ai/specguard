@@ -976,8 +976,19 @@ module RepositoriesHelper
     dropped = sequence.recorded_count - sequence.rows.size
     last = sequence.rows.last
 
+    # The gate above is STRICT, so this alert first renders at one dropped row — the singular is
+    # the state that OPENS it, not a tail case — and the verb and noun phrase branch with the noun
+    # the way `unstable_tests_unnamed_clause`'s do. Per-site here rather than a shared agreement
+    # helper, and the plural wording below is byte-identical to what always rendered before.
+    one = dropped == 1
+    dropped_clause = if one
+                       "it dropped is the newest one recorded under this description"
+                     else
+                       "it dropped are the newest ones recorded under this description"
+                     end
+
     "The cap keeps this window's OLDEST rows, so the #{number_with_delimiter(dropped)} " \
-      "#{"row".pluralize(dropped)} it dropped are the newest ones recorded under this description. " \
+      "#{"row".pluralize(dropped)} #{dropped_clause}. " \
       "The list ends at #{last.commit_sha.first(7)}, ingested #{time_ago_in_words(last.ingested_at)} " \
       "ago — compare that against the newest commit in “Recent runs” below to see how far short of " \
       "the window it stops. For the other end of the same sequence, read `unstable_test` over " \
