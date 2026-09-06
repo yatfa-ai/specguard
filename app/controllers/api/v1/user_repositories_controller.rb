@@ -130,13 +130,14 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # be the N+1 `RejectedIngests.verdict` exists to avoid — two aggregates per listed repository
   # instead of two for the list.
   #
-  # `latest_run` is threaded for the same reason, and its two reads are grouped the same way: the
-  # newest run per repository comes back from `#delivery_verdicts`' own `latest_test_runs_for`
-  # call (ONE `DISTINCT ON` for the whole list, on `Repository#latest_test_run`'s exact tie-break,
-  # so a list entry and the detail page it links to cannot name different runs), and the shard
-  # scalars each entry serves are primed from ONE grouped aggregate. Adding a repository to the
-  # account therefore adds no query to this endpoint — the property the budget example in
-  # `user_repositories_spec.rb` pins at one row and at several.
+  # `latest_run` is threaded for the same reason, and its two reads are grouped the same way:
+  # `#index` resolves the `latest_test_runs_for` map once, here, and threads it into both
+  # consumers, `#delivery_verdicts` and the serialized `latest_run` block (ONE `DISTINCT ON` for
+  # the whole list, on `Repository#latest_test_run`'s exact tie-break, so a list entry and the
+  # detail page it links to cannot name different runs), and the shard scalars each entry serves
+  # are primed from ONE grouped aggregate. Adding a repository to the account therefore adds no
+  # query to this endpoint — the property the budget example in `user_repositories_spec.rb` pins
+  # at one row and at several.
   #
   # `?q=`, `?role=` and `?sort=stale` compose onto the same relation in the web index's exact
   # order — `credential boundary → ?q= → ?role= → order(:github_full_name) → ?sort=stale` — through
@@ -556,11 +557,11 @@ class Api::V1::UserRepositoriesController < Api::BaseController
       full_name: repository.github_full_name,
       name: repository.name,
       registered_at: repository.created_at.iso8601,
-    role: credential_role(repository),
-    delivery_health: delivery_health,
-    **(latest_run.equal?(NO_LATEST_RUN_BLOCK) ? {} : { latest_run: latest_run })
-  }
-end
+      role: credential_role(repository),
+      delivery_health: delivery_health,
+      **(latest_run.equal?(NO_LATEST_RUN_BLOCK) ? {} : { latest_run: latest_run })
+    }
+  end
 
   # Which side of the owner/member line this entry sits on — or, under the agent credential, that
   # the question does not apply. See `#serialize`.
