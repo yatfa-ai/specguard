@@ -35,9 +35,9 @@ module AdministrationGuideHelper
   #
   # Same purpose as its sibling above, for the other half of the exchange: it lets the spec read the
   # published response back off the RENDERED page. That matters for the `hint`/`token` relationship
-  # in particular — asserting it against {EXAMPLE_TOKEN} and {EXAMPLE_TOKEN_HINT} would prove two
-  # constants relate correctly while the template published something else entirely, which is the
-  # same "pin derived from what it pins" trap the request fixture is read off the page to avoid.
+  # in particular — asserting it against {EXAMPLE_TOKEN} and `example_token_hint` would prove two
+  # Ruby-side values relate correctly while the template published something else entirely, which is
+  # the same "pin derived from what it pins" trap the request fixture is read off the page to avoid.
   EXAMPLE_RESPONSE_ELEMENT_ID = "registration-example-response"
 
   # The name used throughout the worked example.
@@ -104,21 +104,33 @@ module AdministrationGuideHelper
   EXAMPLE_TOKEN = "sgk_R0zVvQx7mK2pL9nT4wY6bJ8cH3dF5gA1"
 
   # The hint for {EXAMPLE_TOKEN}, produced by ASKING THE SERVER for one rather than by reproducing
-  # how it makes them.
+  # how it makes them — computed when the page renders, never when this module loads.
   #
-  # The unsaved record is the whole point: `#token_hint` reads only `token_digest`, so handing it a
-  # digest is enough to get the real answer without touching the database or needing a repository.
+  # The call-not-retype half of the story: this once reimplemented the method —
+  # `TOKEN_PREFIX + "…" + digest.last(6)` — under a comment claiming it therefore could not drift.
+  # Half of that was true: both sides went through `ApiKey.digest`, so a change of hash algorithm
+  # did carry over. The fragment length did not, because the `6` was re-typed here. Changing
+  # `#token_hint` to `.last(8)` moved the server and left the page publishing `sgk_…bec81d`, a hint
+  # the server could no longer produce, on a page whose inherited charter is that where it and the
+  # server disagree, THE PAGE IS WRONG. Nothing reported it, because the spec re-typed the same `6`
+  # and so agreed with the constant under every change to the method and with the server under
+  # none. Calling the method closes that half: there is no second copy of the algorithm left to
+  # drift.
   #
-  # This once reimplemented the method instead of calling it — `TOKEN_PREFIX + "…" + digest.last(6)`
-  # — under a comment claiming it therefore could not drift. Half of that was true: both sides went
-  # through `ApiKey.digest`, so a change of hash algorithm did carry over. The fragment length did
-  # not, because the `6` was re-typed here. Changing `#token_hint` to `.last(8)` moved the server and
-  # left the page publishing `sgk_…bec81d`, a hint the server can no longer produce, on a page whose
-  # inherited charter is that where it and the server disagree, THE PAGE IS WRONG. Nothing reported
-  # it, because the spec re-typed the same `6` and so agreed with this constant under every change to
-  # the method and with the server under none. Calling the method closes both halves at once: there
-  # is no second copy of the algorithm left to drift.
-  EXAMPLE_TOKEN_HINT = ApiKey.new(token_digest: ApiKey.digest(EXAMPLE_TOKEN)).token_hint
+  # The timing half is not a style preference, and the first version of this fix got it wrong. It
+  # read "an unsaved record is enough — `#token_hint` needs no database", and that is true of the
+  # METHOD and false of the INSTANTIATION it sits behind: `ApiKey.new` builds its attribute set
+  # from the schema, so this line cannot run without a connection. Defined as a constant it ran at
+  # eager-load time — `production.rb` sets `config.eager_load = true`, so that is every production
+  # boot — and a container coming up before Postgres accepts connections (the exact window
+  # `bin/docker-entrypoint` leaves open by design) died here, bisected against `main` and the
+  # round-2 tree, which both booted. No spec exercises the failing configuration: the suite
+  # eager-loads too, but always with a test database reachable. As a method it runs per request,
+  # when a connection exists by definition. Pinned by the spec example that asserts no
+  # {EXAMPLE_TOKEN_HINT} constant exists to re-mint.
+  def self.example_token_hint
+    ApiKey.new(token_digest: ApiKey.digest(EXAMPLE_TOKEN)).token_hint
+  end
 
   # The `201` body, shown in full.
   #
@@ -142,7 +154,7 @@ module AdministrationGuideHelper
       "api_key" => {
         "name" => Api::V1::UserRepositoriesController::FIRST_KEY_NAME,
         "token" => EXAMPLE_TOKEN,
-        "hint" => EXAMPLE_TOKEN_HINT,
+        "hint" => AdministrationGuideHelper.example_token_hint,
         "created_at" => "2026-01-15T09:24:11Z"
       }
     )

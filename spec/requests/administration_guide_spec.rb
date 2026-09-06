@@ -276,8 +276,9 @@ RSpec.describe "The public administration guide", type: :request do
       expect(page_text).to include(InstallationRepositories::MESSAGES.fetch(:not_granted))
     end
 
-    it "names both credentials and the endpoints each one answers" do
+    it "names all three credentials and the endpoints each one answers" do
       expect(page_text).to include("sgu_")
+      expect(page_text).to include("sga_")
       expect(page_text).to include("sgk_")
       expect(page_text).to include("#{administration_guide_endpoint}/api/v1/repositories")
     end
@@ -321,11 +322,31 @@ RSpec.describe "The public administration guide", type: :request do
       expect(hint).to eq(ApiKey.new(token_digest: ApiKey.digest(token)).token_hint)
     end
 
-    # The non-goals, as an assertion. The guide's charter is that it promises no capability the API
-    # does not currently have, and the two nearest unlanded surfaces are key management over the API
-    # and the MCP tools. This is the fence that stops a later edit describing either as available.
-    it "does not advertise capabilities the API does not have" do
+    # The hint the page publishes is computed per render, not when the helper module loads. The
+    # first version of this fix built it as a constant — `ApiKey.new(...)` at constant-definition
+    # time — and `.new` reads the schema, so every eager-loaded production boot needed a database
+    # connection `main` never needed: `production.rb` sets `config.eager_load = true` and
+    # `bin/docker-entrypoint` deliberately does not wait for Postgres, so a container that came up
+    # before the database was reachable died on this page's example value. No request spec can boot
+    # production without a database (the suite eager-loads too, but always with a test database
+    # reachable — which is why nothing caught it), so this pins the LOAD-TIME shape instead: the
+    # value must live behind the method, and no hint constant may exist to re-mint.
+    it "computes the published hint at render time, not load time" do
+      expect(AdministrationGuideHelper.respond_to?(:example_token_hint)).to be(true)
+      expect(defined?(AdministrationGuideHelper::EXAMPLE_TOKEN_HINT)).to be_nil
+    end
+
+    # The non-goals, as an assertion — updated for the tree this page lands on rather than the one
+    # it was drafted against. The surfaces this page declines to cover are no longer UNBUILT:
+    # deleting, renaming, CI-key minting and member management all exist over the API now, and the
+    # MCP bridge carries tools. What this fence guards is the page's SCOPE, not the API's: the
+    # page names those capabilities only at existence level, and never publishes a request line
+    # for them — a `DELETE …/api/v1` or `PATCH …/api/v1` curl snippet here would be this page
+    # documenting a contract it has not verified against the server. The bridge, likewise, is
+    # documented by its own project; this page never names its repository.
+    it "names newer capabilities without publishing their contracts" do
       expect(page_text).not_to match(/DELETE .{0,40}api\/v1/i)
+      expect(page_text).not_to match(/PATCH .{0,40}api\/v1/i)
       expect(page_text).not_to include("specguard-mcp")
     end
   end
@@ -346,11 +367,14 @@ RSpec.describe "The public administration guide", type: :request do
     # an undercount since registering over the API landed — the one thing a person deciding whether
     # to mint a key most needs to know about what it can do.
     #
-    # Scoped to the `EmptyStateComponent`'s own description rather than to the page. Matching
+    # Scoped to the `EmptyStateComponent`'s own description, inside the personal-keys panel,
+    # rather than to the page — for two reasons, both measured rather than assumed. Matching
     # /register/i against the whole document passed against the UNCORRECTED sentence: the layout's
-    # own "Register a repository" nav link satisfies it, and so does the guide caption THIS ticket
-    # added a few lines above — so the guard's sibling change guaranteed its own match and it could
-    # not fail through the edit it exists to catch. A guard's reach is its selector.
+    # own "Register a repository" nav link satisfies it, and so did the guide caption THIS ticket
+    # added a few lines above. And the panel scope is now load-bearing in its own right, because
+    # the account page renders THREE empty states when a fresh reader lands on it (personal keys,
+    # agent keys, connected GitHub accounts) — all of them `p.max-w-prose`, so an unscoped find
+    # would be an ambiguous match before it could assert anything.
     #
     # Both limbs are needed and neither is redundant. The positive says the sentence now names what
     # the credential does; the negative is the claim the ticket actually makes — that it no longer
@@ -362,7 +386,7 @@ RSpec.describe "The public administration guide", type: :request do
       get account_path
 
       empty_state = Capybara.string(response.body)
-                            .find(:css, "p.max-w-prose").text.gsub(/\s+/, " ")
+                            .find(:css, "#user-api-keys p.max-w-prose").text.gsub(/\s+/, " ")
 
       expect(empty_state).to match(/register/i)
       expect(empty_state).not_to match(/read the repositories/i)

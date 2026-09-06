@@ -24,10 +24,15 @@
     the constant rather than typed. A page that buried it under the curl snippet would reproduce the
     original defect in a more comfortable location.
 
-    WHAT IT DOES NOT DO. It promises no capability the API does not currently have. Revoking a key
-    and minting one over the API are not endpoints today, and the MCP bridge does not carry these
-    tools; none of the three is described here as though it were coming. Where a reader needs a
-    gesture that only the browser has, the page says so plainly and sends them there.
+    WHAT IT DOES NOT DO. It promises no capability the API does not currently have, and it covers
+    exactly the two founding endpoints of the `sgu_` surface: the list and the registration. The
+    surface has grown since this page was first drafted — deleting and renaming a repository,
+    minting and revoking a repository's CI keys, the registrable listing and member management are
+    all served over the API today, and the SpecGuard MCP bridge carries tools over these same
+    credentials — and none of that is documented here. Nothing on this page describes any of it as
+    absent, and none of its request lines appear on this page, because a contract this page has
+    not verified is not this page's to publish. Where a reader needs a gesture that only the
+    browser has, the page says so plainly and sends them there.
 %>
 
 <% endpoint = administration_guide_endpoint %>
@@ -80,14 +85,37 @@
 
       <%# The credential seam. Stated as a table because the failure it prevents is a 401 that looks
           like an authentication bug and is really a wrong-credential one — and because "which key
-          answers which endpoint" is a lookup, not a paragraph. %>
+          answers which endpoint" is a lookup, not a paragraph.
+
+          Deliberately NOT titled as a count. "The two credentials" was true when this table was
+          written and stopped being true the day agent keys landed on the account page — the same
+          defect the integration guide's charter comment once carried about its route count. A
+          table that says WHICH KEY answers WHAT survives the fourth credential; one that says HOW
+          MANY there are has to be re-counted, and will not be.
+
+          The `Answers` cells name the endpoints THIS PAGE covers, not every endpoint each
+          credential answers — the `sgu_` surface grew long before this table was drawn. The row
+          for the agent key is here because one of this page's two endpoints answers it too: an
+          `sga_` key can read the list, and cannot register. %>
       <div class="space-y-2">
-        <p class="section-label text-app-content-secondary">The two credentials</p>
+        <p class="section-label text-app-content-secondary">Which credential answers what</p>
         <%= render UI::TableComponent.new(columns: ["Key", "Speaks for", "Answers", "Minted on"]) do %>
           <tr>
             <td class="px-3 py-2 font-mono text-xs text-app-content">sgu_…</td>
             <td class="px-3 py-2 text-app-content-secondary">You, the person</td>
-            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">/api/v1/repositories</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">
+              GET and POST /api/v1/repositories
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <%= link_to "Your account page", account_path, class: "text-app-cta hover:underline" %>
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">sga_…</td>
+            <td class="px-3 py-2 text-app-content-secondary">Nobody — only what the key was granted</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">
+              GET /api/v1/repositories — reads only; registering refuses it
+            </td>
             <td class="px-3 py-2 text-app-content-secondary">
               <%= link_to "Your account page", account_path, class: "text-app-cta hover:underline" %>
             </td>
@@ -106,7 +134,10 @@
           <code>sgk_</code> gets a <code>401</code>, and the reverse is also a <code>401</code> —
           not a permissions error, and not a sign the key is broken. The near-identical paths
           <code>/repository</code> and <code>/repositories</code> are separate surfaces for exactly
-          this reason, so neither can quietly serve the wrong thing.
+          this reason, so neither can quietly serve the wrong thing. An <code>sga_</code> key is
+          different again: it is authenticated on the endpoints it may read, and a person-only
+          action such as registering answers it with a <code>403</code> rather than a 401 — the
+          key is known, and is simply not allowed to act as you.
         </p>
       </div>
     </div>
@@ -339,7 +370,9 @@
             <td class="px-3 py-2 font-mono text-xs text-app-content">role</td>
             <td class="px-3 py-2 text-app-content-secondary">
               <code>owner</code> or <code>member</code>. The list mixes both and nothing else
-              distinguishes them.
+              distinguishes them. Under an agent key — which can read this list too — the value is
+              <code>agent</code> for every entry, because the question of whose rights each row
+              rides on does not apply to a credential that speaks for nobody.
             </td>
           </tr>
           <tr>
@@ -348,6 +381,18 @@
               <code>refusing</code> and <code>last_rejection_at</code> — whether this repository's
               CI deliveries are currently being thrown away. Served on every entry, refused and
               clean alike: <code>refusing: false</code> is a finding, not an absence.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">latest_run</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <code>null</code> when CI has never reported; otherwise the newest run CI posted,
+              at list depth: <code>ingested_at</code>, <code>branch</code>,
+              <code>commit_sha</code>, <code>total_specs</code>,
+              <code>annotated_specs</code>, <code>annotated_ratio</code> (a 0–1 fraction, never a
+              percentage), <code>suite_size_measured</code>, <code>duration_seconds</code>, and
+              <code>shards</code>. A null and a zeroed block are different facts — never-reported
+              is not the same thing as ran-and-found-nothing.
             </td>
           </tr>
         <% end %>
@@ -360,17 +405,28 @@
     </div>
   <% end %>
 
-  <%= render UI::PanelComponent.new(title: "What this key cannot do yet", id: "limits") do %>
+  <%# "What this key cannot do yet" is what this panel used to say, and its list went false twice
+      over: the API grew delete, rename, CI-key minting, the registrable listing and member
+      management, and the MCP bridge now carries those to agents as tools. A page whose charter is
+      "wrong-by-definition wherever it disagrees with the server" cannot keep a list of absences
+      that no longer exist. The honest residual is small: two credential kinds that still cannot be
+      minted or revoked over the API, and in-place rotation, which the API surface rules out
+      deliberately rather than has not got to yet. %>
+  <%= render UI::PanelComponent.new(title: "What only the browser can do", id: "limits") do %>
     <div class="space-y-4">
       <p class="text-sm text-app-content-secondary">
-        Stated so you do not go looking. These are gestures the browser has and the API does not,
-        today:
+        Stated so you do not go looking. This API surface has grown since this guide was first
+        drafted — deleting a repository, renaming one, minting and revoking a repository's CI
+        keys, listing what may be registered, and member management are all served over the API
+        today, and the SpecGuard MCP bridge carries them to agents as tools. What is still
+        browser-only, today:
       </p>
       <ul class="list-disc space-y-1 pl-5 text-sm text-app-content-secondary">
-        <li>Minting or revoking a repository's CI key — the first key arrives with the
-            registration, and any further one is a browser gesture.</li>
         <li>Minting or revoking personal <code>sgu_</code> keys.</li>
-        <li>Un-registering a repository, or changing who it is shared with.</li>
+        <li>Minting or revoking agent <code>sga_</code> keys.</li>
+        <li>Rotating a repository's CI key in place — the API can mint and revoke those keys, and
+            deliberately offers no rotate: replacement is mint-new-then-revoke, and that is a
+            browser gesture.</li>
       </ul>
       <p class="text-sm text-app-content-secondary">
         Everything on this page is something the API does now. Where you need one of the above,
