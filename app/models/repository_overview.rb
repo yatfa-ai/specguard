@@ -725,11 +725,10 @@ class RepositoryOverview
   #
   # This is `LatestRunSerializer#serialized_shards`' argument one axis over, and the substitution
   # is exact. The scalars above say a run cost 253.75s; not one of them is a file, so an agent
-  # reading only those cannot learn WHERE the suite is slow — it can learn that it is.
-  # And a shard is not the answer: a shard
-  # is a CI partition, `TestRun#shard_durations`' own comment is explicit that it is not a code
-  # area, and "shard 3 was slow" names a machine while "spec/models/invoice_spec.rb was slow" names
-  # something a reader can go and edit.
+  # reading only those cannot learn WHERE the suite is slow — it can learn that it is. And a shard
+  # is not the answer: a shard is a CI partition, `TestRun#shard_durations`' own comment is explicit
+  # that it is not a code area, and "shard 3 was slow" names a machine while
+  # "spec/models/invoice_spec.rb was slow" names something a reader can go and edit.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query. `SpecFileDurations` is already
   # view-free — `repositories_controller.rb` is its only other caller — so the API and the panel
@@ -738,21 +737,21 @@ class RepositoryOverview
   #
   # `rows` MIRRORS `SpecFileDurations#rows` VERBATIM and re-sorts nothing, on the rule
   # `LatestRunSerializer#serialized_shard_rows` follows: the aggregate orders
-  # `SUM(duration_seconds) DESC NULLS LAST, spec_file_path ASC`, and that NULLS LAST is
-  # load-bearing rather than incidental — a re-sort
-  # here on a plain `desc` would put the file that reported NOTHING at the head of a list whose
-  # whole contract is "heaviest first". Inheriting the order is what makes `rows.first` and the
-  # panel's heaviest file the same file by construction instead of by coincidence.
+  # `SUM(duration_seconds) DESC NULLS LAST, spec_file_path ASC`, and that NULLS LAST is load-bearing
+  # rather than incidental — a re-sort here on a plain `desc` would put the file that reported
+  # NOTHING at the head of a list whose whole contract is "heaviest first". Inheriting the order is
+  # what makes `rows.first` and the panel's heaviest file the same file by construction instead of
+  # by coincidence.
   #
   # STRUCTURED COUNTS, NOT PROSE, the rule `LatestRunSerializer#serialized_shards` states and
   # this block obeys one grain down. `Row#coverage_label` words this same coverage as `"4 of 12"`
-  # and `#duration_label`
-  # words the total as `"1.23s"` / `"not reported"`; a machine-readable client cannot act on either
-  # without parsing it. So `recorded_count` and `timed_count` go out as the integers those
-  # sentences are built from and `total_seconds` as a raw float. This is also how the honesty
-  # constraint is met PER ROW rather than only for the block: `SUM` skips NULLs silently, so a file
-  # whose examples were half untimed reports a total covering half of it, and every row states what
-  # its own total was summed over instead of leaving one caption to cover a list of mixed coverage.
+  # and `#duration_label` words the total as `"1.23s"` / `"not reported"`; a machine-readable client
+  # cannot act on either without parsing it. So `recorded_count` and `timed_count` go out as the
+  # integers those sentences are built from and `total_seconds` as a raw float. This is also how the
+  # honesty constraint is met PER ROW rather than only for the block: `SUM` skips NULLs silently, so
+  # a file whose examples were half untimed reports a total covering half of it, and every row
+  # states what its own total was summed over instead of leaving one caption to cover a list of
+  # mixed coverage.
   #
   # `total_seconds` is `null`, NEVER `0.0`, for a file none of whose examples reported a timing —
   # `duration_seconds` above and `shards.machine_seconds` already follow this rule, and
@@ -1975,9 +1974,9 @@ class RepositoryOverview
   # the suite. Serialized as the boolean rather than left for the client to re-derive from
   # `total_specs`, so the endpoint and the panel cannot drift on what "measured" means.
   #
-  # Counts and booleans, never prose: `TestRun#delivery_description` and `#wall_clock_coverage`
-  # word these same shard facts in English for the panel, and `LatestRunSerializer#serialized_shards` already
-  # settled that a machine-readable client cannot act on a sentence without parsing it.
+  # Counts and booleans, never prose: `TestRun#delivery_description` and `#wall_clock_coverage` word
+  # these same shard facts in English for the panel, and `LatestRunSerializer#serialized_shards`
+  # already settled that a machine-readable client cannot act on a sentence without parsing it.
   def serialized_history_row(run)
     {
       commit_sha: run.commit_sha,
