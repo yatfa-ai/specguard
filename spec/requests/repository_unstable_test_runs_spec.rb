@@ -427,6 +427,39 @@ RSpec.describe "Repository unstable test runs", type: :request do
       expect(cap_alert).to have_text("its window runs newest first", normalize_ws: true)
     end
 
+    # THE STATE THAT OPENS THE ALERT — the gate is a strict `>`, so one dropped row is the first
+    # truncated population (`LIMIT + 1` recorded), not a tail case, and it is the only state in
+    # which the body takes its singular. Pinned in the sibling truncation clauses' shape:
+    # `stub_const` keeps the fixture small because `outcome_sequence_in` reads the constant at call
+    # time, and the plural forms are asserted ABSENT so a regression to the unconditional wording
+    # goes red.
+    # @intent: {"entity": "SpecObservation", "action": "keep cap alert singular", "behavior": "at exactly one dropped row the alert says the 1 row it dropped is the newest one recorded under this description with no plural verb or noun phrase, and the count-neutral remainder is unchanged", "layer": "request"}
+    it "keeps the cap alert grammatical where exactly one row was dropped" do
+      stub_const("SpecObservation::UNSTABLE_TEST_RUNS_LIMIT", 10)
+
+      repository = create_repository(user: @user, github_full_name: "acme/looped-singular")
+      # 6 + 5 rows over two runs = 11 recorded against a limit of 10 — one row shed off the newest
+      # run — and the outcome flips passed→failed at each run's first example so the ranking above
+      # lists this description and the drill-in renders.
+      [[6, "passed"], [5, "failed"]].each_with_index do |(row_count, first_outcome), index|
+        specs = (1..row_count).map do |i|
+          example_spec(name: flaky, outcome: i == 1 ? first_outcome : "passed", line_number: i)
+        end
+        ingest(repository, specs, commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(cap_alert).to have_text("the 1 row it dropped is the newest one recorded under " \
+                                     "this description", normalize_ws: true)
+      expect(cap_alert).to have_no_text("it dropped are")
+      expect(cap_alert).to have_no_text("the newest ones recorded")
+      expect(cap_alert).to have_no_text("rows it dropped")
+      # Only the first sentence varies with the count — the sha the list stops at and the API
+      # pointer are count-neutral and render unchanged in the singular state too.
+      expect(cap_alert).to have_text("The list ends at 01c0ffe", normalize_ws: true)
+    end
+
     # THE BLOCKING CLAIM: the reading rule withholds the regression branch when the cap took the end
     # it is read from. Pinned from BOTH sides — the same sentence is asserted PRESENT on an
     # untruncated window by "states which end of the list is the newest run" above, so its absence
