@@ -283,7 +283,8 @@
                 carries — so CI is presenting a dead credential and work is being lost. That is
                 show's chain-equivalent aggregate (`@last_api_request_at` present AND
                 `@last_live_api_request_at` blank, its refusing branch sitting above), computed per
-                repository by RepositoriesController#stranded_rotation_time in Ruby off the same
+                repository by ApiKeyPartition#stranded_rotation_time (reached through
+                RepositoriesController#stranded_rotation_time) in Ruby off the same
                 live row set the key count above uses, so this costs no query per card either.
                 NOT the bare `ApiKey#rotated_and_unused?` per key: the predicate is what the state
                 is DERIVED from, and keyed on it the card would contradict `show` where a live key

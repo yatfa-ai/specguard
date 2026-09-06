@@ -209,47 +209,41 @@ class RepositoriesController < ApplicationController
     # by the paired preload guard beside it. Separate guards because from here the paths differ.
     keys = @repository.api_keys.order(created_at: :desc)
     keys = keys.includes(:created_by_user) if repository_policy.can?(:keys_manage)
-    all_keys = keys.to_a
-    # THE RETIREMENT SPLIT, taken in Ruby off the ONE SELECT above: live keys to everything that
-    # behaved as before, retired rows to their own collection. Partitioning here rather than adding
-    # a `WHERE revoked_at IS NULL` is what keeps this page on its pinned absolute query budget — a
-    # second SELECT for the revoked rows would fail it even where it cost no fresh round trip
-    # (query-cache hits are counted) — and it makes the split a decision the page can see rather
-    # than a default the reader has to remember. `@api_keys` stays the name every existing reader
-    # (the keys table, `has_api_keys`, `former_member?`'s rows) already asks, and every one of those
-    # readers is a LIVE-keys question: a revoked row's `last_used_at` describes a credential that
-    # no longer exists, its creator no longer holds a live credential, and the wire-up panel must
-    # not point CI at a repository with nothing that authenticates. SPGD-804 states each of these
-    # sites; none of them may silently change meaning because a row stopped being deleted.
-    @api_keys = all_keys.reject(&:revoked?)
-    @revoked_api_keys = all_keys.select(&:revoked?)
-    # The keys whose `last_used_at` was stamped by a token that no longer exists: rotated, with
-    # nothing having authenticated since. `ApiKey#rotated_and_unused?` carries the rule and both of
-    # its nil cases. Read by the key list, which must not print an inherited "last used" age, and
-    # by the connection indicator in the page header. Read off the LIVE partition: a key that was
-    # rotated and THEN revoked is both, and the revocation is the newer and stronger fact — it
-    # belongs to the revoked state below, and `rotated_and_unused?` must not fire for it here.
-    @rotated_unused_api_keys = @api_keys.select(&:rotated_and_unused?)
-    # DID ANYTHING EVER AUTHENTICATE — the newest use across every LIVE key, whichever token stamped
-    # it. Restricted to live rows since the retirement split: a revoked key's `last_used_at` is the
-    # history of a credential that no longer exists, and letting it answer here would render the
-    # "Key rotated, not yet in use" branch over a repository whose every key was revoked and nothing
-    # was ever rotated into disuse. `nil` means no live key has ever been used at all, which is the
-    # only question this can answer and the one the "Not connected yet" branch asks. It must NOT be
-    # read as "the repository is reachable now": a rotation retires a token without touching its
-    # use, so this figure outlives the credential that produced it.
-    @last_api_request_at = @api_keys.filter_map(&:last_used_at).max
-    # THE SAME FIGURE, RESTRICTED TO KEYS WHOSE `last_used_at` STILL DESCRIBES THE TOKEN THEY ARE
-    # CARRYING NOW — the one the "Connected" stat may report, because it is the only one whose age
-    # belongs to a credential that still exists. `nil` while every key that has ever authenticated
-    # has since been rotated and not used, which is exactly the window between a rotation and the
-    # replacement reaching CI, and precisely when the stat used to read `Connected` in success tone
-    # over a pipeline that had been 401ing since the rotation.
+    # THE RETIREMENT SPLIT, one object off the ONE SELECT above. `ApiKeyPartition` owns the
+    # live / revoked / stranded / presented-revoked split and every figure derived from it — the
+    # same object the agent-facing credential-health block and the repositories grid read, so all
+    # three surfaces answer one key the same way by construction instead of by three hand-typed
+    # copies agreeing (two of those copies drifted in lockstep twice in this seam's first six
+    # days; see the class comment). The load stays here, in Ruby off the single SELECT the pinned
+    # absolute page budget prices — a second SELECT for the revoked rows would fail it even where
+    # it cost no fresh round trip (query-cache hits are counted) — and the object is handed the
+    # loaded rows rather than the relation, so the budget stays visible at the site that pays it.
     #
-    # Separate from `@last_api_request_at` rather than replacing it, because the panel needs both:
-    # the difference between the two is what tells "nothing has ever connected" apart from
-    # "something did, with a token that is gone".
-    @last_live_api_request_at = (@api_keys - @rotated_unused_api_keys).filter_map(&:last_used_at).max
+    # `@api_keys` stays the name every existing reader (the keys table, `has_api_keys`,
+    # `former_member?`'s rows) already asks, and every one of those readers is a LIVE-keys
+    # question: a revoked row's `last_used_at` describes a credential that no longer exists, its
+    # creator no longer holds a live credential, and the wire-up panel must not point CI at a
+    # repository with nothing that authenticates. SPGD-804 states each of these sites; none of
+    # them may silently change meaning because a row stopped being deleted. The revocation-outranks-
+    # rotation rule behind `@rotated_unused_api_keys` — a key rotated and THEN revoked is revoked,
+    # never stranded — lives in the partition's `stranded_rows`, which reads off its live side.
+    partition = ApiKeyPartition.for(keys.to_a)
+    @api_keys = partition.live_rows
+    @revoked_api_keys = partition.revoked_rows
+    # The keys whose `last_used_at` was stamped by a token that no longer exists — read by the key
+    # list, which must not print an inherited "last used" age, and by the connection indicator's
+    # rotated branch in the page header.
+    @rotated_unused_api_keys = partition.stranded_rows
+    # The two figures the connection indicator branches on, derived from the partition because they
+    # are computed FROM it — `@last_api_request_at` is the newest use across the LIVE rows
+    # (restricted to live since the retirement split: letting a revoked row answer would render the
+    # rotated branch over a repository whose every key was revoked and nothing was ever rotated
+    # into disuse), and `@last_live_api_request_at` the same figure restricted to keys whose
+    # `last_used_at` still describes the token they carry now. Their nils are load-bearing —
+    # "nothing has ever connected" versus "something did, with a token that is gone" — and the
+    # partition's own methods carry those readings in full.
+    @last_api_request_at = partition.last_api_request_at
+    @last_live_api_request_at = partition.last_live_api_request_at
     # THE RETIRED KEYS THE PLATFORM HAS SEEN BEING PRESENTED — a revoked token arriving and being
     # refused stamps `last_refused_at` on the row it names (`Api::BaseController`'s failure path),
     # and this is the set the connection indicator's revoked state is derived from. Restricted to
@@ -257,7 +251,7 @@ class RepositoriesController < ApplicationController
     # synthesizing one for it is exactly what the honest-bound rule forbids. The recency of the
     # stamp travels with the row (`last_refused_at`), so the rendered state can date the last
     # observed presentation rather than claim a present tense the data does not carry.
-    @presented_revoked_api_keys = @revoked_api_keys.select(&:revoked_and_still_presented?)
+    @presented_revoked_api_keys = partition.presented_revoked_rows
     # Every suite figure on the Overview panel is read off this one row — suite size, annotated
     # count, and the difference between them. `nil` is load-bearing and means *never ingested*,
     # which the panel renders as an empty state rather than as `0%`; a repository whose CI has
@@ -1155,90 +1149,56 @@ class RepositoriesController < ApplicationController
 
   # `repository_id => key count` for every repository on this page — the same shape, and the same
   # reason, as `shared_permissions` and `latest_test_runs`. Derived from `api_key_rows` below
-  # rather than issuing its own grouped COUNT: the rotation state beside it needs the same rows
-  # under the same scope, and two reads would hit `api_keys` twice per page render for one answer
-  # each. The GROUP BY this used to run is replaced by a group-by in Ruby over that one row set —
-  # same `{repository_id => count}` answer, still one `api_keys` SELECT for the whole page, still
-  # scoped to the ids already on this page so it never counts `api_keys` globally.
+  # through `ApiKeyPartition` rather than issuing its own grouped COUNT: the rotation state beside
+  # it needs the same rows under the same scope, and two reads would hit `api_keys` twice per page
+  # render for one answer each. The GROUP BY this used to run is a group-by in Ruby over that one
+  # row set — same `{repository_id => count}` answer, still one `api_keys` SELECT for the whole
+  # page, still scoped to the ids already on this page so it never counts `api_keys` globally.
   #
   # LIVE keys only (SPGD-804): the badge deep-links to `#api-keys`, and the panel it lands on
   # renders the live partition — a count that included retained revoked rows would advertise "4
   # keys" over a table showing one, the same misreading `MembershipsController#keys_minted_by`
-  # was corrected for.
+  # was corrected for. The count reads `live_rows.size` off each partition rather than the size of
+  # the handed-in rows, so the badge's premise is stated where it is read rather than depending on
+  # the load's scope staying narrow.
   #
   # Counted for the whole page even though `key_count_visible?` withholds the badge from a
   # `view`-only member: the gate is on what is *rendered*, not on what is loaded, and narrowing the
   # query to visible ids would put a per-card decision back in front of it for no benefit. Nothing
   # here reaches a viewer the gate has not already admitted.
   def api_key_counts
-    @api_key_counts ||= api_key_rows.group_by(&:repository_id).transform_values(&:size)
+    @api_key_counts ||= api_key_partitions.transform_values { |partition| partition.live_rows.size }
   end
 
   # `repository_id => the oldest stranded `rotated_at`` for every repository on this page that
   # reads the way show's rotated branch reads — `nil` for every repository that does not, and
   # therefore renders no marker. The value the card's rotation sentence dates itself from.
   #
-  # THE TRIGGER IS SHOW'S CHAIN, NOT THE ROW PREDICATE. The decision card this ticket was resumed
-  # under settled that fork, and this follows it: on `show` the rotated-but-unused state is branch
-  # 3 of an exclusive `elsif` chain, reached only when nothing is refusing AND `@last_api_request_at`
-  # is present AND `@last_live_api_request_at` is blank — some live key has authenticated, and every
-  # token that ever did has since been rotated away, so CI is presenting a credential that no longer
-  # exists. `ApiKey#rotated_and_unused?` is the predicate that state is DERIVED from (the model's
-  # own word), not the state itself. Keyed on it per row, the card would contradict `show` on a
-  # repository whose live key keeps CI connected (the stranded key beside it holds nothing back —
-  # `show` says Connected) and on a key rotated before it ever authenticated (`show` says Not
-  # connected yet — no token was ever routed through it, so no replacement is hanging). The chain's
-  # refusing conjunct is carried by the CARD'S ORDER rather than by suppression: the refusal marker
-  # renders first, and a card holding both facts shows both.
+  # THE VERDICT IS `ApiKeyPartition#stranded_rotation_time`'s AND IS NOT RE-DERIVED HERE, on the
+  # rule the grid already holds for its refusal marker (`rejection_verdict` above): the card and
+  # the page it links to must not reach one repository's connection state through two readings that
+  # happen to agree. That method carries the whole story — why the trigger is show's branch chain
+  # and not the per-key predicate, and why the date is the oldest stranded `rotated_at` and never
+  # the newest.
   #
-  # "Stranded" is still `ApiKey#rotated_and_unused?`'s own verdict, applied per loaded ROW rather
-  # than re-derived as SQL. The predicate has two `nil` limbs that go OPPOSITE ways (`rotated_at`
-  # nil is never-rotated → false; `last_used_at` nil is rotated before it ever authenticated →
-  # TRUE), so a `WHERE rotated_at > last_used_at` spelling here would be a second expression of
-  # the rule, free to drift from the one both web surfaces read. Here the limbs enter as GUARDS
-  # rather than as badge triggers: the predicate sorts the rows into the stranded set, and the two
-  # aggregate questions read `last_used_at` off the sets — the first off all of them, the second
-  # off everything but the stranded.
-  #
-  # LIVE rows only, on the rule `show` states at its own rotation split: a key that was rotated and
-  # THEN revoked is both, the revocation is the newer and stronger fact, and the rotated state must
-  # not fire for it. `api_key_rows` below is already the live partition, so this answer and the
-  # key count describe the same population — a card's count and its rotation marker cannot
-  # disagree about which keys a repository has.
-  #
-  # The OLDEST stranded `rotated_at`, and never the newest: each stranded key satisfies the rule
-  # against its own rotation, so the only date true of all of them at once is the oldest — the
-  # NEWEST would date a five-day-dead pipeline at one minute whenever a second key was rotated just
-  # now. The same choice the connection indicator's own branch makes over the same column.
+  # `ApiKeyPartition.grouped_by_repository` takes the page's one loaded row set and hands back a
+  # partition per repository — the same two-constructor split `RejectedIngests` draws for this
+  # grid, and for the same reason: the grid has rows for N repositories and must not build N loads.
+  # A repository with no handed-in rows has no entry, which is exactly what both readers below want
+  # (`api_key_count` defaults the missing count to 0; a missing rotation time renders no marker).
   def stranded_rotation_time(repository)
     stranded_rotation_times[repository.id]
   end
 
   def stranded_rotation_times
-    @stranded_rotation_times ||= api_key_rows.group_by(&:repository_id)
-                                             .transform_values { |rows| stranded_rotation_time_within(rows) }
+    @stranded_rotation_times ||= api_key_partitions.transform_values(&:stranded_rotation_time)
   end
 
-  # Show's rotated branch, over one repository's loaded rows. The locals mirror the chain's
-  # conditions and are named after the instance variables that carry them on `show` — read the
-  # three lines beside `repositories_controller#show`'s own guards and the equivalence is the
-  # check.
-  def stranded_rotation_time_within(rows)
-    stranded = rows.select(&:rotated_and_unused?)
-    # `@last_api_request_at` — did any LIVE key ever authenticate, with whichever token it carried
-    # at the time (a rotation retires a token without touching its use).
-    some_authenticated = rows.filter_map(&:last_used_at).max.present?
-    # `@last_live_api_request_at` — does any live key's `last_used_at` still describe the token it
-    # is carrying NOW; blank means every token that ever authenticated has been rotated away.
-    nothing_live = (rows - stranded).filter_map(&:last_used_at).max.blank?
-
-    return nil unless some_authenticated && nothing_live
-
-    # The trigger cannot fire on an empty stranded set: with nothing stranded, `nothing_live` reads
-    # the very rows `some_authenticated` does and the two cannot hold at once — so the min runs
-    # over a non-empty set, and every stranded row carries a `rotated_at` (the predicate's first
-    # limb is exactly that), never a filtered-out nil.
-    stranded.filter_map(&:rotated_at).min
+  # One partition per repository, built once per render off the single SELECT `api_key_rows`
+  # issued. Both per-card `ApiKey` questions — the count above and the rotation age above that —
+  # read off these objects, so they cannot disagree about which keys a repository has.
+  def api_key_partitions
+    @api_key_partitions ||= ApiKeyPartition.grouped_by_repository(api_key_rows)
   end
 
   # The rows BOTH per-card `ApiKey` questions read — the key count above and the rotation age
