@@ -2604,7 +2604,7 @@ class RepositoryOverview
   # rather than `||=`, for the reason `unstable_tests` states below and under the same double read
   # (`show` asks for the window block's `grouped` and then for the rows).
   #
-  # ⭐ THE WINDOW IS HANDED IN REVERSED, AND THAT IS THIS METHOD'S WHOLE SUBTLETY — the one place
+  # ⭐ THIS SITE ASKS FOR THE WINDOW OLDEST FIRST, AND THAT IS ITS WHOLE SUBTLETY — the one place
   # this gate is NOT a copy of its flakiness sibling, which sits ten lines below and is otherwise
   # line-for-line identical.
   #

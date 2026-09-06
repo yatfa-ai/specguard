@@ -119,15 +119,16 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
   #
   # `SlowestTests.for` documents its window as OLDEST FIRST and takes `runs.last` as the ANCHOR that
   # decides which tests are on the list at all. `history_runs` is `Repository#recent_test_runs`,
-  # ordered `(created_at, id) DESC` — NEWEST first — so the controller hands it in `.reverse`d.
-  # Dropping that `.reverse` does not raise: `validate_anchor!` checks tenancy only and an old run
-  # of the same repository passes it, so the block comes back fully populated, plausible, and
-  # anchored on the OLDEST run of the window.
+  # ordered `(created_at, id) DESC` — NEWEST first — and the window carries that orientation, so
+  # this site asks it for `oldest_first`. Asking for the wrong orientation does not raise:
+  # `validate_anchor!` checks tenancy only and an old run of the same repository passes it, so the
+  # block comes back fully populated, plausible, and anchored on the OLDEST run of the window.
   #
   # Which is why this asserts the SERVED `anchor_run` against the window's newest run rather than
-  # merely asserting that some run was named. It is the one example in this file that fails if the
-  # `.reverse` is dropped, and it is written to fail LOUDLY: the fixture's newest and oldest runs
-  # carry different shas, different timestamps and — through the partition below — different
+  # merely asserting that some run was named. If this site ever asks for the wrong end, this
+  # example fails — the partition below and the ranked-state example further down the file fail
+  # with it — and it is written to fail LOUDLY: the fixture's newest and oldest runs carry
+  # different shas, different timestamps and — through the partition below — different
   # membership.
   describe "⭐ which run the ranking was anchored on" do
     # @intent: { entity: "SlowestTests", action: "anchor on the newest run", behavior: "the window names its newest run as the anchor and never the oldest", layer: "request" }

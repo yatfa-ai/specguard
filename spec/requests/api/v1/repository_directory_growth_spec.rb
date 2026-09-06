@@ -128,14 +128,15 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
     # ⭐ CRITERION 5 — THE MECHANISM ASSERTION, and the reason this file's fixture is asymmetric.
     #
     # `SpecDirectoryWindowGrowth.for` documents its parameter as OLDEST FIRST, takes `runs.last` as
-    # the anchor and walks from index 0 for the baseline. `history_runs` is newest-first. Handed in
-    # unreversed it does not raise: it anchors on the OLDEST run, baselines against a NEWER one, and
-    # every `change` comes back sign-flipped under a block that looks perfectly well-formed.
+    # the anchor and walks from index 0 for the baseline. `history_runs` is newest-first, and this
+    # site asks it for `oldest_first`. Asking for the wrong orientation does not raise: it anchors
+    # on the OLDEST run, baselines against a NEWER one, and every `change` comes back sign-flipped
+    # under a block that looks perfectly well-formed.
     #
     # So this asserts the two things that flip and nothing that does not: the SIGN of each movement,
-    # and WHICH of the two commits the comparison was taken FROM. Verified by mutation — dropping
-    # the `.reverse` in `RepositoryOverview#spec_directory_window_growth` turns
-    # `spec/models` from `+3` into `-3` and swaps the two shas, and this example goes red.
+    # and WHICH of the two commits the comparison was taken FROM. Verified by mutation — flipping
+    # the `oldest_first` ask in `RepositoryOverview#spec_directory_window_growth` to `newest_first`
+    # turns `spec/models` from `+3` into `-3` and swaps the two shas, and this example goes red.
     # @intent: { entity: "repository directory_growth block", action: "anchor on newest run", behavior: "the comparison anchors on the newest run and baselines on the oldest, so change signs are truthful", layer: "request" }
     it "anchors on the newest run and baselines on the oldest, so every change carries its true sign" do
       _window, block = blocks(query: { branch: "main" })
