@@ -363,16 +363,23 @@ RSpec.describe "The public administration guide", type: :request do
     # WORLD, with no mutation reaching it). So this reads the ROUTER, which is the ground the
     # charter defers to, and pins both directions the CI-key claims rest on:
     #
-    #   - the include limb: the API keeps serving mint/revoke for a repository's keys — the
-    #     capability the corrected bullet names. Red if that route vanishes, which would turn
-    #     the bullet's "replacing over the API is two calls" half false.
+    #   - the include limbs, one verb each: the API keeps serving BOTH calls the bullet's
+    #     "replacing over the API is two calls" rests on — mint (POST the collection) and revoke
+    #     (DELETE the member). A bare path-match cannot pin them: both routes' paths carry the
+    #     same substring, so either route alone satisfied it (round-5 finding: green with mint
+    #     gone, green with revoke gone) — while this surface most plausibly moves one verb at a
+    #     time. Either call going missing is what turns the "two calls" half false, so each verb
+    #     is pinned separately.
     #   - the not_to limb: the API keeps refusing `regenerate` — the absence that makes
     #     "in place" the one browser-only CI-key gesture. Red the day someone routes it, which
     #     is the day the panel's residual goes stale.
     it "claims nothing browser-only that the API in fact routes" do
-      api_v1 = Rails.application.routes.routes.map { |r| r.path.spec.to_s }.grep(%r{^/api/v1})
+      api_v1 = Rails.application.routes.routes
+                   .map { |r| "#{r.verb} #{r.path.spec}" }
+                   .grep(%r{ /api/v1})
 
-      expect(api_v1).to include(a_string_matching(%r{/repositories/:repository_id/api_keys}))
+      expect(api_v1).to include(a_string_matching(%r{^POST /api/v1/repositories/:repository_id/api_keys\(}))
+      expect(api_v1).to include(a_string_matching(%r{^DELETE /api/v1/repositories/:repository_id/api_keys/:id}))
       expect(api_v1).not_to include(a_string_matching(/regenerate/))
     end
   end
