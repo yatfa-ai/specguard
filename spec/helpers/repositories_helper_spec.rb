@@ -100,4 +100,30 @@ RSpec.describe RepositoriesHelper, type: :helper do
       end
     end
   end
+
+  # SPGD-989 — the coverage phrase both halves of the agent-key revoke disclosure read, with the
+  # count taken off the STORED set. The limb the request suite cannot see is the deleted
+  # repository: nothing cascades into the stored array, so a set of three can carry two live
+  # names, and the sentence must say so rather than let "3" sit beside two names.
+  describe "#agent_key_revoke_confirmation" do
+    def key_over(count)
+      AgentApiKey.new(name: "Fleet", repository_ids: Array.new(count, 0), permissions: [])
+    end
+
+    # @intent: { entity: "RepositoriesHelper", action: "compose the agent-key revoke confirm", behavior: "the confirm names the count and the names of the stored set and cuts across every repository in it", layer: "unit" }
+    it "names the full set with count and names" do
+      confirmation = helper.agent_key_revoke_confirmation(key_over(2), %w[acme/a acme/b])
+
+      expect(confirmation).to eq("Revoke Fleet? It covers 2 repositories: acme/a, acme/b. " \
+        "Revoking it here cuts the token on every repository in that set — anything still " \
+        "using it stops working immediately.")
+    end
+
+    # @intent: { entity: "RepositoriesHelper", action: "disclose deleted repositories", behavior: "a stored set larger than its live names reads the difference as repositories since deleted", layer: "unit" }
+    it "discloses repositories deleted since mint" do
+      confirmation = helper.agent_key_revoke_confirmation(key_over(3), ["acme/a"])
+
+      expect(confirmation).to include("3 repositories: acme/a (2 repositories since deleted)")
+    end
+  end
 end

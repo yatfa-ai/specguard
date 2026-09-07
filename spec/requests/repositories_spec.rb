@@ -723,6 +723,170 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response).to have_http_status(:not_found)
   end
 
+  # SPGD-989 — the agent credential's own panel, beside the `sgk_` table. One credential kind per
+  # panel is the shape both siblings chose (`sgk_` here, `sga_` on /account), because the two are
+  # different grants a reader must not have to disambiguate: a repository-scoped key and a
+  # multi-repository set with a permission set are listed the same way nowhere else.
+  describe "the agent keys panel" do
+    # Scoped finders, for the reason the sgk_ table's finders above state in full: the page is
+    # full of names and prose, and a bare whole-document `include` passes with the panel empty.
+    # `#agent-keys` is the panel's own id, not something added for these finders.
+    def agent_keys_table = Capybara.string(response.body).find("#agent-keys table")
+
+    def agent_key_row(name) = agent_keys_table.find("tbody tr", text: name)
+
+    def agent_key_confirm(name) = agent_key_row(name).find("form")["data-turbo-confirm"]
+
+    # The grant's verb half renders as the stored set, "read only" for the minimal one — the same
+    # rendering /account gives the same column, so one grant reads the same on both surfaces.
+    # @intent: {"entity": "AgentApiKey", "action": "list covering keys", "behavior": "the panel lists every live agent key whose set covers the repository with owner, hint, set size, permission set and minted age, and no key that does not cover it or is revoked", "layer": "request"}
+    it "lists every live agent key covering the repository, and nothing else" do
+      repository = create_repository(user: @user)
+      second_own = create_repository(user: @user, github_full_name: "acme/second-service")
+      minter = create_user(github_uid: "7202", github_handle: "agent-minter")
+      create_membership(repository: repository, user: minter,
+                        permissions: [RepositoryMembership::VIEW, RepositoryMembership::KEYS_MANAGE,
+                                      RepositoryMembership::REPO_DELETE])
+      # The same permissions on the second repository too: a grant is checked per repository in
+      # the set, so minting `repo.delete` over both requires holding it over both.
+      create_membership(repository: second_own, user: minter,
+                        permissions: [RepositoryMembership::VIEW, RepositoryMembership::KEYS_MANAGE,
+                                      RepositoryMembership::REPO_DELETE])
+      wide = create_agent_api_key(user: minter, repositories: [repository, second_own],
+                                  permissions: %w[view repo.delete], name: "Fleet wide")
+      create_agent_api_key(user: @user, repositories: [repository], name: "Minimal")
+      foreign = create_agent_api_key(user: @user, repositories: [second_own], name: "Elsewhere only")
+      create_agent_api_key(user: @user, repositories: [repository], name: "Retired").revoke!
+
+      get repository_path(repository)
+
+      expect(agent_key_row("Fleet wide")).to have_text("agent-minter")
+        .and have_text(wide.token_hint)
+        .and have_text("view, repo.delete")
+        .and have_text("2")
+        .and have_text("Revoke")
+      # The minimal grant is a state to render, not an absence to hide — the honest phrase, not
+      # an empty cell.
+      expect(agent_key_row("Minimal")).to have_text("read only")
+      expect(agent_key_row("Fleet wide")).to have_text("ago")
+
+      expect(agent_keys_table).to have_no_text("Elsewhere only")
+      expect(agent_keys_table).to have_no_text("Retired")
+    end
+
+    # AC2 and AC3 as one pin, because they are one discipline at two gates: exactly ONE SELECT
+    # against `agent_api_keys` for a keys.manage viewer — `eager_load` keeps the owner ride-along
+    # inside that same statement — and ZERO for a viewer without the gate, who is not told there
+    # is such a panel. The String spelling of `queries_against` cannot be used here: `"api_keys"`
+    # is a substring of `"agent_api_keys"`, so both counts are matched on the FROM clause.
+    # @intent: {"entity": "AgentApiKey", "action": "gate and bound the listing read", "behavior": "a keys.manage viewer's page issues exactly one agent_api_keys SELECT and still exactly one api_keys SELECT while a view-only member's page issues neither and renders no panel", "layer": "request"}
+    it "costs one agent-key SELECT behind the gate, and none for a viewer without it" do
+      repository = create_repository(user: @user)
+      create_agent_api_key(user: @user, repositories: [repository], name: "Listed")
+
+      get repository_path(repository)
+      owner_agent_reads = queries_against(/FROM "agent_api_keys"/) { get repository_path(repository) }.count
+      owner_key_reads = queries_against(/FROM "api_keys"/) { get repository_path(repository) }.count
+
+      expect(response.body).to include("Listed") # the read is non-vacuous, not a count of nothing
+      expect(owner_agent_reads).to eq(1)
+      expect(owner_key_reads).to eq(1)
+
+      member = create_user(github_uid: "7203", github_handle: "viewer")
+      create_membership(repository: repository, user: member)
+      sign_in_via_github(uid: "7203")
+
+      get repository_path(repository)
+      member_agent_reads = queries_against(/FROM "agent_api_keys"/) { get repository_path(repository) }.count
+
+      expect(member_agent_reads).to eq(0)
+      expect(response.body).not_to include("Listed")
+      expect(response.body).not_to include("agent-keys")
+    end
+
+    # SPGD-124's marker, carried to the third credential — and its RULE with it: "does this
+    # person still have access" is a membership question, so the badge renders only for a viewer
+    # who holds `members.manage` as well. The two examples are the same key state seen by the two
+    # viewer classes; the difference is the rule.
+    describe "the ex-member marker" do
+      def minted_then_departed(repository, handle:, uid:, key_name:)
+        minter = create_user(github_uid: uid, github_handle: handle)
+        membership = create_membership(repository: repository, user: minter,
+                                       permissions: [RepositoryMembership::VIEW,
+                                                     RepositoryMembership::KEYS_MANAGE])
+        create_agent_api_key(user: minter, repositories: [repository], name: key_name)
+        membership.destroy!
+      end
+
+      # @intent: {"entity": "AgentApiKey", "action": "mark ex-minter key", "behavior": "on a members.manage holder's page an outliving agent key names its minter and carries the no longer has access marker", "layer": "request"}
+      it "marks an outliving key for a viewer who also holds members.manage" do
+        repository = create_repository(user: @user)
+        minted_then_departed(repository, handle: "departed-dev", uid: "7204", key_name: "Their agent")
+
+        get repository_path(repository)
+
+        expect(agent_key_row("Their agent")).to have_text("departed-dev")
+        expect(agent_key_row("Their agent")).to have_text("no longer has access")
+      end
+
+      # @intent: {"entity": "AgentApiKey", "action": "withhold ex-minter marker", "behavior": "a keys.manage-only viewer sees the same row without the no longer has access marker", "layer": "request"}
+      it "tells a keys.manage-only viewer nothing about membership status" do
+        repository = create_repository(user: create_user(github_uid: "7205", github_handle: "owner"))
+        minted_then_departed(repository, handle: "departed-dev", uid: "7206", key_name: "Their agent")
+        viewer = create_user(github_uid: "7207", github_handle: "keys-only")
+        create_membership(repository: repository, user: viewer,
+                          permissions: [RepositoryMembership::VIEW, RepositoryMembership::KEYS_MANAGE])
+
+        sign_in_via_github(uid: "7207")
+        get repository_path(repository)
+
+        # The handle is still credential metadata the gate entitles them to; the membership fact
+        # is what stays behind its own gate — told nothing, not told less.
+        expect(agent_key_row("Their agent")).to have_text("departed-dev")
+        expect(agent_key_row("Their agent")).to have_no_text("no longer has access")
+      end
+    end
+
+    # AC6 — the one-act honesty of the confirm. `revoke!` cuts a multi-repository set everywhere
+    # at once, so the dialog names the FULL stored set, count first, before the press.
+    # @intent: {"entity": "AgentApiKey", "action": "disclose the full set", "behavior": "each row's confirm names the key's stored set with count and both repository names, and the minimal key reads 1 repository", "layer": "request"}
+    it "names the key's full repository set in the confirm dialog" do
+      repository = create_repository(user: @user)
+      second_own = create_repository(user: @user, github_full_name: "acme/second-service")
+      create_agent_api_key(user: @user, repositories: [repository, second_own], name: "Wide",
+                           permissions: %w[view])
+      create_agent_api_key(user: @user, repositories: [repository], name: "Narrow",
+                           permissions: %w[view])
+
+      get repository_path(repository)
+
+      expect(agent_key_confirm("Wide")).to include("2 repositories")
+        .and include(repository.github_full_name)
+        .and include("acme/second-service")
+        .and include("Revoking it here cuts the token on every repository in that set")
+      expect(agent_key_confirm("Narrow")).to include("1 repository")
+    end
+
+    # AC7 — the archived-owner treatment, SHOWN AND MARKED rather than filtered: the row is still
+    # `revoked_at: nil`, an archived owner cannot sign in to /account to retire it, so hiding it
+    # would hide an unrevokable grant from the only people who can revoke it. What the marker
+    # buys is that the listing never reads one as "still authenticating" — authenticate refuses
+    # these tokens (`merge(User.active)`), and the page says so beside the name.
+    # @intent: {"entity": "AgentApiKey", "action": "mark archived-owner key", "behavior": "a live key whose owner archived their account stays listed with an owner archived marker beside the name", "layer": "request"}
+    it "keeps an archived owner's key listed and marks it as no longer authenticating" do
+      repository = create_repository(user: @user)
+      owner_minter = create_user(github_uid: "7208", github_handle: "departed-owner")
+      create_membership(repository: repository, user: owner_minter)
+      create_agent_api_key(user: owner_minter, repositories: [repository], name: "Orphaned")
+      owner_minter.update!(archived_at: Time.current)
+
+      get repository_path(repository)
+
+      expect(agent_key_row("Orphaned")).to have_text("departed-owner")
+      expect(agent_key_row("Orphaned")).to have_text("owner archived")
+    end
+  end
+
   describe "the Overview panel's suite figures" do
     # Scoped to the panel rather than the whole document, because the page is full of numbers and
     # prose that would satisfy a bare `response.body` match. `#overview` is the panel's own id.
@@ -2259,7 +2423,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # spec/requests/repository_unannotated_directories_spec.rb, which also carries the panel's own
       # N+1 guard: the equality across two suite sizes that an absolute count here cannot tell from
       # an ordinary widening.
-      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 22 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
+      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 23 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -2286,10 +2450,16 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # served on every page load because the Overview's reading rows and the sentence beside
         # them both read it. Memoized on the run, so it is one query and not one per reader.
         #
+        # +1 from SPGD-989: the agent credential's listing read behind the `keys.manage` gate —
+        # ONE statement against `agent_api_keys` (`live.covering` with the `eager_load(:user)`
+        # ride-along inside it), so the owner's page prices the table even on a fixture with no
+        # agent keys, exactly as the `sgk_` load above is priced. The name map for the revoke
+        # confirmations is bought only when a row exists, so this fixture pays nothing for it.
+        #
         # Rebaselined by two rather than carved out, because this is an ABSOLUTE page budget:
         # hiding a real new query behind a filter would be the regression this count exists to
         # catch.
-        expect(count_all_queries { get repository_path(repository) }).to eq(22)
+        expect(count_all_queries { get repository_path(repository) }).to eq(23)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

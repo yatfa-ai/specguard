@@ -75,6 +75,16 @@ Rails.application.routes.draw do
       # and the route has to name which one. See ApiKeysController#regenerate.
       post :regenerate, on: :member
     end
+
+    # THE AGENT CREDENTIAL'S REPOSITORY-SIDE REVOKER (SPGD-989) — DELETE-only, because a
+    # repository page mints no `sga_` key (minting is /account's, where the grant is chosen) and
+    # offers no rotation (the model has no `regenerate!`, deliberately). Only `destroy` was
+    # missing: retiring an outliving key through the same `keys.manage` gate that already retires
+    # `sgk_` keys, from the page that lists it. Controller is named for the repository surface it
+    # serves (`repository_agent_keys`), NOT the /account one — that controller authorizes through
+    # the owner association, which is the wrong authority for a repository-admin act; see its own
+    # header for the fork.
+    resources :agent_keys, only: %i[destroy], controller: "repository_agent_keys"
     # `/repositories/:repository_id/members` reads as the thing it lists (people), while the
     # controller is named for the row it actually manipulates (RepositoryMembership). `edit`
     # /`update` change a member's permission set in place: the alternative is Revoke + re-add,
