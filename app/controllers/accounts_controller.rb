@@ -89,11 +89,13 @@ class AccountsController < ApplicationController
     # the reason it exists, so the ordering rule lives with the model instead of being restated at
     # the one call site that could drift from it.
     #
-    # ⚠️ A READ, on the same terms as the grant above and for a sharper reason: these rows are not
-    # synced with GitHub (see `GithubInstallation`), and the honest way to show what is really there
-    # would be a live page-walk per installation. That is the cost `/repositories/new` already pays
-    # and this page deliberately does not — listing SpecGuard's own record is what the panel claims
-    # to show, and it is what the Disconnect acts on.
+    # ⚠️ A READ, on the same terms as the grant above and for a sharper reason: these rows are
+    # reconciled against GitHub only when this user passes back through the App callback (see
+    # `GithubInstallation`), so between callbacks the panel can still name an account GitHub has
+    # since stopped reporting. The honest way to show what is really there would be a live
+    # page-walk per installation. That is the cost `/repositories/new` already pays and this page
+    # deliberately does not — listing SpecGuard's own record is what the panel claims to show, and
+    # it is what the Disconnect acts on.
     @github_installations = current_user.github_installations.recent_first
   end
 

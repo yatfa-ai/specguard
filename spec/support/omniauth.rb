@@ -90,8 +90,10 @@ module OmniAuthHelpers
     rows = Array(installations).map do |id, login|
       GithubAppUserAuthorization::Installation.new(installation_id: id, account_login: login)
     end
+    # `complete: true` — this stub names GitHub's whole answer, which is what it has always meant:
+    # the callback's removal half acts on exactly these rows and no others.
     authorization = GithubAppUserAuthorization::Authorization.new(token: token, expires_at: expires_at,
-                                                                  installations: rows)
+                                                                  installations: rows, complete: true)
 
     allow(SpecGuard::GithubApp).to receive(:configured?).and_return(true)
     allow(GithubAppUserAuthorization).to receive(:authorize).and_return(authorization)

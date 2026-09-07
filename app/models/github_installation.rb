@@ -15,14 +15,17 @@
 # short-lived token, which lives in their session and never here. There is deliberately no token
 # column, and so nothing to encrypt and nothing a database dump could leak.
 #
-# ## Recorded at the callback, not synced
+# ## Written and reconciled at the callback, not otherwise synced
 #
 # A row is written when GitHub hands the user back from the installation or authorization flow
-# (`GithubInstallationsController#callback`). Nothing keeps it in step with GitHub afterwards —
-# reacting to installation and uninstall events is a later slice — so the connected set is read
-# LIVE from GitHub on every use rather than trusted from here. A row for an installation that has
-# since been uninstalled, or that this user has lost access to, costs a `GithubApi::NotFound` on the
-# next read and nothing worse, which is exactly the failure a stale row should have.
+# (`GithubInstallationsController#callback`) — and that same pass REMOVES the rows GitHub's
+# complete answer no longer names (`forget_unreported`), so the connected set is brought back in
+# step with GitHub every time the user comes through. Between callbacks nothing keeps it in step —
+# reacting to installation and uninstall events is still a later slice — so the connected set is
+# read LIVE from GitHub on every use rather than trusted from here. A row that goes stale between
+# callbacks, because an installation was uninstalled or this user lost access to it after their
+# last pass through, costs a `GithubApi::NotFound` on the next read and nothing worse, which is
+# exactly the failure a stale row should have.
 class GithubInstallation < ApplicationRecord
   belongs_to :user
 
@@ -78,6 +81,25 @@ class GithubInstallation < ApplicationRecord
     installation
   end
   private_class_method :write
+
+  # The absence half of `record`: remove every row of this user's that `reported` does not name.
+  #
+  # `reported` must be a COMPLETE reading of GitHub's answer — the callback calls this only when
+  # the walk declared itself complete, for the same reason `GithubApi::Listing` exists: a row
+  # absent from a truncated reading was never said to be gone. An EMPTY `reported` is a real
+  # complete answer ("you hold nothing") and removes everything, which is exactly what the user
+  # who uninstalled the App everywhere needs to have happen. Rows are removed for THIS USER only —
+  # two members of one organization legitimately hold their own row for the same installation.
+  #
+  # Returns the rows it removed, so the caller can name them.
+  #
+  # A concurrent callback reporting MORE can lose a row to this one's smaller answer, and the next
+  # pass through the flow re-records it. One request of window, and the failure mode is a stale
+  # row's reappearance rather than a lost one — the same absorbed-race trade `record` makes, in
+  # reverse.
+  def self.forget_unreported(user:, reported:)
+    user.github_installations.where.not(installation_id: reported).destroy_all
+  end
 
   # What to call this installation on screen. Falls back to the id because a row recorded from a
   # callback that carried no login must still be nameable in a list of connected accounts.

@@ -827,7 +827,8 @@ RSpec.describe "Bulk organization registration", type: :request do
         GithubAppUserAuthorization::Authorization.new(
           token: "ghu_reconnected", expires_at: 1.hour.from_now,
           installations: [GithubAppUserAuthorization::Installation.new(installation_id: 6001,
-                                                                       account_login: "acme")]
+                                                                       account_login: "acme")],
+          complete: true
         )
       )
       # The reconnect landing in a healthier moment: the credential works now, so the account reads.
@@ -1195,7 +1196,8 @@ RSpec.describe "Bulk organization registration", type: :request do
             GithubAppUserAuthorization::Authorization.new(
               token: "ghu_reconnected", expires_at: 1.hour.from_now,
               installations: [GithubAppUserAuthorization::Installation.new(installation_id: 6001,
-                                                                          account_login: "acme")]
+                                                                          account_login: "acme")],
+              complete: true
             )
           )
           # The reconnect landing in a healthier moment: the credential works now, so the account
@@ -1301,7 +1303,8 @@ RSpec.describe "Bulk organization registration", type: :request do
           GithubAppUserAuthorization::Authorization.new(
             token: "ghu_reconnected", expires_at: 1.hour.from_now,
             installations: [GithubAppUserAuthorization::Installation.new(installation_id: 6001,
-                                                                        account_login: "acme")]
+                                                                        account_login: "acme")],
+            complete: true
           )
         )
         stub_github(repos: names.map { |name| github_repo(name) })
