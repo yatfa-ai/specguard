@@ -617,16 +617,27 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # than a row out of the served list, for two load-bearing reasons: the served list is the
   # NARROWED view (`?q=` may empty it while the grant stands, and the reading must not flip
   # with the filter), and the stand-in costs no query — `covers?`/`grants?` are in-memory
-  # array reads, so this block adds nothing to the request's query budget. A key whose granted
-  # repositories have all since been deleted answers every capability false — the gate's own
-  # answer, since the set it bounds no longer reaches anything.
+  # array reads, so this block adds nothing to the request's query budget. That no-query choice
+  # buys a reading of the KEY's grant, not of the reachability of the rows behind it: `covers?`
+  # is an id-array read (`repository_ids.include?(repository.id)`) that never asks whether a row
+  # still exists, so a key whose granted repositories have all since been destroyed reads its
+  # held capabilities true beside an empty `repositories:` list. That is coherent as served —
+  # the body hands the client no id to act on, and `#show` on a dead id still answers 404 —
+  # and hardening it would take a row-existence lookup, the real query the stand-in was chosen
+  # to avoid.
   #
   # ## The disclosure boundary
   #
   # The capability reading and nothing else: never the minting owner's identity (this API does
   # not serve it anywhere on this surface — see `#serialize`'s `role` note) and never a
-  # `grantable_permissions` reading, which would describe what the key could DELEGATE. An agent
-  # key is the end of a grant chain, not a link in one (`AgentApiKeyPolicy`'s class header).
+  # `grantable_permissions` reading. Those are different questions about the same key, with
+  # different answers: this block is the key reading what it HOLDS, while what the key may
+  # HAND OUT is the delegation bound `AgentApiKeyPolicy#grantable_permissions` (SPGD-973)
+  # answers for the member-write paths that mint grants — consumed at
+  # `UserRepositoryMembersController#refuse_credential_over_reach!`. SPGD-973 also retracted
+  # the policy header's old "end of a grant chain" stance when it opened keys.manage and
+  # members.manage, so that sentence is citable no longer — but the retraction did not merge
+  # the two questions, and this block still asks only the holding one.
   def serialized_credential_grant
     return {} unless @current_api_key.is_a?(AgentApiKey)
 
