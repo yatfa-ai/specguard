@@ -222,10 +222,10 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
     end
 
     # THE TIMING, which is what makes this a real risk rather than a theoretical one. `capture` is
-    # reached only from a picker render, and `/account` renders no picker — so the redirect after
-    # `destroy` cannot forge the empty grant, and the example above would pass even if the
-    # controller did nothing. The forging happens on the reader's NEXT visit to a picker, which is
-    # what this renders before asserting.
+    # reached only from a picker render, and `/account` renders no picker — so the destroy request
+    # itself mints nothing, and the example above isolates the deletion. A regression of the
+    # model's gates would surface as a fresh empty grant minted on the reader's NEXT visit to a
+    # picker — the only path that reaches `capture` — which is what this renders before asserting.
     # @intent: {"entity": "GithubInstallation", "action": "withstand later picker visit", "behavior": "after the last disconnect a further picker render returns ok and still mints no fresh empty grant", "layer": "request"}
     it "still leaves no grant after the reader visits a picker again" do
       disconnect(@person.github_installations.sole)

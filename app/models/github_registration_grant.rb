@@ -126,10 +126,9 @@ class GithubRegistrationGrant < ApplicationRecord
     # implicit: a person already holding a fresh-but-empty grant — minted over an installation that
     # no longer exists — keeps answering its false `:not_in_installation` for at most `MAX_AGE`
     # instead of the true `:not_granted`, where before this gate every read re-minted the row and
-    # the false answer was immortal. A
-    # github.com uninstall has no local moment to hook (which is why the event stream is the rest
-    # of the installation-lifecycle slice), and dropping the row at the read — the alternative —
-    # was refused because a read must not destroy.
+    # the false answer was immortal. A github.com uninstall has no local moment to hook (which is
+    # why the event stream is the rest of the installation-lifecycle slice), and dropping the row
+    # at the read — the alternative — was refused because a read must not destroy.
 
     grant = find_or_initialize_by(user_id: user.id)
     grant.registrable_full_names = downcased(sources.registrable)

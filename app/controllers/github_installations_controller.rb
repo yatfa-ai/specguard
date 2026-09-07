@@ -164,11 +164,6 @@ class GithubInstallationsController < ApplicationController
   # standing, a still-fresh grant would keep REDEEMING for the names it holds: true when captured,
   # but the disconnect has made SpecGuard's whole premise with this person false.
   #
-  # NOT the same thing as letting the empty grant be forged and deleting it afterwards: the forging
-  # is lazy and happens on the reader's next picker render (`GithubRepositoryListing#github_sources`
-  # is memoized and lazy, and `AccountsController` does not include that concern), so there is no
-  # later moment here to clean up in. Absent is the state that must be reached NOW.
-  #
   # Guarded on the last installation rather than run unconditionally: with an installation left,
   # the next picker render captures a real reading, and throwing away a still-redeemable grant in
   # the meantime would break registration for an agent holding a key that worked a moment ago.
