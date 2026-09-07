@@ -94,6 +94,139 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
       get "/api/v1/repositories", headers: bearer(agent_key.raw_token)
       expect(response).to have_http_status(:unauthorized)
     end
+
+    # SPGD-977 — THE KEY'S OWN GRANT, SERVED TO ITSELF. The permission set is mint-time-fixed on
+    # the key and, before this block, was rendered in exactly one place: the minting person's
+    # browser account page. The 403 sentence deliberately names no capability
+    # (`Api::BaseController#render_forbidden`), so trial-and-error against refusals was the only
+    # discovery path a token had. The block answers the one question the caller is unambiguously
+    # entitled to — what its own credential was granted — and it is DERIVED THROUGH
+    # `AgentApiKeyPolicy`, so the reading cannot drift from the gate that enforces it.
+    # @intent: { entity: "AgentApiKey", action: "read its own grant", behavior: "an agent key learns which capabilities it holds from the list response alone, the reading derived through the policy so it cannot contradict the gate", layer: "request" }
+    it "serves its own permission set as a credential block derived through the policy" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["keys.manage", "members.manage"])
+
+      get "/api/v1/repositories", headers: bearer(key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.dig("credential", "capabilities")).to eq(
+        "view" => true, "keys_manage" => true, "members_manage" => true,
+        "repo_delete" => false, "owner" => false
+      )
+    end
+
+    # The counterpart of the account page's "read only": the empty permission set is a
+    # deliberate, explicitly-valid mint (`AgentApiKey#owner_holds_every_granted_permission`), so
+    # the reading must say so AFFIRMATIVELY — `view` true because the set itself is the read
+    # boundary — rather than leave an absent block a client has to guess at.
+    # @intent: { entity: "AgentApiKey", action: "read an empty permission set", behavior: "a key minted with no permissions gets an affirmative machine-readable reading of its read-only grant, not an absent block", layer: "request" }
+    it "serves an affirmative reading of an empty permission set as the read-only grant it is" do
+      get "/api/v1/repositories", headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.dig("credential", "capabilities")).to eq(
+        "view" => true, "keys_manage" => false, "members_manage" => false,
+        "repo_delete" => false, "owner" => false
+      )
+    end
+
+    # PIN (i) OF THE NON-CONTRADICTION RULE: `owner?` is hardcoded false on the policy, so the
+    # owner-gated verb — rename — is refused whatever the array holds. The array is at its
+    # maximum here (every storable permission), and the reading still says `owner: false`.
+    # (The stored vocabulary cannot even name `:owner` — it is a sentinel, not a permission —
+    # which is why the maximum array is the strongest input this pin can take. The gate-side
+    # refusal itself is pinned by "cannot rename a repository" below.)
+    # @intent: { entity: "AgentApiKey", action: "pin the owner wall", behavior: "a key holding every storable permission still reads owner false, rename refused whatever the array holds", layer: "request" }
+    it "reads owner false even for a key holding every storable permission" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: RepositoryMembership::PERMISSIONS)
+
+      get "/api/v1/repositories", headers: bearer(key.raw_token)
+
+      expect(response.parsed_body.dig("credential", "capabilities", "owner")).to eq(false)
+    end
+
+    # PIN (ii) OF THE NON-CONTRADICTION RULE: read is implied by the set, so `view` reads true
+    # from an array that omits it — while the array's own member (`repo.delete`) reads true
+    # beside it, proving the map is DERIVED per capability and not a constant. The two halves
+    # are what stop a client building a capability model that disagrees with the gate.
+    # @intent: { entity: "AgentApiKey", action: "pin the implied read", behavior: "view reads true from an array that omits it while a held permission reads true beside it, the map derived per capability", layer: "request" }
+    it "reads view true when the array omits it and tracks a held permission beside it" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["repo.delete"])
+
+      get "/api/v1/repositories", headers: bearer(key.raw_token)
+
+      capabilities = response.parsed_body.dig("credential", "capabilities")
+      expect(capabilities["view"]).to eq(true)
+      expect(capabilities["repo_delete"]).to eq(true)
+      expect(capabilities["members_manage"]).to eq(false)
+    end
+
+    # THE ABSENCE RULE, on `Api::V1::RepositoriesController#serialized_api_key`'s own statement:
+    # a block that is not this credential's is ABSENT rather than nulled. A `sgu_` person key
+    # has no mint-time permission set at all — `credential: null` would assert one exists and
+    # is empty, which is a sentence about a credential that does not exist.
+    # @intent: { entity: "UserApiKey", action: "omit the block", behavior: "under a sgu_ person key the credential block is absent, not present-and-null", layer: "request" }
+    it "omits the credential block entirely under a person key" do
+      person_key = create_user_api_key(user: person)
+
+      get "/api/v1/repositories", headers: bearer(person_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body).not_to have_key("credential")
+    end
+
+    # THE GRANT IS THE KEY'S, NOT THE FILTERED VIEW'S. A narrowing ask (`?q=`) empties the list
+    # without touching the credential, so the block must read the same here as on the unasked
+    # request — an implementation deriving the reading from the served rows would flip `view`
+    # to false exactly when the caller narrowed, contradicting the gate for repositories that
+    # are still in the set.
+    # @intent: { entity: "AgentApiKey", action: "keep the grant off the narrowed view", behavior: "under ?q= matching nothing the list empties but the credential block still reads the key's own grant", layer: "request" }
+    it "serves the same grant reading when a narrowing ask empties the list" do
+      get "/api/v1/repositories", params: { q: "not-granted" }, headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body["repositories"]).to eq([])
+      expect(response.parsed_body.dig("credential", "capabilities", "view")).to eq(true)
+    end
+
+    # THE DISCLOSURE BOUNDARY: this is a read of the key's own grant and nothing else — never
+    # the minting owner's identity (the API does not serve it anywhere on this surface) and
+    # never a person's `grantable_permissions` (an agent key is the END of a grant chain —
+    # `AgentApiKeyPolicy`'s class header). The block is exactly the capability reading; the
+    # out-of-set 404 on `#show` — the other half of "nothing outside the key's own set" — is
+    # pinned by the existing "answers 404 for a repository outside the set" example above.
+    # @intent: { entity: "AgentApiKey", action: "bound the disclosure", behavior: "the credential block carries the capability reading and nothing else, no minting-owner identity", layer: "request" }
+    it "serves nothing about the minting owner in the credential block" do
+      get "/api/v1/repositories", headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body["credential"].keys).to eq(["capabilities"])
+      expect(response.parsed_body["credential"]["capabilities"].keys)
+        .to match_array(%w[view keys_manage members_manage repo_delete owner])
+      expect(response.body).not_to include(person.github_handle)
+    end
+
+    # ZERO NEW QUERIES, on the list path's own budget: every input is already in memory — the
+    # key resolved on the way in, its repository set is the payload being loaded, and the
+    # policy the reading derives through does in-memory array reads only (`covers?` /
+    # `grants?`). Same shape as the cost example at the foot of this file: one resolving
+    # statement (the eager-loaded owner rides it — the JOIN, never a `FROM "users"`), one
+    # stamp, nothing else against either credential table.
+    # @intent: { entity: "AgentApiKey", action: "serve the grant for free", behavior: "the credential block adds no query to the list request, resolution stays one credential read plus the stamp and the person is never re-read", layer: "request" }
+    it "adds no query to the list request for the credential block" do
+      statements = queries_against(/api_keys|"users"/) do
+        get "/api/v1/repositories", headers: bearer(agent_key.raw_token)
+      end
+
+      expect(response).to have_http_status(:ok)
+      expect(statements.grep(/FROM "agent_api_keys"/).size).to eq(1)
+      expect(statements.grep(/FROM "api_keys"/)).to be_empty
+      expect(statements.grep(/FROM "users"/)).to be_empty
+      expect(statements.grep(/UPDATE "agent_api_keys"/).size).to eq(1)
+    end
   end
 
   describe "GET /api/v1/repositories/:id" do
