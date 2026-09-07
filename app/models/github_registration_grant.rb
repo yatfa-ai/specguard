@@ -86,30 +86,50 @@ class GithubRegistrationGrant < ApplicationRecord
     # after any controller has finished, so `GithubInstallationsController#destroy` deleting the
     # grant at the moment of the act would be undone by the reader's next page view. It deletes it
     # anyway, at the moment of the act; this is what makes the deletion stick.
-    #
-    # WHAT IT DOES NOT REACH, and this is the gap worth naming rather than glossing: an installation
+    return nil unless sources.installed?
+
+    # WHAT THE TWO GATES ABOVE STILL LET THROUGH, and the third gate below closes: an installation
     # GitHub has stopped answering for. Someone who uninstalls the App on github.com — which
     # `GithubHelper`'s own disclosure invites them to do — KEEPS the row, so `installations_for` is
     # not empty, `sources` never reaches `blank_sources`, and `collect` hardcodes `installed: true`
     # (`InstallationRepositories:304`). The 404 is absorbed as `:unreadable` with an EMPTY listing
     # contributing no error, deliberately (see `read`'s comment), so `complete?` is true as well.
-    # Both gates pass, a fresh empty grant is written, and the verdict is the same false
+    # Both gates above pass, a fresh empty grant is written, and the verdict is the false
     # `:not_in_installation` described above. Measured, not reasoned: one row, GitHub answering
     # NotFound, after a real picker render — `installed? true, complete? true, guard fires false,
     # grant registrable [], stale? false, verdict :not_in_installation`.
     #
-    # Closing that direction needs a moment this slice does not have: it is the "later slice" of
-    # installation and uninstall EVENTS that `GithubInstallation:18-25` names, and it is fenced off
-    # as out of scope here. A slice that takes it on wants a predicate distinct from `installed?`,
+    # THE THIRD GATE: at least one installation must have ANSWERED. What that dead reading lacks is
+    # exactly that, and `outcomes` already records it — `collect` builds one `Outcome` per
+    # installation walked, `read?` is "this installation handed over its repositories", and the
+    # display side has consumed the same signal since SPGD-745/SPGD-792 (`Sources#unread_outcomes`).
+    # This is the predicate the pre-SPGD-975 note here asked for — distinct from `installed?`,
     # which reads like "the App is installed on GitHub" but means "this person holds installation
-    # ROWS" — `sources` sets it from whether `installations_for` returned anything, never from what
-    # GitHub answered. `outcomes.any?(&:read?)` is the "and at least one of them answered" reading,
-    # and it is already sitting there.
+    # ROWS". A reading where nothing answered is not GitHub's answer about anything — it is the
+    # silent drift `GithubInstallation:18-25` names — so it writes no grant, and `GrantVerifier`
+    # reads the absent-or-stale grant as `:not_granted`, whose sentence names the real fix:
+    # reconnect GitHub in a browser.
     #
-    # Deliberately NOT a deletion of the existing row: the same discipline the incomplete reading
-    # above follows. This says "do not write a statement we cannot make", and whoever holds a grant
-    # keeps it until it lapses on `MAX_AGE` or is dropped by the act that made it false.
-    return nil unless sources.installed?
+    # Deliberately `any?` rather than `all?`: a PARTIAL reading — one installation answered, another
+    # 404s — is still GitHub's answer about everything it did read, and refusing it would freeze a
+    # working multi-account user's grant until they disconnected the dead row by hand. The unread
+    # account stays a display concern, which the pages already render. (An empty `outcomes` cannot
+    # reach this line in production: the only two `Sources` built with `outcomes: []` are the
+    # `blank_sources` paths, and both are stopped above — `installed: false` by the guard above,
+    # `error: :not_authorized` by `complete?`.)
+    return nil unless sources.outcomes.any?(&:read?)
+
+    # Deliberately NOT a deletion of the existing row, on either refusing gate: the same discipline
+    # the incomplete reading above follows. This says "do not write a statement we cannot make",
+    # and whoever holds a grant keeps it until it lapses on `MAX_AGE` or is dropped by the act that
+    # made it false. For the third gate that tail is bounded and worth stating rather than leaving
+    # implicit: a person already holding a fresh-but-empty grant — minted over an installation that
+    # no longer exists — keeps answering its false `:not_in_installation` for at most `MAX_AGE`
+    # instead of the true `:not_granted`, where before this gate every read re-minted the row and
+    # the false answer was immortal. A
+    # github.com uninstall has no local moment to hook (which is why the event stream is the rest
+    # of the installation-lifecycle slice), and dropping the row at the read — the alternative —
+    # was refused because a read must not destroy.
 
     grant = find_or_initialize_by(user_id: user.id)
     grant.registrable_full_names = downcased(sources.registrable)

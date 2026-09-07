@@ -149,16 +149,20 @@ class GithubInstallationsController < ApplicationController
   # ⚠️ THE MIRRORED INVARIANT. Removing the last installation must remove the grant WITH it, and
   # this is not tidiness — it is the difference between a true refusal and a false one.
   #
-  # `GithubRegistrationGrant.capture` gates on `sources.complete?` alone, and with no installations
-  # `InstallationRepositories.sources` answers `blank_sources(installed: false)` — `truncated:
-  # false, error: nil`, so `complete?` is TRUE. Left alone, the reader's next render of a picker
-  # page would therefore overwrite the grant with empty arrays and a FRESH `captured_at`, and
-  # `GrantVerifier#verdict_for` reads that as neither `registrable?` nor `visible?` and answers
-  # `:not_in_installation` — "Add it on GitHub, then pick it here", which sends an agent to add a
-  # repository that is already there.
+  # `GithubRegistrationGrant.capture` refuses to write from a reading that is not GitHub's whole
+  # answer: not `complete?` (truncated, or an installation that errored), not from a person holding
+  # no installation rows (`installed?` — and with no installations `InstallationRepositories.sources`
+  # answers `blank_sources(installed: false)`, which IS complete), and — since SPGD-975 — not from a
+  # reading in which no installation answered. Left to the model alone, this reader would keep the
+  # grant until it lapsed on `MAX_AGE`: every later render declines to overwrite it, and the row
+  # survives with its old stamp.
   #
-  # Deleting it lands the reader on `:not_granted` instead — "SpecGuard has no current record of
-  # your GitHub permissions… reconnect GitHub" — which is true and names the fix.
+  # Deleting HERE is the moment-of-the-act half of the same invariant — the "or is dropped by the
+  # act that made it false" clause of the class comment, and the disconnect is that act. It is what
+  # lands the reader on `:not_granted` — "SpecGuard has no current record of your GitHub
+  # permissions… reconnect GitHub", true and naming the fix — from the very next redemption. Left
+  # standing, a still-fresh grant would keep REDEEMING for the names it holds: true when captured,
+  # but the disconnect has made SpecGuard's whole premise with this person false.
   #
   # NOT the same thing as letting the empty grant be forged and deleting it afterwards: the forging
   # is lazy and happens on the reader's next picker render (`GithubRepositoryListing#github_sources`
