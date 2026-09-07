@@ -294,13 +294,21 @@ class NearDuplicateClusters
                neighbours: NEIGHBOURS)
     validate_run!(repository, run)
 
+    # The population is read BEFORE the pairs rather than after, because the pair read now owes
+    # it an argument: the read's SPGD-983 guard re-answers an empty approximate result exactly
+    # on a small tenant, and the tenant's size is what bounds that re-answer. Reading it here —
+    # where it was being read anyway — keeps the census at its fixed number of questions; the
+    # read counting it itself would add a size-dependent round trip to every empty result.
+    population = SpecIdentity.clusterable_population_in(repository)
+
     edges = SpecIdentity.near_duplicate_pairs_in(repository, similarity: similarity,
                                                              neighbours: neighbours,
-                                                             run_id: run&.id)
+                                                             run_id: run&.id,
+                                                             identity_count: population[:identity_count])
     clusters = Assembly.new(edges, neighbours: neighbours).clusters
 
     new(clusters: clusters, limit: limit, run: run,
-        population: SpecIdentity.clusterable_population_in(repository),
+        population: population,
         presence: run ? SpecObservation.identity_presence_in(run) : UNRUN)
   end
 

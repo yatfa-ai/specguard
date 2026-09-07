@@ -114,6 +114,32 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       end
     end
 
+    # SPGD-983 — the reddening SHAPE of this file's whole CI family (SPGD-879, SPGD-969, and
+    # SPGD-983 itself: run 34097827587 failed exactly the three examples above and below with
+    # `cluster_count: 0` / `no item found`). When the approximate pass answers empty — the graph
+    # having spent its search budget on structure it can never return — the endpoint used to
+    # serve that silence as an empty census. It must serve the cluster through the exact
+    # re-answer instead, with every figure from the headline example intact. The stub is the
+    # honest induction at spec scale (the real starvation needs a graph polluted at CI-suite
+    # scale; see SpecIdentity::EXACT_REANSWER_POPULATION_CAP), and the exact pass runs FOR REAL,
+    # so without the guard this example goes red exactly the way CI did.
+    # @intent: { entity: "near_duplicates", action: "serve a cluster", behavior: "when the approximate pair read answers empty the endpoint still serves the cluster through the exact re-answer, with member, example and weight figures intact at the wire", layer: "request" }
+    it "serves the cluster through the exact re-answer when the approximate pass answers empty" do
+      original = SpecIdentity.method(:run_pair_read)
+      allow(SpecIdentity).to receive(:run_pair_read) do |repo, **kwargs|
+        kwargs[:exact] ? original.call(repo, **kwargs) : []
+      end
+
+      served = block(query: ask)
+
+      expect(served["cluster_count"]).to eq(1)
+      cluster = served["clusters"].sole
+      expect(cluster["member_count"]).to eq(2)
+      expect(cluster["example_count"]).to eq(4)
+      expect(cluster["total_seconds"]).to eq(1.0)
+      expect(cluster["similarity_range"]).to eq([0.89, 0.89])
+    end
+
     # @intent: { entity: "near_duplicates", action: "pin the key set", behavior: "the block serves only machine fields at every level - floor, basis, run id, counts and rows - and no prose label such as a duration or coverage sentence appears anywhere in the JSON", layer: "request" }
     it "serves exactly the keys this contract pins, and never the object's prose" do
       evidencing_near_duplicate_failure do

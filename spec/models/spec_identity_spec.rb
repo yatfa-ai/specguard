@@ -5,6 +5,142 @@ require "rails_helper"
 RSpec.describe SpecIdentity do
   let(:repository) { create_repository }
 
+  describe "the small-tenant exact re-answer (SPGD-983)" do
+    # CI reddened three times on this family (SPGD-879, SPGD-969, SPGD-983 — run 34097827587)
+    # with `cluster_count: 0` served for a fixture whose pair sits at cosine 0.89: the HNSW
+    # descent had walked itself into graph structure it could never return (invisible vertices —
+    # rolled-back ingests, foreign tenants — are fully traversable; pgvector 0.8.6's
+    # `HnswLoadElementImpl` performs no visibility or qualification check during the walk) and
+    # came back empty, and the read printed that silence as a finding. On a tenant this small
+    # the read now re-answers exactly instead. The provider is LEXICAL here, on the model
+    # spec's own calibrated pair, so the exact pass has a real pair to find — under the
+    # suite-wide deterministic stub two different strings are near-orthogonal and these
+    # examples would pass for the wrong reason.
+    include_context "with lexical embeddings"
+
+    let(:expired) { "Checkout rejects an expired card" }
+    let(:outright) { "Checkout rejects an expired card outright" }
+
+    # The stub is the one honest way to hand the guard an empty approximate answer at spec
+    # scale: inducing it through the real scan needs a graph polluted at CI-suite scale
+    # (hundreds of thousands of dead vertices — see the constant's comment). What is pinned
+    # here is the guard's contract — "an empty approximate answer on a small tenant is
+    # re-answered, exactly, through the same statement" — with the exact pass running FOR REAL.
+    # Without the guard these examples go red exactly the way CI did. Returns the number of
+    # exact passes issued, so each example can assert the boundary it names.
+    def with_empty_approximate_pass
+      exact_calls = 0
+      original = described_class.method(:run_pair_read)
+      allow(described_class).to receive(:run_pair_read) do |repo, **kwargs|
+        if kwargs[:exact]
+          exact_calls += 1
+          original.call(repo, **kwargs)
+        else
+          []
+        end
+      end
+      yield
+      exact_calls
+    end
+
+    def read(identity_count: nil)
+      described_class.near_duplicate_pairs_in(repository, similarity: NearDuplicateClusters::SIMILARITY,
+                                                           neighbours: NearDuplicateClusters::NEIGHBOURS,
+                                                           run_id: nil,
+                                                           identity_count: identity_count ||
+                                                             described_class.clusterable_population_in(repository)[:identity_count])
+    end
+
+    # @intent: { entity: "SpecIdentity", action: "re-answer an empty census exactly", behavior: "when the approximate pass answers empty on a small tenant the read re-runs the same statement on the exact plan and serves the pair the graph missed", layer: "unit" }
+    it "re-answers exactly when the approximate pass answers empty on a small tenant" do
+      create_spec_identity(repository: repository, text: expired, line_number: 3)
+      create_spec_identity(repository: repository, text: outright, line_number: 9)
+      create_spec_identity(repository: repository, text: "Shipping calculates a delivery estimate", line_number: 12)
+
+      rows = nil
+      exact_calls = with_empty_approximate_pass { rows = read }
+
+      expect(exact_calls).to eq(1)
+      # One PAIR, returned from both ends — cosine is symmetric, so each identity's lateral
+      # finds the other; the shape the request spec's member_count of 2 is built from. The row
+      # carries the neighbour as an id (index 8), so the "each end found the other" claim reads
+      # it back through the table.
+      expect(rows.size).to eq(2)
+      expect(rows.map { |row| row[1] }).to contain_exactly(expired, outright)
+      neighbour_texts = rows.map { |row| described_class.find(row[8]).text }
+      expect(neighbour_texts).to contain_exactly(outright, expired)
+    end
+    # The re-read is bounded work, not a blanket retry: a repository that cannot hold a pair
+    # (0 or 1 identities) gets its empty answer straight through, because no graph state can
+    # hide a pair that has no second identity to be near.
+    # @intent: { entity: "SpecIdentity", action: "re-answer an empty census exactly", behavior: "a repository with fewer than two identities has its empty answer served untouched, with no exact pass issued", layer: "unit" }
+    it "serves the empty answer untouched when the repository cannot hold a pair" do
+      create_spec_identity(repository: repository, text: expired, line_number: 3)
+
+      rows = nil
+      exact_calls = with_empty_approximate_pass { rows = read }
+
+      expect(rows).to be_empty
+      expect(exact_calls).to eq(0)
+    end
+
+    # Above the cap the empty answer passes through: the exact shape is the 69.06-second
+    # all-pairs sort at 3,000 identities, and a legitimately duplicate-free large tenant must
+    # not pay it on every census render. The remaining large-tenant recall exposure is
+    # SPGD-72's decision, not this read's.
+    # @intent: { entity: "SpecIdentity", action: "re-answer an empty census exactly", behavior: "a repository above the exact-reanswer population cap has its empty answer served untouched, with no exact pass issued", layer: "unit" }
+    # Above the cap the empty answer passes through: the exact shape is the 69.06-second
+    # all-pairs sort at 3,000 identities, and a legitimately duplicate-free large tenant must
+    # not pay it on every census render. The remaining large-tenant recall exposure is
+    # SPGD-72's decision, not this read's. The boundary is pinned at the read's own argument —
+    # the census object feeds it from `clusterable_population_in`, whose counting is pinned by
+    # the coverage examples next door — so this needs no large tenant seeded to be exact.
+    # @intent: { entity: "SpecIdentity", action: "re-answer an empty census exactly", behavior: "a repository above the exact-reanswer population cap has its empty answer served untouched, with no exact pass issued", layer: "unit" }
+    it "serves the empty answer untouched above the population cap" do
+      rows = nil
+      exact_calls = with_empty_approximate_pass { rows = read(identity_count: described_class::EXACT_REANSWER_POPULATION_CAP + 1) }
+
+      expect(rows).to be_empty
+      expect(exact_calls).to eq(0)
+    end
+
+    # The cap itself is INSIDE the re-answer: an off-by-one here silently moves whole
+    # populations between the exact and approximate regimes, so the boundary is pinned on
+    # both sides of it rather than assumed from the comparison operator.
+    # @intent: { entity: "SpecIdentity", action: "re-answer an empty census exactly", behavior: "a repository at exactly the population cap still gets the exact re-answer", layer: "unit" }
+    it "re-answers at the cap itself, which is inclusive" do
+      exact_calls = with_empty_approximate_pass do
+        read(identity_count: described_class::EXACT_REANSWER_POPULATION_CAP)
+      end
+
+      expect(exact_calls).to eq(1)
+    end
+
+    # And the guard is silent while the approximate path is healthy: a non-empty answer never
+    # pays a second read, so the plan-asserting and cost-pinning examples next door are
+    # measuring one execution, as they always were.
+    # @intent: { entity: "SpecIdentity", action: "re-answer an empty census exactly", behavior: "a non-empty approximate answer is served as-is with no exact pass issued", layer: "unit" }
+    it "does not pay a second read when the approximate pass answers" do
+      create_spec_identity(repository: repository, text: expired, line_number: 3)
+      create_spec_identity(repository: repository, text: outright, line_number: 9)
+
+      exact_calls = 0
+      original = described_class.method(:run_pair_read)
+      allow(described_class).to receive(:run_pair_read) do |repo, **kwargs|
+        if kwargs[:exact]
+          exact_calls += 1
+          original.call(repo, **kwargs)
+        else
+          original.call(repo, **kwargs)
+        end
+      end
+
+      read
+
+      expect(exact_calls).to eq(0)
+    end
+  end
+
   describe "the two thresholds, which must not become one" do
     # The matching threshold and the duplicate-detection threshold read the same embedding and ask
     # opposite questions: "are these two observations the same test" versus "are these two tests

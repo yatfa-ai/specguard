@@ -289,6 +289,57 @@ class SpecIdentity < ApplicationRecord
   # on a small tenant it correctly still declines the index.
   VECTOR_OPERATOR_COST = 0.0025 * EmbeddingGenerator::DIMENSIONS
 
+  # The population below which `.near_duplicate_pairs_in` refuses to serve an empty answer from
+  # the approximate path, and re-reads exactly instead (SPGD-983).
+  #
+  # == The defect this cap bounds
+  #
+  # CI reddened on main at `482b3d9` (run 34097827587, 4233 examples / 3 failures, all in
+  # `repository_near_duplicates_spec.rb`): the census served `cluster_count: 0` for a fixture
+  # whose calibrated pair sits at cosine 0.89 — far inside the 0.85 floor. The SPGD-922 failure
+  # evidence captured the shape precisely: the HNSW plan WAS chosen (under relation-statistics
+  # poisoning — `pg_class.reltuples`/`relpages` written in place by an in-transaction `ANALYZE`
+  # survive the rollback, `spec/support/relation_statistics.rb`), and the inner per-identity
+  # descent answered `rows=0 loops=3` after 2,172 buffer hits.
+  #
+  # == The mechanism, read out of pgvector 0.8.6's source
+  #
+  # An HNSW traversal performs NO heap-visibility check while it walks
+  # (`hnswutils.c`, `HnswLoadElementImpl` reads element tuples and computes distances with no
+  # qualification and no visibility test) — so the graph stays connected through vertices whose
+  # heap rows are invisible: rows another example inserted and rolled back, rows of OTHER
+  # tenants, rows vacuum has not yet pruned. Visibility and the tenant filters bite only at
+  # result time, in the executor. A graph polluted by enough of that invisible structure makes
+  # the greedy descent spend its search budget walking tuples that can never be returned. When
+  # the result list empties, `hnswgettuple` resumes from the discarded candidates — until
+  # `so->tuples >= hnsw_max_scan_tuples` (20,000) or the scan's work_mem budget is exhausted —
+  # at which point it returns whatever passes, which over a dead-dominated region is nothing.
+  # The read then answers `[]`, and `NearDuplicateClusters` serves an empty census — a silent
+  # wrong answer, not an error.
+  #
+  # Reproduced locally: 25,000 rolled-back near-orthogonal vectors around a live 3-identity
+  # fixture turned the identical statement into `rows=0` on one run and back to the pair after
+  # `REINDEX INDEX index_spec_identities_on_embedding` — the graph, not the data, was the
+  # difference.
+  #
+  # == Why the remedy is an exact re-read, bounded by this constant
+  #
+  # An approximate read that answers "no pairs" is indistinguishable, from its rows alone, from
+  # one whose index graph answered nothing. The read may not print that silence as a finding on
+  # a tenant small enough that exactness is nearly free: 300 identities, where the exact shape's
+  # recorded cost is ~0.7s (the suite's own recorded benchmark — spec/models/
+  # near_duplicate_clusters_spec.rb — measured this statement at 69.06s for 3,000 identities,
+  # and the exact shape is quadratic in the tenant, (300/3000)² of it). Above the cap the empty
+  # answer passes through untouched: on a large tenant the exact shape is the 64.8-second
+  # all-pairs sort, a legitimate "no duplicates"
+  # census must not pay it, and the recall exposure that remains there is **SPGD-72's** decision
+  # (`hnsw.ef_search` / `iterative_scan`), not this read's. A repository with 0 or 1 identities
+  # skips the re-read too — no graph state can hide a pair that has no second identity.
+  #
+  # Every fixture tenant in the suite is far below the cap, which is what makes the CI family's
+  # reddening shape (`cluster_count: 0`) impossible on the exact path whatever the graph state.
+  EXACT_REANSWER_POPULATION_CAP = 300
+
   belongs_to :repository
   # The run that last observed this test. Optional because the FK nulls rather than cascades.
   belongs_to :last_seen_test_run, class_name: "TestRun", optional: true
@@ -456,7 +507,46 @@ class SpecIdentity < ApplicationRecord
   #   total_seconds, timed_count, neighbour_id, similarity]` per edge. `total_seconds` is nil for an
   #   identity none of whose examples in that run were timed, and `example_count` is 0 for one the
   #   run did not observe.
-  def self.near_duplicate_pairs_in(repository, similarity:, neighbours:, run_id:)
+  def self.near_duplicate_pairs_in(repository, similarity:, neighbours:, run_id:, identity_count:)
+    pairs = run_pair_read(repository, similarity: similarity, neighbours: neighbours,
+                                       run_id: run_id, exact: false)
+    return pairs if pairs.any?
+
+    # ⭐ SPGD-983: an empty answer from the approximate path is not served as a finding on a
+    # tenant small enough that exactness is nearly free. The rows alone cannot distinguish
+    # "no pair is close enough" from "the index graph answered nothing" — the failure shape of
+    # every documented reddening of `repository_near_duplicates_spec.rb` (SPGD-879, SPGD-969,
+    # SPGD-983: `cluster_count: 0` served for a fixture whose pair sits at cosine 0.89, the
+    # HNSW descent having spent its budget on invisible graph structure). On a tenant at or
+    # below {EXACT_REANSWER_POPULATION_CAP} the statement is re-run on the exact plan, which
+    # no graph state can starve; above it — and for a repository that cannot hold a pair at
+    # all — the empty answer passes through untouched, for the reasons the constant records.
+    #
+    # The population arrives as an ARGUMENT rather than being counted here on purpose: the
+    # census object already owes this figure to its coverage reporting, so threading it keeps
+    # the read at the fixed number of questions it is pinned to — one statement however large
+    # the suite, never a size-dependent extra round trip.
+    return pairs if identity_count < 2 || identity_count > EXACT_REANSWER_POPULATION_CAP
+
+    run_pair_read(repository, similarity: similarity, neighbours: neighbours,
+                                  run_id: run_id, exact: true)
+  end
+
+  # ONE execution of the pair statement, approximate or exact. `exact: false` runs it under the
+  # read's standing planner setup — the corrected operator price and the recall directive — and
+  # leaves the plan to the planner. `exact: true` is the same statement with the index paths
+  # disabled for the statement's own transaction, so the neighbour question is answered by
+  # scanning and sorting every sibling: the suite's own ground-truth idiom (SPGD-375 measured
+  # recall against exactly this spelling), promoted to a correctness guarantee for small
+  # tenants. The planner is not consulted a second time because no choice is left to make.
+  #
+  # Kept a separate method rather than inlined twice so the empty-answer guard in
+  # {.near_duplicate_pairs_in} and the specs that pin it name ONE seam — the spec that induces
+  # an empty approximate answer stubs this, with `exact: false`, and lets the exact pass run
+  # for real.
+  #
+  # @return [Array<Array>] the rows documented at {.near_duplicate_pairs_in}.
+  def self.run_pair_read(repository, similarity:, neighbours:, run_id:, exact:)
     sql = sanitize_sql_array([ <<~SQL, repository.id, neighbours, run_id, repository.id, 1 - similarity ])
       SELECT a.id, a.text, a.signal_source, a.file_path, a.line_number,
              w.example_count, w.total_seconds, w.timed_count,
@@ -486,11 +576,13 @@ class SpecIdentity < ApplicationRecord
 
     # The transaction, the recall directive and the price bookends are all
     # {SpecIdentity.with_hnsw_planner_setup}'s — this site answers the seam's one question.
-    # `correct_operator_price: true`, because this read needs BOTH corrections for its plan:
-    # without the price Postgres never chooses the index for this shape at all (the 2×2 at
-    # {VECTOR_OPERATOR_COST}), the seam's directive would be inert on the sort plan it falls
-    # back to, and the read would silently revert to the 64.8-second all-pairs sort.
-    with_hnsw_planner_setup(correct_operator_price: true) do
+    # `correct_operator_price: true` on the approximate pass, because that read needs BOTH
+    # corrections for its plan: without the price Postgres never chooses the index for this
+    # shape at all (the 2×2 at {VECTOR_OPERATOR_COST}), the seam's directive would be inert on
+    # the sort plan it falls back to, and the read would silently revert to the 64.8-second
+    # all-pairs sort. The exact pass answers `false`: with the index paths disabled there is
+    # no plan choice left for a price to move.
+    with_hnsw_planner_setup(correct_operator_price: !exact, exact: exact) do
       connection.select_all(sql).cast_values
     end
   end
@@ -564,14 +656,29 @@ class SpecIdentity < ApplicationRecord
   # @param correct_operator_price [Boolean] whether the read also gets the {VECTOR_OPERATOR_COST}
   #   plan correction for the transaction's duration — see "The operator price" above for who
   #   answers yes and why.
+  # @param exact [Boolean] whether the read also disables the index paths for the transaction's
+  #   duration (`enable_indexscan`, `enable_bitmapscan`), forcing the exact scan-and-sort shape.
+  #   One caller answers yes today: the small-tenant exact re-answer behind
+  #   {EXACT_REANSWER_POPULATION_CAP} (SPGD-983), whose whole point is that no graph state can
+  #   starve a scan. These are the suite's own ground-truth GUCs (SPGD-375 measured recall
+  #   against `SET LOCAL enable_indexscan/bitmapscan = off` as the exact baseline), issued here
+  #   so the exact shape is spelled in exactly one place. Like every `SET LOCAL` here they bind
+  #   to the transaction and ride an OUTER transaction's commit if a caller wraps this read in
+  #   one — the same ride, and the same "callers don't" contract, the directive above documents;
+  #   the enable switches are coarser than `iterative_scan`, which is one more reason this mode
+  #   is confined to its own bounded caller and not offered as a general toggle.
   # @return [Object] whatever the block returns — the pair rows for {.near_duplicate_pairs_in},
   #   the nearest identity for {Ingest::IdentityResolver#nearest}.
-  def self.with_hnsw_planner_setup(correct_operator_price:)
+  def self.with_hnsw_planner_setup(correct_operator_price:, exact: false)
     previous_cost = connection.select_value("SHOW cpu_operator_cost") if correct_operator_price
 
     transaction do
       set_operator_cost(VECTOR_OPERATOR_COST) if correct_operator_price
       connection.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
+      if exact
+        connection.execute("SET LOCAL enable_indexscan = off")
+        connection.execute("SET LOCAL enable_bitmapscan = off")
+      end
       result = yield
       set_operator_cost(previous_cost) if correct_operator_price
       result
