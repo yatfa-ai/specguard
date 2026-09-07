@@ -194,10 +194,12 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
 
     # THE DISCLOSURE BOUNDARY: this is a read of the key's own grant and nothing else — never
     # the minting owner's identity (the API does not serve it anywhere on this surface) and
-    # never a person's `grantable_permissions` (an agent key is the END of a grant chain —
-    # `AgentApiKeyPolicy`'s class header). The block is exactly the capability reading; the
-    # out-of-set 404 on `#show` — the other half of "nothing outside the key's own set" — is
-    # pinned by the existing "answers 404 for a repository outside the set" example above.
+    # never a person's `grantable_permissions`: what the key may HAND OUT is a different
+    # question from what it HOLDS, answered by `AgentApiKeyPolicy#grantable_permissions`
+    # (SPGD-973) for the member-write paths that mint grants. The block is exactly the
+    # capability reading; the out-of-set 404 on `#show` — the other half of "nothing outside
+    # the key's own set" — is pinned by the existing "answers 404 for a repository outside
+    # the set" example below.
     # @intent: { entity: "AgentApiKey", action: "bound the disclosure", behavior: "the credential block carries the capability reading and nothing else, no minting-owner identity", layer: "request" }
     it "serves nothing about the minting owner in the credential block" do
       get "/api/v1/repositories", headers: bearer(agent_key.raw_token)
