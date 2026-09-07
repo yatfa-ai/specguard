@@ -14,9 +14,21 @@ RSpec.describe GithubRegistrationGrant do
 
   def repo(full_name, admin: true) = github_repo(full_name, admin: admin)
 
-  def sources(repos:, truncated: false, error: nil, installed: true)
+  def outcome(account, status, count: 0)
+    InstallationRepositories::Outcome.new(account: account, status: status, count: count)
+  end
+
+  # `outcomes:` defaults to one ANSWERED installation because that is the only shape a `Sources`
+  # reaching `.capture` in production can have: `InstallationRepositories.collect` builds one
+  # `Outcome` per installation walked, so the `outcomes: []` this helper used to hardcode was a
+  # fixture artifact — and, once SPGD-975's third gate landed, a misleading one: a strict
+  # "at least one installation answered" gate would have refused every reading built here,
+  # including the genuinely-empty one that must still become a grant. Pass `outcomes:` explicitly
+  # for the unread-installation readings the third gate refuses.
+  def sources(repos:, truncated: false, error: nil, installed: true,
+              outcomes: [outcome("acme", :read, count: repos.length)])
     InstallationRepositories::Sources.new(repos: repos, truncated: truncated, error: error,
-                                          installed: installed, outcomes: [])
+                                          installed: installed, outcomes: outcomes)
   end
 
   describe ".capture" do
@@ -81,6 +93,40 @@ RSpec.describe GithubRegistrationGrant do
       grant = described_class.capture(user: user, sources: sources(repos: []))
 
       expect(grant.registrable_full_names).to eq([])
+      expect(grant).to be_persisted
+    end
+
+    # SPGD-975's third gate. An installation uninstalled on github.com keeps its local row, so
+    # `installed?` is true and that guard passes; GitHub answers NotFound for it, which `read`
+    # absorbs as `:unreadable` with an empty listing and no error, so `complete?` passes too. What
+    # the reading has NONE of is an installation that answered — and a grant written anyway would
+    # be the fresh-but-empty one `GrantVerifier` misreads as `:not_in_installation` instead of the
+    # true `:not_granted`.
+    # @intent: { entity: "GithubRegistrationGrant", action: "capture a reading", behavior: "a reading in which no installation answered yields no grant row, because an unanswered reading is not GitHub's answer about anything", layer: "unit" }
+    it "refuses to build a grant when no installation answered" do
+      result = described_class.capture(
+        user: user,
+        sources: sources(repos: [], outcomes: [outcome("acme", :unreadable)])
+      )
+
+      expect(result).to be_nil
+      expect(described_class.where(user_id: user.id)).to be_empty
+    end
+
+    # The conservative rule the third gate implements, pinned: refuse only when NOTHING answered.
+    # One installation answering is GitHub's answer about everything it read, so the grant is still
+    # written from what was read — refusing partial readings would freeze a working multi-account
+    # user's grant until they disconnect the dead row by hand. The unread account stays a display
+    # concern (`Sources#unread_outcomes`, consumed by the pages since SPGD-745/SPGD-792).
+    # @intent: { entity: "GithubRegistrationGrant", action: "capture a reading", behavior: "a partial reading where one installation answered and another did not still becomes a grant over what was read", layer: "unit" }
+    it "still builds a grant when at least one installation answered among several" do
+      grant = described_class.capture(
+        user: user,
+        sources: sources(repos: [repo("acme/billing-service")],
+                         outcomes: [outcome("acme", :read, count: 1), outcome("globex", :unreadable)])
+      )
+
+      expect(grant.registrable_full_names).to eq(["acme/billing-service"])
       expect(grant).to be_persisted
     end
 
