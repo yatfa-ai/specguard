@@ -17,11 +17,13 @@
 # ## What the two accepted credentials mean here
 #
 # A `sgu_` key speaks for a PERSON, and this surface lists what that person may open. An `sga_`
-# key speaks for NOBODY: it lists the set granted onto the key at mint time, and can read one of
-# those repositories in full — but every action that must act AS the person (register, rename,
-# delete; `#registrable`'s grant reading) refuses it with a 403. See `Api::BaseController` for
-# `authorized_repositories`, the one read boundary both credentials resolve through, and
-# `require_person_credential` for the guard the person-only actions declare.
+# key speaks for NOBODY: it lists the set granted onto the key at mint time, and acts on those
+# repositories bounded by the key's own permission set — reading one in full, deleting one it
+# holds `repo.delete` for (SPGD-973) — but every action that must act AS the person (register,
+# rename; `#registrable`'s grant reading) refuses it with a 403. See `Api::BaseController` for
+# `authorized_repositories`, the one read boundary both credentials resolve through,
+# `require_person_credential` for the guard the person-only actions declare, and
+# `AgentApiKeyPolicy` for how the key's own set answers the capability gates.
 #
 # ## The authorization rule is not reinvented here
 #
@@ -94,16 +96,17 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # to get wrong, because a repository key IS a valid credential and this list would otherwise have
   # to invent an answer for one. See `Api::BaseController`.
   #
-  # The `sga_` agent credential is accepted for the READS only, and every action that must act AS
-  # the person guards itself below: the agent credential carries its own repository set and
-  # permission set (never a person's), so `#create`/`#registrable`/`#update`/`#destroy` — which
-  # redeem the person's GitHub grant or hold the person's owner rights — refuse it with a 403
-  # rather than crash on a nil `current_api_user` or, worse, half-apply a person-shaped rule to a
-  # credential that is not one.
+  # The `sga_` agent credential is accepted for the reads AND for `#destroy`, where the existing
+  # `current_repository(:repo_delete)` gate is the whole answer: the key must hold `repo.delete`
+  # on a repository in its own set (SPGD-973), and destruction needs no person in the request.
+  # The actions that DO act as the person guard themselves below: `#create`/`#registrable`/`#update`
+  # redeem or read the person's GitHub registration grant, so they refuse the agent credential
+  # with a 403 rather than crash on a nil `current_api_user` or, worse, half-apply a person-shaped
+  # rule to a credential that is not one.
   accepts_user_credential
   accepts_agent_credential
 
-  before_action :require_person_credential, only: %i[create registrable update destroy]
+  before_action :require_person_credential, only: %i[create registrable update]
 
   # The name every first key gets. Deliberately the same string `ApiKeysController` defaults to, so
   # a repository registered by an agent and one registered in a browser have identically-named keys
@@ -315,7 +318,10 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # authorization is `RepositoryAuthorization`'s fork at `:repo_delete` — deliberately NOT
   # `:owner`, exactly as the web `RepositoriesController#destroy` resolves, because the two are
   # one implementation now and a member granted `repo.delete` may remove a repository from either
-  # surface.
+  # surface. Since SPGD-973 that gate is the whole answer for the `sga_` agent credential too:
+  # a key holding `repo.delete` on a repository in its own set destroys it, and destruction needs
+  # no person in the request — which is why `destroy` alone of this controller's mutations is not
+  # on `require_person_credential`'s `only:` list.
   #
   # No GitHub round trip and no notice to compose: the web action builds its flash sentence BEFORE
   # the row goes away only because a destroyed record cannot be asked for its associations, and a
@@ -323,7 +329,7 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # is gone, and the caller named it.
   #
   # `204` rather than a body: the resource the URL named no longer exists, so there is nothing to
-  # describe and no `message` a client could act on. This is the one response in the `sgu_`
+  # describe and no `message` a client could act on. This is the one response in the `sgu_`/`sga_`
   # surface that is deliberately NOT a JSON body, and it matches what DELETE means everywhere else
   # in this API's vocabulary (`UserRepositoryApiKeysController#destroy` follows it).
   def destroy

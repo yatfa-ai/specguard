@@ -5,7 +5,15 @@ require "rails_helper"
 # SPGD-952 — the agent credential over HTTP: the three plural reads answer to an `sga_` key,
 # bounded by the key's own repository set (the read boundary — out of set is a 404, never a 403)
 # and its own permission set (the verb boundary — in set without the permission is a 403), while
-# ingest, the singular repository route and every person-shaped mutation refuse it.
+# ingest, the singular repository route and the person-anchored mutations (register, rename)
+# refuse it.
+#
+# SPGD-973 — the write verbs answer to the same two boundaries: mint/revoke `sgk_` keys under
+# `keys.manage`, member add/edit/revoke under `members.manage`, repository deletion under
+# `repo.delete`. Every write under an agent credential passes the 404/403 fork the reads do, plus
+# two bounds of its own: the key cannot GRANT a permission it does not itself hold (member
+# writes), and every grant is attributed to the key's OWNER so the model's grantor bound keeps
+# measuring a real person's rights.
 RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
   let(:person) { create_user(github_uid: "4001", github_handle: "key-owner") }
   let(:repository) { create_repository(user: person) }
@@ -152,7 +160,293 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
     end
   end
 
-  describe "the surfaces the agent credential never reaches" do
+  # ---------------------------------------------------------------- SPGD-973
+  # The write verbs, opened to the agent credential on the key's own terms: same routes, same
+  # capability gates, same 404/403 fork the reads answer. Every example below holds the two
+  # boundaries together — the SET boundary (out of set is a 404 even with the permission held)
+  # and the VERB boundary (in set without the permission is a 403) — and the member writes add
+  # the two bounds that make a machine credential safe on a mutating surface: the key cannot
+  # GRANT what it does not hold, and every grant is attributed to the key's OWNER so the model's
+  # grantor bound keeps measuring a real person's rights.
+
+  describe "POST /api/v1/repositories/:repository_id/api_keys" do
+    # The minted body is deliberately unchanged: an agent-minted key reads exactly like a
+    # person-minted one, because it IS one — same `api_key` block, same reveal-once token.
+    # @intent: { entity: "AgentApiKey", action: "mint a repository key", behavior: "an agent key holding keys.manage mints a repository key whose body carries the person-minted shape with the reveal-once token", layer: "request" }
+    it "mints a repository key for a key holding keys.manage on a repository in the set" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["keys.manage"])
+
+      expect {
+        post "/api/v1/repositories/#{repository.id}/api_keys",
+             params: { name: "Second pipeline" }.to_json,
+             headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
+      }.to change(ApiKey, :count).by(1)
+
+      expect(response).to have_http_status(:created)
+      expect(response.parsed_body["api_key"].keys)
+        .to contain_exactly("name", "token", "hint", "created_at")
+      expect(response.parsed_body["api_key"]["token"]).to be_present
+    end
+
+    # The attribution decision this slice makes explicitly: the minted row's creator is the
+    # KEY'S OWNER — a person the account page can name and `keys_minted_by` can count — not
+    # nil ("Unknown").
+    # @intent: { entity: "AgentApiKey", action: "attribute a mint", behavior: "a repository key minted under an agent credential records the agent key's owner as its creator", layer: "request" }
+    it "records the agent key's owner as the minted key's creator" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["keys.manage"])
+
+      post "/api/v1/repositories/#{repository.id}/api_keys", headers: bearer(key.raw_token)
+
+      expect(response).to have_http_status(:created)
+      expect(ApiKey.order(:id).last.created_by_user).to eq(person)
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "refuse an unpermitted mint", behavior: "an in-set repository asked for a mint by a key without keys.manage answers 403", layer: "request" }
+    it "answers 403 without the keys.manage permission" do
+      post "/api/v1/repositories/#{repository.id}/api_keys", headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:forbidden)
+      expect(response.parsed_body["error"]).to eq("forbidden")
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "hide the ungranted mint", behavior: "a mint on a repository outside the key's set answers 404, even with keys.manage held", layer: "request" }
+    it "answers 404 for a repository outside the set, even holding keys.manage" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["keys.manage"])
+
+      post "/api/v1/repositories/#{other_repository.id}/api_keys", headers: bearer(key.raw_token)
+
+      expect(response).to have_http_status(:not_found)
+    end
+  end
+
+  describe "DELETE /api/v1/repositories/:repository_id/api_keys/:id" do
+    # @intent: { entity: "AgentApiKey", action: "revoke a repository key", behavior: "an agent key holding keys.manage revokes one of the repository's own keys, the row retained", layer: "request" }
+    it "revokes a repository key for a key holding keys.manage on a repository in the set" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["keys.manage"])
+      repository_key = repository.api_keys.create!(name: "CI")
+
+      delete "/api/v1/repositories/#{repository.id}/api_keys/#{repository_key.id}",
+             headers: bearer(key.raw_token)
+
+      expect(response).to have_http_status(:no_content)
+      expect(repository_key.reload.revoked_at).to be_present
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "refuse an unpermitted revoke", behavior: "a revoke without keys.manage answers 403 and leaves the key live", layer: "request" }
+    it "answers 403 without the keys.manage permission, leaving the key live" do
+      repository_key = repository.api_keys.create!(name: "CI")
+
+      delete "/api/v1/repositories/#{repository.id}/api_keys/#{repository_key.id}",
+             headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:forbidden)
+      expect(repository_key.reload.revoked_at).to be_nil
+    end
+  end
+
+  describe "POST /api/v1/repositories/:repository_id/members" do
+    # @intent: { entity: "AgentApiKey", action: "add a member", behavior: "an agent key holding members.manage adds a member by handle on a repository in its set", layer: "request" }
+    it "adds a member for a key holding members.manage on a repository in the set" do
+      collab = create_user(github_uid: "4010", github_handle: "collab")
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["members.manage"])
+
+      expect {
+        post "/api/v1/repositories/#{repository.id}/members",
+             params: { handle: collab.github_handle, permissions: ["view"] }.to_json,
+             headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
+      }.to change(RepositoryMembership, :count).by(1)
+
+      expect(response).to have_http_status(:created)
+      expect(response.parsed_body["member"]["handle"]).to eq(collab.github_handle)
+    end
+
+    # THE ATTRIBUTION CRITERION, asserted on the row: the grant of record names the key's OWNER.
+    # A nil grantor would not merely mislabel the row — `grantor_holds_every_granted_permission`
+    # fails OPEN on nil — so a NULL here would be the SPGD-103 two-step escalation reopened, and
+    # this example is the one that catches it.
+    # @intent: { entity: "AgentApiKey", action: "attribute a grant", behavior: "a member added under an agent credential carries the key's owner as granted_by_user, never nil", layer: "request" }
+    it "stamps the key's owner as the grantor of record" do
+      collab = create_user(github_uid: "4010", github_handle: "collab")
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["members.manage"])
+
+      post "/api/v1/repositories/#{repository.id}/members",
+           params: { handle: collab.github_handle, permissions: ["view"] }.to_json,
+           headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
+
+      membership = repository.repository_memberships.find_by(user: collab)
+      expect(membership).to be_present
+      expect(membership.granted_by_user).to eq(person)
+    end
+
+    # THE KEY'S OWN GRANT BOUND. The model's grantor bound measures the OWNER — who holds the
+    # whole vocabulary — so without a second bound this key would widen itself: `members.manage`
+    # in, `repo.delete` out. The refusal names the over-reach and nothing is written.
+    # @intent: { entity: "AgentApiKey", action: "refuse an over-reaching grant", behavior: "a key holding only members.manage is refused when it grants repo.delete, with a message naming the permission", layer: "request" }
+    it "refuses to grant a permission the key itself does not hold" do
+      collab = create_user(github_uid: "4010", github_handle: "collab")
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["members.manage"])
+
+      expect {
+        post "/api/v1/repositories/#{repository.id}/members",
+             params: { handle: collab.github_handle, permissions: ["repo.delete"] }.to_json,
+             headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
+      }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("repo.delete")
+    end
+
+    # THE GRANTOR BOUND IS LIVE, NOT FAIL-OPEN — and only a real, stamped grantor can prove it.
+    # The mint-time bound does not follow the owner's rights afterwards, so a key can out-live
+    # what its owner holds; when it does, the model bound must refuse. With a nil grantor the
+    # validation would fail OPEN and this grant would succeed.
+    # @intent: { entity: "AgentApiKey", action: "keep the grantor bound live", behavior: "a grant the key holds but its owner no longer does is refused by the model's grantor bound, proving the attribution is real", layer: "request" }
+    it "refuses a grant its owner's narrowed rights no longer support" do
+      collab = create_user(github_uid: "4010", github_handle: "collab")
+      landlord = create_user(github_uid: "4011", github_handle: "repo-owner")
+      shared = create_repository(user: landlord, github_full_name: "acme/shared-thing")
+      owner_membership = create_membership(repository: shared, user: person,
+                                           permissions: %w[members.manage repo.delete])
+      key = create_agent_api_key(user: person, repositories: [shared],
+                                 permissions: %w[members.manage repo.delete])
+      # The owner's own rights narrow after the mint; the key deliberately does not.
+      owner_membership.update!(permissions: %w[members.manage])
+
+      expect {
+        post "/api/v1/repositories/#{shared.id}/members",
+             params: { handle: collab.github_handle, permissions: ["repo.delete"] }.to_json,
+             headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
+      }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("the grantor does not hold")
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "refuse an unpermitted add", behavior: "an in-set repository asked for a member add by a key without members.manage answers 403", layer: "request" }
+    it "answers 403 without the members.manage permission" do
+      collab = create_user(github_uid: "4010", github_handle: "collab")
+
+      expect {
+        post "/api/v1/repositories/#{repository.id}/members",
+             params: { handle: collab.github_handle, permissions: ["view"] }.to_json,
+             headers: bearer(agent_key.raw_token).merge("Content-Type" => "application/json")
+      }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:forbidden)
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "hide the ungranted add", behavior: "a member add on a repository outside the key's set answers 404, even with members.manage held", layer: "request" }
+    it "answers 404 for a repository outside the set, even holding members.manage" do
+      collab = create_user(github_uid: "4010", github_handle: "collab")
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["members.manage"])
+
+      post "/api/v1/repositories/#{other_repository.id}/members",
+           params: { handle: collab.github_handle, permissions: ["view"] }.to_json,
+           headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
+
+      expect(response).to have_http_status(:not_found)
+    end
+  end
+
+  describe "PATCH /api/v1/repositories/:repository_id/members/:id" do
+    # Same gate, same bounds — and the re-stamp SPGD-117 §3 requires preserved identically under
+    # the agent credential: every save re-names the current principal, so the trail never mixes
+    # an earlier grantor into a later edit.
+    # @intent: { entity: "AgentApiKey", action: "edit a member", behavior: "an agent key holding members.manage edits a member's permissions and re-stamps the grant to the key's owner", layer: "request" }
+    it "edits a member's permissions and re-stamps the grant to the key's owner" do
+      collab = create_user(github_uid: "4010", github_handle: "collab")
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["members.manage"])
+      membership = create_membership(repository: repository, user: collab)
+
+      patch "/api/v1/repositories/#{repository.id}/members/#{membership.id}",
+            params: { permissions: %w[view members.manage] }.to_json,
+            headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
+
+      expect(response).to have_http_status(:ok)
+      expect(membership.reload.permissions).to eq(%w[view members.manage])
+      expect(membership.reload.granted_by_user).to eq(person)
+    end
+
+    # The bound holds on the narrowing path's inverse: an edit that would HAND OUT what the key
+    # does not hold is refused and the row keeps its stored permissions.
+    # @intent: { entity: "AgentApiKey", action: "refuse an over-reaching edit", behavior: "an edit granting keys.manage by a key holding only members.manage answers 400 and leaves the row unchanged", layer: "request" }
+    it "refuses an edit that would hand out a permission the key does not hold" do
+      collab = create_user(github_uid: "4010", github_handle: "collab")
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["members.manage"])
+      membership = create_membership(repository: repository, user: collab)
+
+      patch "/api/v1/repositories/#{repository.id}/members/#{membership.id}",
+            params: { permissions: ["keys.manage"] }.to_json,
+            headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
+
+      expect(response).to have_http_status(:bad_request)
+      expect(membership.reload.permissions).to eq([RepositoryMembership::VIEW])
+    end
+  end
+
+  describe "DELETE /api/v1/repositories/:repository_id/members/:id" do
+    # @intent: { entity: "AgentApiKey", action: "revoke a membership", behavior: "an agent key holding members.manage revokes a membership on a repository in its set", layer: "request" }
+    it "revokes a membership for a key holding members.manage on a repository in the set" do
+      collab = create_user(github_uid: "4010", github_handle: "collab")
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["members.manage"])
+      membership = create_membership(repository: repository, user: collab)
+
+      expect {
+        delete "/api/v1/repositories/#{repository.id}/members/#{membership.id}",
+               headers: bearer(key.raw_token)
+      }.to change(RepositoryMembership, :count).by(-1)
+
+      expect(response).to have_http_status(:no_content)
+    end
+  end
+
+  describe "DELETE /api/v1/repositories/:id" do
+    # The verb this route always gated on — `:repo_delete`, deliberately NOT `:owner` — is the
+    # whole answer for the agent credential too: no person in the request, no person-shaped rule.
+    # @intent: { entity: "AgentApiKey", action: "destroy a repository", behavior: "an agent key holding repo.delete destroys a repository in its set", layer: "request" }
+    it "destroys the repository for a key holding repo.delete on a repository in its set" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["repo.delete"])
+
+      expect {
+        delete "/api/v1/repositories/#{repository.id}", headers: bearer(key.raw_token)
+      }.to change(Repository, :count).by(-1)
+
+      expect(response).to have_http_status(:no_content)
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "refuse an unpermitted destroy", behavior: "an in-set repository asked for deletion by a key without repo.delete answers 403", layer: "request" }
+    it "answers 403 without the repo.delete permission" do
+      expect {
+        delete "/api/v1/repositories/#{repository.id}", headers: bearer(agent_key.raw_token)
+      }.not_to change(Repository, :count)
+
+      expect(response).to have_http_status(:forbidden)
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "hide the ungranted destroy", behavior: "a deletion on a repository outside the key's set answers 404, even with repo.delete held", layer: "request" }
+    it "answers 404 for a repository outside the set, even holding repo.delete" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["repo.delete"])
+
+      delete "/api/v1/repositories/#{other_repository.id}", headers: bearer(key.raw_token)
+
+      expect(response).to have_http_status(:not_found)
+    end
+  end
+
+  describe "the person-anchored verbs, which the agent credential never reaches" do
     # THE TWO sgk_-ONLY ROUTES. The prefix matches nothing these endpoints declare, so the refusal
     # reads no table — asserted, not assumed, because a probing implementation produces the same
     # 401 at twice the cost.
@@ -175,8 +469,11 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
       expect(response).to have_http_status(:unauthorized)
     end
 
-    # THE PERSON-SHAPED MUTATIONS. The token is valid and of a class the endpoint accepts, so the
-    # refusal is 403 — "you may not", not "who are you?" — from `require_person_credential`.
+    # THE PERSON-SHAPED RESIDUE after SPGD-973. The token is valid and of a class the endpoint
+    # accepts, so the refusal is 403 — "you may not", not "who are you?" — from
+    # `require_person_credential`: registration redeems a GithubRegistrationGrant only a browser
+    # session produced, and rename is `:owner`, which `AgentApiKeyPolicy#owner?` refuses by
+    # construction.
     # @intent: { entity: "AgentApiKey", action: "refuse registration", behavior: "an agent key cannot register a repository; the person-only action answers 403", layer: "request" }
     it "cannot register a repository" do
       expect {
@@ -197,34 +494,6 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
 
       expect(response).to have_http_status(:forbidden)
       expect(repository.reload.github_full_name).to eq(repository.github_full_name)
-    end
-
-    # Even a key holding the repo.delete PERMISSION cannot delete: the permission vocabulary is
-    # shared, the agent surface is read-only. The guard fires before the policy is ever asked.
-    # @intent: { entity: "AgentApiKey", action: "refuse deletion", behavior: "an agent key holding repo.delete still cannot destroy a repository", layer: "request" }
-    it "cannot destroy a repository even holding repo.delete" do
-      key = create_agent_api_key(user: person, repositories: [repository],
-                                 permissions: ["repo.delete"])
-
-      expect {
-        delete "/api/v1/repositories/#{repository.id}", headers: bearer(key.raw_token)
-      }.not_to change(Repository, :count)
-
-      expect(response).to have_http_status(:forbidden)
-    end
-
-    # @intent: { entity: "AgentApiKey", action: "refuse member mutation", behavior: "an agent key cannot add a member, even holding members.manage", layer: "request" }
-    it "cannot add a member even holding members.manage" do
-      key = create_agent_api_key(user: person, repositories: [repository],
-                                 permissions: ["members.manage"])
-
-      expect {
-        post "/api/v1/repositories/#{repository.id}/members",
-             params: { handle: "collab", permissions: ["view"] }.to_json,
-             headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
-      }.not_to change(RepositoryMembership, :count)
-
-      expect(response).to have_http_status(:forbidden)
     end
   end
 

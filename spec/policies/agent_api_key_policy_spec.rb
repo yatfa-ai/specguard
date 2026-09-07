@@ -78,4 +78,41 @@ RSpec.describe AgentApiKeyPolicy do
       expect(policy).not_to be_can(:view)
     end
   end
+
+  # SPGD-973 — the agent credential's own grant bound, derived from `can?` on the same rule the
+  # person policy derives its answer from. It is the bound the member-write controller measures a
+  # submitted grant against: the key's OWN set (view implied by membership in the set), never the
+  # owner's rights.
+  describe "grantable_permissions" do
+    # @intent: { entity: "AgentApiKeyPolicy", action: "bound grants to the key's set", behavior: "grantable_permissions is exactly the key's stored permissions plus the implied view", layer: "unit" }
+    it "is the key's own permission set plus the implied view, and nothing more" do
+      key = create_agent_api_key(user: owner, repositories: [repository],
+                                 permissions: ["members.manage"])
+
+      expect(policy_for(key).grantable_permissions)
+        .to contain_exactly(RepositoryMembership::VIEW, RepositoryMembership::MEMBERS_MANAGE)
+    end
+
+    # @intent: { entity: "AgentApiKeyPolicy", action: "grant the full held set", behavior: "a key holding every storable permission may grant every storable permission but never owner", layer: "unit" }
+    it "offers every storable permission a fully-granted key holds, and owner never" do
+      key = create_agent_api_key(user: owner, repositories: [repository],
+                                 permissions: RepositoryMembership::PERMISSIONS)
+
+      expect(policy_for(key).grantable_permissions)
+        .to contain_exactly(*RepositoryMembership::PERMISSIONS)
+    end
+
+    # The set boundary rides along: `can?` answers through `member?`, so a repository outside the
+    # key's set is grantable on nothing — the policy never becomes an escalation channel by
+    # being asked about a repository the key cannot open.
+    # @intent: { entity: "AgentApiKeyPolicy", action: "grant nothing outside the set", behavior: "grantable_permissions is empty for a repository outside the key's set, whatever the key stores", layer: "unit" }
+    it "grants nothing on a repository outside the set" do
+      other = create_repository(user: create_user(github_uid: "92004", github_handle: "else"),
+                                github_full_name: "acme/elsewhere")
+      key = create_agent_api_key(user: owner, repositories: [repository],
+                                 permissions: RepositoryMembership::PERMISSIONS)
+
+      expect(policy_for(key, other).grantable_permissions).to be_empty
+    end
+  end
 end

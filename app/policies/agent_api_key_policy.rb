@@ -33,10 +33,16 @@
 #
 # ## What is deliberately NOT here
 #
-# `grantable_permissions`. A person may hand a subset of what they hold to somebody else; an
-# agent key is the END of a grant chain, not a link in one — minting further credentials is a
-# person act, done from `/account` by the person who holds the rights. There is no delegation
-# from a machine credential to answer for.
+# Nothing is any more. `grantable_permissions` USED to be the entry on this list: the class header
+# argued that an agent key is the END of a grant chain, not a link in one, because minting further
+# credentials was a person act. SPGD-973 reverses exactly that much, deliberately amending
+# SPGD-952's read-only stance: an agent key holding `members.manage` may now edit members, and
+# `keys.manage` may mint `sgk_` keys — so a key that can act on a grant chain needs the same
+# "what may this principal hand out" bound the person policy has always answered. The bound is the
+# key's OWN permission set (plus the `view` that set membership implies — `can?`'s rule), never
+# the owner's rights: the owner bounded the key at mint, and the key bounds what it grants now.
+# `owner?` stays `false` by construction, so renaming stays a person verb and `:owner` never
+# enters any grantable set here.
 class AgentApiKeyPolicy
   attr_reader :key, :repository
 
@@ -71,5 +77,27 @@ class AgentApiKeyPolicy
     return true if permission == RepositoryMembership::VIEW
 
     key.grants?(permission)
+  end
+
+  # What this key may hand to somebody else — the agent credential's own grant bound, derived
+  # from `can?` on the same rule `RepositoryPolicy#grantable_permissions` derives the person's
+  # from, so "what a grant may contain" stays one rule across memberships, agent-key mints and
+  # member grants made BY an agent key. It is the key's OWN permission set (membership itself
+  # contributing `view`, exactly as it does for a person), read in-memory — `can?` asks
+  # `covers?` and `grants?`, neither of which queries — so the bound a request is measured
+  # against costs nothing on top of the authorization the action already paid for.
+  #
+  # This is the SECOND bound a member write under an agent credential passes through. The FIRST
+  # is the mint-time one, re-stamped by naming the owner as the grantor
+  # (`Api::BaseController#attributed_user`), which keeps `RepositoryMembership#grantor_holds_
+  # every_granted_permission` measuring the OWNER. Neither implies the other: the owner bound is
+  # computed against the owner's rights and the key bound against the key's set, and a key is
+  # narrower than its owner by construction — which is exactly the widening
+  # `AgentApiKey#owner_holds_every_granted_permission` forbids at mint, refused here at use with
+  # a message in the same register as both.
+  def grantable_permissions
+    RepositoryMembership::PERMISSIONS.select do |permission|
+      can?(RepositoryPolicy::CAPABILITY_BY_PERMISSION.fetch(permission))
+    end
   end
 end

@@ -335,10 +335,13 @@ RSpec.describe "API v1 — the credential seam", type: :request do
     end
 
     # The third direction of the zero-read refusal, for the credential this slice adds: an `sga_`
-    # token at an endpoint that accepts neither the agent nor the repository credential is turned
-    # away before any table is read.
-    # @intent: { entity: "credential prefix", action: "refuse an agent key at an undeclaring endpoint", behavior: "an sga_ token at a user-key-only endpoint answers 401 with zero credential reads", layer: "request" }
-    it "reads no credential table when an agent key is presented to a user-key-only endpoint" do
+    # token at an endpoint that accepts neither the agent nor the person credential is turned
+    # away before any table is read. SPGD-973 released the api-keys mint to the agent credential,
+    # so the example's old target (`POST …/api_keys`) no longer declares "person only"; `POST
+    # /api/v1/ingest` does — `accepts_repository_credential` ALONE — and stays the honest
+    # premise for the guard.
+    # @intent: { entity: "credential prefix", action: "refuse an agent key at an undeclaring endpoint", behavior: "an sga_ token at the repository-key-only ingest endpoint answers 401 with zero credential reads", layer: "request" }
+    it "reads no credential table when an agent key is presented to the ingest endpoint" do
       # Built from its OWN repository rather than the file's `repository` let: that let is
       # evaluated lazily, and referencing it inside the measured block would count the mint as
       # one of the request's statements — the same trap the first example in this file documents.
@@ -346,7 +349,7 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       token = create_agent_api_key(user: person, repositories: [repo], permissions: []).raw_token
 
       statements = queries_against("api_keys") do
-        post "/api/v1/repositories/#{repo.id}/api_keys", headers: bearer(token)
+        post "/api/v1/ingest", params: ingest_payload, as: :json, headers: bearer(token)
       end
 
       expect(response).to have_http_status(:unauthorized)

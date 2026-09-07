@@ -112,8 +112,10 @@ class Api::BaseController < ActionController::API
   # This endpoint also answers to an `sga_` agent credential, whose own repository set and
   # permission set bound every action it reaches (see `AgentApiKeyPolicy`). Declared ALONGSIDE
   # `accepts_user_credential`, never instead of it: the agent credential is the bounded form of
-  # what the person credential carries, and the endpoints that accept it are read-only for it —
-  # the actions that must act AS a person guard themselves with `require_person_credential`.
+  # what the person credential carries, and the bounds travel with it — a request it reaches is
+  # answered against the KEY's set and permissions through `AgentApiKeyPolicy`, never against any
+  # person's rights (SPGD-973 opened the mutating verbs to it on exactly those terms; the verbs
+  # that must act AS a person still guard themselves with `require_person_credential`).
   def self.accepts_agent_credential
     accept_credential AgentApiKey
   end
@@ -222,6 +224,33 @@ class Api::BaseController < ActionController::API
     end
   end
 
+  # WHO A WRITE IS ATTRIBUTED TO, under whichever credential presented itself. The person-anchored
+  # answer (`current_api_user`) is nil under an agent credential — `bind_principal` binds nothing
+  # for one by design — and a write that needs a user in whose name it happened must not fall back
+  # to one: `RepositoryMembership#grantor_holds_every_granted_permission` fails OPEN on a nil
+  # grantor, so a nil here would not merely mislabel the row, it would switch the grantor bound
+  # off (the exact two-step escalation SPGD-103 shipped that validation to close; SPGD-117 rules
+  # the decision not backfillable). So the agent credential names the only person the key descends
+  # from: its OWNER. Defensible because the mint-time bound (`AgentApiKey#owner_holds_every_
+  # granted_permission`) already measured the key against that same person's rights, and
+  # `agent_api_keys.user_id` is `NOT NULL`, so the owner is always resolvable. Cost, stated rather
+  # than hidden: the row reads as the owner's act, not the key's — an audit-precision trade for a
+  # bound that stays live.
+  #
+  # Only the two person/agent controllers ever call this; a `sgk_` key is turned away by their
+  # prefix declaration before any action runs, so the `else` arm is the person credential.
+  def attributed_user
+    agent_credential? ? @current_api_key.user : current_api_user
+  end
+
+  # The one credential question the write seams above need, named once rather than re-asked as an
+  # `@current_api_key.is_a?(AgentApiKey)` at each of them. `build_repository_policy` and
+  # `authorized_repositories` predate it and keep their inline spelling: their branches ARE the
+  # credential dispatch (which policy answers, which read boundary applies), not a yes/no ask.
+  def agent_credential?
+    @current_api_key.is_a?(AgentApiKey)
+  end
+
   # HOW THE AGENT CREDENTIAL ANSWERS REPOSITORY QUESTIONS. `RepositoryAuthorization`'s default
   # builds the person policy (`RepositoryPolicy.new(authorizing_user, …)`), which is the right
   # answer for the web tree and for a `sgu_` key and the WRONG answer for an `sga_` key: it would
@@ -254,10 +283,13 @@ class Api::BaseController < ActionController::API
   end
 
   # THE GUARD FOR ACTIONS THAT MUST ACT AS A PERSON. A controller that accepts the agent
-  # credential accepts it for its READ actions; the mutating and person-anchored verbs —
-  # registering, renaming, deleting, minting `sgk_` keys, editing members — are refused here,
-  # declared per action with `before_action … only:`, because the seam is controller-scoped and
-  # the narrowing is the endpoint's own sentence.
+  # credential accepts it for everything its own permission set covers — the mutating verbs ride
+  # the same `AgentApiKeyPolicy` capability gate the reads do, since SPGD-973. What is still
+  # refused here is the PERSON-ANCHORED residue: the actions whose gate is not a permission at
+  # all — registering (a `GithubRegistrationGrant` only a browser session produced) and renaming
+  # (`:owner`, and `AgentApiKeyPolicy#owner?` is `false` by construction) — declared per action
+  # with `before_action … only:`, because the seam is controller-scoped and the narrowing is the
+  # endpoint's own sentence.
   #
   # 403, not 401: the token is valid and of a class this endpoint accepts — "a valid Bearer API
   # key is required" would be a lie. What is refused is the ACT: an agent key cannot act as a

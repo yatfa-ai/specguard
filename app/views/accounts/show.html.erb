@@ -94,9 +94,11 @@
       each one carries a set of repositories you choose and a set of permissions you hold, fixed
       when you mint it. A key can read the repositories in its set — and nothing outside it, which
       is indistinguishable from a repository that does not exist — and take only the actions its
-      permissions cover. It cannot ingest CI results (<code class="font-mono text-xs">sgk_</code>
-      keys do that) and it cannot act as you: registering, renaming and member management stay
-      person-only over the API. Revoking one leaves the rest working.
+      permissions cover, over the API as in a browser: minting and revoking the repository's CI
+      keys, managing its members, deleting the repository — each gated by the matching box you
+      ticked. It cannot ingest CI results (<code class="font-mono text-xs">sgk_</code>
+      keys do that) and it cannot act as you: registering and renaming stay person-only over the
+      API. Revoking one leaves the rest working.
     </p>
 
     <%# THE FULL MINT FORM — the grant is chosen here and bounded by the model, on the membership
