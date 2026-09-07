@@ -1,16 +1,19 @@
 # frozen_string_literal: true
 
 # MINTING AND REVOKING A REPOSITORY'S OWN `sgk_` KEYS, over a `sgu_` user key (SPGD-754) — the
-# mutating half of the key surface the web `ApiKeysController` has always served in a browser.
+# mutating half of the key surface the web `ApiKeysController` has always served in a browser —
+# and, since SPGD-973, over an `sga_` agent key holding `keys.manage` on the repository.
 #
 # ## Why this is not `ApiKeysController`
 #
 # That class is an `ApplicationController`: it renders HTML, reads a session, and reveals a minted
-# token in a FLASH through a redirect. This one renders JSON to a person named by a token, with no
-# session anywhere near it. The two share one thing, deliberately and structurally: the
+# token in a FLASH through a redirect. This one renders JSON to a principal named by a token, with
+# no session anywhere near it. The two share one thing, deliberately and structurally: the
 # authorization. Both call `current_repository(:keys_manage)` — the concern both bases include —
 # so who may mint or revoke a key is one rule, and a change to it cannot land on one surface and
-# miss the other.
+# miss the other. SPGD-973 is what makes that sharing total: the gate is a capability question,
+# and an agent credential answers capability questions through `AgentApiKeyPolicy` like any
+# other, bounded by its own set and permissions — no second gate to drift.
 #
 # ## What is deliberately NOT here
 #
@@ -23,13 +26,20 @@
 #
 # `Api::V1::UserRepositoriesController#create` set the precedent this follows to the field: the
 # mint response carries `token: api_key.raw_token` — the only time the value exists anywhere —
-# alongside the same `name`/`hint`/`created_at` block, and `created_by_user` records the person
-# whose token minted it, exactly as `ApiKeysController#create` attributes the browser's mint. No
-# later endpoint serves the token; nothing persists it but the digest.
+# alongside the same `name`/`hint`/`created_at` block, and `created_by_user` records who the
+# write is attributed to, exactly as `ApiKeysController#create` attributes the browser's mint.
+# For an agent credential that is the KEY'S OWNER (`Api::BaseController#attributed_user`), so
+# the row's `MembershipsController#keys_minted_by` attribution names a person rather than
+# reading "Unknown" — the known-degraded state a nil creator renders. No later endpoint serves
+# the token; nothing persists it but the digest.
 class Api::V1::UserRepositoryApiKeysController < Api::BaseController
-  # THIS ENDPOINT NEEDS A PERSON. A repository's own `sgk_` key speaks for the repository, not for
-  # anybody who may administer its keys, and gets 401 here — see `Api::BaseController`.
+  # WHO MAY MINT AND REVOKE: a person over their `sgu_` key, or an `sga_` agent credential
+  # holding `keys.manage` on a repository in its own set — both answered by the same
+  # `current_repository(:keys_manage)` gate each action already calls. A repository's own `sgk_`
+  # key speaks for the repository, not for anybody who may administer its keys, and gets 401
+  # here — see `Api::BaseController`.
   accepts_user_credential
+  accepts_agent_credential
 
   # MINT A SUBSEQUENT KEY — the act the first key got bundled with registration because a
   # repository with no key is a repository nothing can deliver to. This one is for every key
@@ -40,7 +50,7 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
   # by an agent and one minted in a browser are named by one rule rather than two conventions.
   def create
     repository = current_repository(:keys_manage)
-    api_key = repository.api_keys.create!(name: key_name, created_by_user: current_api_user)
+    api_key = repository.api_keys.create!(name: key_name, created_by_user: attributed_user)
 
     render json: minted_body(api_key), status: :created
   end

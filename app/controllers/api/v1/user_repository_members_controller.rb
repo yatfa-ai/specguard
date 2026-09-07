@@ -1,12 +1,13 @@
 # frozen_string_literal: true
 
-# WHO ELSE CAN REACH A REPOSITORY, over a `sgu_` user key (SPGD-875) — the member-management
-# half of the `sgu_` surface: list, add by handle, edit permissions, revoke.
+# WHO ELSE CAN REACH A REPOSITORY, over a `sgu_` user key (SPGD-875) — and, since SPGD-973, over
+# an `sga_` agent key holding `members.manage` — the member-management half of the credential
+# surface: list, add by handle, edit permissions, revoke.
 #
 # ## Why this is not `MembershipsController`
 #
 # That class is an `ApplicationController`: it renders HTML, reads a session, and redirects with
-# a flash. This one renders JSON to a person named by a token. What the two share — deliberately
+# a flash. This one renders JSON to a principal named by a token. What the two share — deliberately
 # and structurally — is everything below the rendering: the authorization
 # (`current_repository(:members_manage)` from the `RepositoryAuthorization` concern both bases
 # include), the handle resolution (`User.resolve_by_handle`), and every mutation rule, which
@@ -18,7 +19,9 @@
 #
 #   - non-member caller -> 404, via `RepositoryAuthorization`'s fork (the repository's existence
 #     stays hidden);
-#   - member without `members.manage` -> 403 (they can already see it, so 404 would be a lie);
+#   - caller without `members.manage` -> 403 (they can already see it, so 404 would be a lie);
+#   - an agent credential trying to grant a permission the KEY does not hold -> 400, naming the
+#     over-reach (see `refuse_credential_over_reach!`);
 #   - a validation refusal -> `render_bad_request` with the model's own sentences.
 #
 # ## What is deliberately NOT here
@@ -28,19 +31,19 @@
 # holder and nothing more — the two permissions are independent, and a viewer who may not know
 # how many credentials exist on the repository is told nothing, not told less.
 class Api::V1::UserRepositoryMembersController < Api::BaseController
-  # THIS ENDPOINT NEEDS A PERSON — or an agent credential bounded by its own grants. A repository's
-  # own `sgk_` key speaks for the repository, not for anybody who may administer its members, and
-  # gets 401 here — see `Api::BaseController`.
+  # WHO MAY ADMINISTER MEMBERS: a person over their `sgu_` key, or an `sga_` agent credential
+  # holding `members.manage` on a repository in its own set (SPGD-973) — all four verbs, both
+  # credentials, answered by the same `current_repository(:members_manage)` gate each action
+  # already calls. A repository's own `sgk_` key speaks for the repository, not for anybody who
+  # may administer its members, and gets 401 here — see `Api::BaseController`.
   #
-  # The `sga_` agent credential is accepted for the READ (who can reach this repository), bounded
-  # twice over by `AgentApiKeyPolicy`: the repository must be in the key's set (else 404) and the
-  # key must hold `members.manage` (else 403). The MUTATING verbs act as a person — `#create` and
-  # `#update` stamp `granted_by_user` from the authenticated principal, and a machine credential
-  # is not one — so they guard themselves below and refuse the agent credential with a 403.
+  # Under the agent credential every write passes TWO bounds, in this order: the key may not
+  # grant a permission the KEY itself does not hold (`refuse_credential_over_reach!` — a key is
+  # the END of its owner's grant at mint, and this keeps it from becoming a link in one), and the
+  # grant is attributed to the key's OWNER, which keeps the model's grantor bound measuring a
+  # real person's rights rather than failing open on nil (`attributed_user`).
   accepts_user_credential
   accepts_agent_credential
-
-  before_action :require_person_credential, only: %i[create update destroy]
 
   # THE LIST — the same rows the web members page renders (handle, permissions, who last set
   # them, since when), ordered by handle so the response is stable between calls.
@@ -68,15 +71,23 @@ class Api::V1::UserRepositoryMembersController < Api::BaseController
   #
   # Everything past resolution is left to `RepositoryMembership`: adding the owner, re-adding a
   # member, naming a nonexistent permission, and the grantor bound are all validations there, so
-  # this attempts the save and surfaces whatever it says.
+  # this attempts the save and surfaces whatever it says. The one rule this controller owns ON
+  # TOP of the model is the agent credential's own grant bound — the model's grantor bound
+  # measures the person `granted_by_user` names, and under an agent credential that person is the
+  # key's OWNER, who may hold far more than the key does — so the key's own permission set is
+  # checked here, before the save, and an over-reaching grant is refused with a sentence naming
+  # the permission.
   #
   # `granted_by_user` is stamped HERE, from the credential, and is deliberately absent from
   # `member_params` — `grantor_holds_every_granted_permission` fails OPEN on nil and trusts the
   # grantor it is handed, so permitting a submitted grantor would let a request name the owner
   # and compute the bound against unlimited rights. The recorded grantor is the authenticated
-  # `sgu_` principal, always.
+  # principal: the person an `sgu_` key speaks for, or the key's owner for an `sga_` key
+  # (`Api::BaseController#attributed_user`), so the bound is always measured against a real
+  # person's rights — never switched off by a nil.
   def create
     repository = current_repository(:members_manage)
+    return if refuse_credential_over_reach!(repository, member_params[:permissions])
 
     resolution = User.resolve_by_handle(params[:handle])
     return render_bad_request([unresolved_message(resolution)]) unless resolution.found?
@@ -84,7 +95,7 @@ class Api::V1::UserRepositoryMembersController < Api::BaseController
     membership = repository.repository_memberships.new(
       user: resolution.user,
       permissions: member_params[:permissions],
-      granted_by_user: current_api_user
+      granted_by_user: attributed_user
     )
 
     return render_bad_request(membership.errors.full_messages) unless membership.save
@@ -101,12 +112,17 @@ class Api::V1::UserRepositoryMembersController < Api::BaseController
   # the reason in as many words: `grantor_holds_every_granted_permission` is computed at
   # validation time and fails OPEN on nil, so a stamp landing after validation would bound
   # nothing, and a `members.manage` holder could hand themselves `repo.delete` through this door.
+  # The re-stamp keeps SPGD-117 §3's re-write-on-every-edit rule under the agent credential too:
+  # each save re-names the current principal (`attributed_user`), so the trail never mixes an
+  # earlier grantor into a later edit.
   def update
     repository = current_repository(:members_manage)
+    return if refuse_credential_over_reach!(repository, member_params[:permissions])
+
     membership = find_membership!(repository)
 
     membership.assign_attributes(member_params)
-    membership.granted_by_user = current_api_user
+    membership.granted_by_user = attributed_user
 
     return render_bad_request(membership.errors.full_messages) unless membership.save
 
@@ -138,6 +154,44 @@ class Api::V1::UserRepositoryMembersController < Api::BaseController
   end
 
   private
+
+  # THE AGENT CREDENTIAL'S OWN GRANT BOUND — the second bound a member write passes under an
+  # `sga_` key, and the one the model cannot answer for. `RepositoryMembership#grantor_holds_
+  # every_granted_permission` measures the person `granted_by_user` names; under an agent
+  # credential that is the key's OWNER, who by mint-time construction holds at least everything
+  # the key does — so a key granted only `members.manage`, minted by an owner who holds the whole
+  # vocabulary, would sail through the grantor bound while granting a colleague `repo.delete`,
+  # widening its own reach through a door the roadmap bounds explicitly. This closes it: the
+  # submitted permissions are intersected with the vocabulary's stored strings (so an UNKNOWN
+  # value is reported once, by `permissions_are_known`, on the same discipline the model bound
+  # states) and the remainder is measured against `AgentApiKeyPolicy#grantable_permissions` —
+  # the key's own set. Rendered only when the caller holds an agent credential: for a person the
+  # subtraction would restate the model's grantor bound with a second message, and the model
+  # stays the person path's single authority.
+  #
+  # Rendered as a 400 naming the over-reach, in the register of the two bounds it sits between —
+  # the model's "permissions the grantor does not hold" and the mint's "permissions you do not
+  # hold". Returns true when a response was rendered, so the actions read `return if …`.
+  def refuse_credential_over_reach!(repository, permissions)
+    return false unless agent_credential?
+
+    over_reach = (Array(permissions) & RepositoryMembership::PERMISSIONS) -
+                 repository_policy(repository).grantable_permissions
+    return false if over_reach.empty?
+
+    # `pluralize` inflects a noun and nothing around it — and `"it"` is not a noun: ActiveSupport
+    # inflects it to the possessive "its", not "them", so a multi-permission over-reach would
+    # render "cannot grant its". The words AROUND the count are exactly where this panel's
+    # wording has broken before (the house rule `TestRun#wall_clock_coverage` states), so branch
+    # the pronoun rather than betting on a determiner reading correctly at every count.
+    pronoun = over_reach.one? ? "it" : "them"
+
+    render_bad_request(
+      ["This key does not hold #{over_reach.join(', ')} on #{repository.github_full_name}, " \
+       "so it cannot grant #{pronoun} — a credential cannot hand out " \
+       "a permission it does not itself hold."]
+    )
+  end
 
   # Scoped through `repository.repository_memberships`, exactly as the web `find_membership!` is
   # and for the same reason — this is the only thing standing between the nested route and a

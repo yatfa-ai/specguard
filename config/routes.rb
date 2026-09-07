@@ -228,8 +228,11 @@ Rails.application.routes.draw do
       # omission away from a 401 nobody can explain, so same noun, same controller.
       #
       # SPGD-952: the LIST also answers to an `sga_` agent key holding `members.manage` on a
-      # repository in its own set (the mutations stay person-only — see the controller). Same
-      # controller, one more accepted credential; a parallel members controller for the agent read
+      # repository in its own set, and SPGD-973 released the three mutations to it on the same
+      # terms — every verb is gated by the same `current_repository(:members_manage)` capability,
+      # so the key's own permission set is the boundary either way (see the controller, which
+      # additionally bounds what the key may GRANT to the key's own set). Same controller, one
+      # more accepted credential; a parallel members controller for the agent read
       # would be the duplicated-endpoint-logic shape this tree has refused twice above.
       #
       # The `:repository_id` segment is what `RepositoryAuthorization#current_repository` reads;
