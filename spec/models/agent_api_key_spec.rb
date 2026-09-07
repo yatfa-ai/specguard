@@ -148,6 +148,41 @@ RSpec.describe AgentApiKey do
     end
   end
 
+  # SPGD-991 — the port of `ApiKey`'s pair (`revoked_and_still_presented?` / `touch_last_refused!`),
+  # four cases: the predicate is false for live keys and for revoked-never-refused keys (nothing is
+  # synthesized), true only for revoked-with-refusal, and a refusal stamp on a live key — which the
+  # failure path structurally cannot produce (it only runs after resolution returned nil, and a live
+  # token resolves) — still reads false, so a rogue writer cannot make a live key read as retired.
+  describe "the refusal evidence pair" do
+    # @intent: { entity: "AgentApiKey", action: "attribute a refusal", behavior: "touch_last_refused! stamps last_refused_at, and revoked_and_still_presented? is false before it and true after", layer: "unit" }
+    it "reports a refused presentation only once one has been stamped" do
+      key, _repository = owned_key
+      key.revoke!
+
+      # A revoked key nobody has presented again is NOT a finding — nothing is synthesized for it.
+      expect(key).not_to be_revoked_and_still_presented
+      expect(key.reload.last_refused_at).to be_nil
+
+      key.touch_last_refused!
+
+      expect(key.reload.last_refused_at).to be_present
+      expect(key).to be_revoked_and_still_presented
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "keep predicates apart", behavior: "a live key never reads revoked-and-presented, even stamped, and a revoked-never-refused key never invents a presentation", layer: "unit" }
+    it "keeps a live key from reading as presented-revoked however it is stamped" do
+      live, _repository = owned_key
+      live.touch_last_used!
+      expect(live).not_to be_revoked_and_still_presented
+
+      # Structurally unreachable through the failure path — `attribute_refused_revocation` only
+      # runs after a live-scoped resolution returned nil — but pinned so the predicate's answer
+      # does not depend on how the column got its value.
+      live.update_column(:last_refused_at, Time.current)
+      expect(live.reload).not_to be_revoked_and_still_presented
+    end
+  end
+
   describe "#token_hint" do
     it "carries this class's prefix and the digest tail" do
       key, _repository = owned_key

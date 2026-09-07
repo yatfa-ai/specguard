@@ -34,8 +34,9 @@
 # Same shape `api_keys` carries it in (`add_retirement_columns_to_api_keys`): the stamp is written
 # by `AgentApiKey#revoke!`, never cleared, and the ROW STAYS — so a still-presenting revoked token
 # stays attributable to a row this application owns rather than resolving to nothing and reading
-# "no such key". Unlike `api_keys` there is no `last_refused_at` yet: no surface reports a
-# still-presented revoked agent key, and an unused column would be write cost bought for no reader.
+# "no such key". `last_refused_at` — the refusal stamp the sibling table carries — arrived later,
+# once a reader existed for it: see `add_last_refused_at_to_agent_api_keys` and the failure path
+# that writes it.
 class CreateAgentApiKeys < ActiveRecord::Migration[8.1]
   def change
     create_table :agent_api_keys do |t|

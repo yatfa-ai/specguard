@@ -140,6 +140,29 @@ class AgentApiKey < ApplicationRecord
     revoked_at.present?
   end
 
+  # Whether a client is STILL PRESENTING this retired token — the pair `ApiKey` carries (SPGD-804's
+  # evidence half), ported so the third credential's refused presentations are attributable too:
+  # the failure path stamps the row the digest names, and this predicate says a stamp exists.
+  #
+  # The epistemics are the same as on `ApiKey`, read in the same direction: there is no ordering
+  # question here (a refusal can only be stamped on an already-revoked row, so the stamp always
+  # postdates the revocation) and there is no recovery — a revoked token never authenticates
+  # again, so the state has no window to clear and no threshold to cross. What the pair cannot
+  # prove is that a client is presenting the token AT THIS MOMENT: `last_refused_at` is the last
+  # time the platform saw it, so a decommissioned agent that gave up hours ago reads the same as
+  # one presenting right now. Every surface that renders this state serves the recency beside it
+  # rather than letting the badge claim a present tense the data does not carry.
+  def revoked_and_still_presented?
+    revoked? && last_refused_at.present?
+  end
+
+  # A stamp on existing state, not a validation event — `update_column`, the spelling `ApiKey`'s
+  # writer and this model's own `revoke!` both give for it. The failure path pays this, at most
+  # once per refused presentation.
+  def touch_last_refused!
+    update_column(:last_refused_at, Time.current)
+  end
+
   # Safe to show anywhere: identifies the key without revealing it. Same construction as both
   # siblings, carrying THIS class's prefix so a person holding all three kinds can tell which
   # list they are looking at.

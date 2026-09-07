@@ -212,6 +212,19 @@
                       title: "This key was revoked, so its token no longer authenticates. The row stays " \
                              "so a token still being presented remains identifiable."
                     ) { "Revoked" } %>
+                <% if agent_api_key.revoked_and_still_presented? %>
+                  <%# The date the badge's promise is kept by: the platform has SEEN this token
+                      arrive and be refused since the revocation. Dated on
+                      _connection_indicator.html.erb's rule — `last_refused_at` is the LAST time
+                      the platform saw it, so this line dates an observation rather than claiming
+                      a present tense the data does not carry. A revoked key never refused renders
+                      exactly as it did before: the state was never observed, and it is rendered
+                      as an absent line rather than as "never". No new query — this row is already
+                      loaded, and the predicate is in-memory. %>
+                  <div class="mt-1 text-xs text-app-content-secondary">
+                    last presented <%= time_ago_in_words(agent_api_key.last_refused_at) %> ago
+                  </div>
+                <% end %>
               <% else %>
                 <%= button_to "Revoke", account_agent_key_path(agent_api_key), method: :delete,
                               class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
