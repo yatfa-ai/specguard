@@ -301,6 +301,29 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["message"]).to include("repo.delete")
+      expect(response.parsed_body["message"]).to include("cannot grant it")
+    end
+
+    # The same refusal on its plural branch: TWO over-reaching permissions in one submission, so
+    # the message renders the "them" reading — which a single-permission example never reaches —
+    # and the list keeps the order the request submitted, pinning the intersection order nothing
+    # else asserts.
+    # @intent: { entity: "AgentApiKey", action: "refuse a multi-permission over-reaching grant", behavior: "a key holding only members.manage submitting two permissions it does not hold is refused with both named, in submitted order", layer: "request" }
+    it "names both over-reaching permissions, in submitted order, when the grant over-reaches twice" do
+      collab = create_user(github_uid: "4012", github_handle: "collab-two")
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["members.manage"])
+
+      expect {
+        post "/api/v1/repositories/#{repository.id}/members",
+             params: { handle: collab.github_handle,
+                       permissions: %w[keys.manage repo.delete] }.to_json,
+             headers: bearer(key.raw_token).merge("Content-Type" => "application/json")
+      }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("keys.manage, repo.delete")
+      expect(response.parsed_body["message"]).to include("cannot grant them")
     end
 
     # THE GRANTOR BOUND IS LIVE, NOT FAIL-OPEN — and only a real, stamped grantor can prove it.

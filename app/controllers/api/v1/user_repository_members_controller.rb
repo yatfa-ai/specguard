@@ -179,9 +179,16 @@ class Api::V1::UserRepositoryMembersController < Api::BaseController
                  repository_policy(repository).grantable_permissions
     return false if over_reach.empty?
 
+    # `pluralize` inflects a noun and nothing around it — and `"it"` is not a noun: ActiveSupport
+    # inflects it to the possessive "its", not "them", so a multi-permission over-reach would
+    # render "cannot grant its". The words AROUND the count are exactly where this panel's
+    # wording has broken before (the house rule `TestRun#wall_clock_coverage` states), so branch
+    # the pronoun rather than betting on a determiner reading correctly at every count.
+    pronoun = over_reach.one? ? "it" : "them"
+
     render_bad_request(
       ["This key does not hold #{over_reach.join(', ')} on #{repository.github_full_name}, " \
-       "so it cannot grant #{'it'.pluralize(over_reach.size)} — a credential cannot hand out " \
+       "so it cannot grant #{pronoun} — a credential cannot hand out " \
        "a permission it does not itself hold."]
     )
   end
