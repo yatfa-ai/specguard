@@ -513,7 +513,10 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # `repository` is deliberately the same four fields `#index` and `Api::V1::RepositoriesController`
   # serve, so a client that has read either knows how to read this. `api_key` is NOT the same block
   # `GET /api/v1/repository` serves — that one reports on a key the caller already holds and could
-  # not reveal it if it wanted to. This one carries `token`, once.
+  # not reveal it if it wanted to. This one carries `token`, once, and is deliberately the same
+  # block `UserRepositoryApiKeysController#minted_body` serves — including the row's `id`
+  # (SPGD-993), which is the caller's only durable handle on this key: the token below is
+  # reveal-once, and the revoke route and the keys inventory both name the row by this id.
   def registered_body(repository, api_key)
     {
       repository: {
@@ -523,6 +526,7 @@ class Api::V1::UserRepositoriesController < Api::BaseController
         registered_at: repository.created_at.iso8601
       },
       api_key: {
+        id: api_key.id,
         name: api_key.name,
         # ⚠️ THE ONLY TIME THIS VALUE EXISTS ANYWHERE. Nothing stores it and no endpoint can
         # re-serve it; a caller that loses it mints a replacement.

@@ -305,9 +305,10 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
   # grantor bound keeps measuring a real person's rights.
 
   describe "POST /api/v1/repositories/:repository_id/api_keys" do
-    # The minted body is deliberately unchanged: an agent-minted key reads exactly like a
-    # person-minted one, because it IS one — same `api_key` block, same reveal-once token.
-    # @intent: { entity: "AgentApiKey", action: "mint a repository key", behavior: "an agent key holding keys.manage mints a repository key whose body carries the person-minted shape with the reveal-once token", layer: "request" }
+    # The minted body reads exactly like a person-minted one, because it IS one — same `api_key`
+    # block, same reveal-once token. SPGD-993 added `id` to BOTH mint responses in the same
+    # commit, so the shared-block rule the two controllers state survived the addition.
+    # @intent: { entity: "AgentApiKey", action: "mint a repository key", behavior: "an agent key holding keys.manage mints a repository key whose body carries the person-minted shape with the reveal-once token and the row id", layer: "request" }
     it "mints a repository key for a key holding keys.manage on a repository in the set" do
       key = create_agent_api_key(user: person, repositories: [repository],
                                  permissions: ["keys.manage"])
@@ -320,8 +321,9 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
 
       expect(response).to have_http_status(:created)
       expect(response.parsed_body["api_key"].keys)
-        .to contain_exactly("name", "token", "hint", "created_at")
+        .to contain_exactly("id", "name", "token", "hint", "created_at")
       expect(response.parsed_body["api_key"]["token"]).to be_present
+      expect(response.parsed_body["api_key"]["id"]).to eq(ApiKey.order(:id).last.id)
     end
 
     # The attribution decision this slice makes explicitly: the minted row's creator is the
@@ -380,6 +382,51 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
 
       expect(response).to have_http_status(:forbidden)
       expect(repository_key.reload.revoked_at).to be_nil
+    end
+  end
+
+  # ---------------------------------------------------------------- SPGD-993
+  # The inventory — the read that makes mint-and-replace rotation completable over the API alone.
+  # A mint reveals its token once and never again, and the revoke names rows by primary key, so
+  # before this endpoint an agent holding `keys.manage` could mint the replacement but could never
+  # identify the orphan to revoke. The same `keys.manage` gate answers here as on the writes, so
+  # the listing reaches nobody the writes could not.
+  describe "GET /api/v1/repositories/:repository_id/api_keys" do
+    # @intent: { entity: "AgentApiKey", action: "read the key inventory", behavior: "an agent key holding keys.manage lists the repository's own keys with the id a revoke needs, and never a token", layer: "request" }
+    it "lists the repository's keys for a key holding keys.manage on a repository in the set" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["keys.manage"])
+      repository_key = repository.api_keys.create!(name: "CI")
+
+      get "/api/v1/repositories/#{repository.id}/api_keys", headers: bearer(key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      row = response.parsed_body["api_keys"].find { |r| r["id"] == repository_key.id }
+      # The degraded creator is rendered, not dropped: this row was minted through the model
+      # directly, so its creator is nil — the "Unknown" state the api-keys controller documents.
+      expect(row).to include("name" => "CI", "status" => "live", "created_by" => "Unknown")
+      expect(row.keys).to contain_exactly("id", "name", "token_hint", "created_at",
+                                          "created_by", "last_used_at", "status")
+      # The token is never served — only the mint response carries it, once.
+      expect(row.keys).not_to include("token")
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "refuse an unpermitted read", behavior: "an in-set repository asked for the key inventory by a key without keys.manage answers 403", layer: "request" }
+    it "answers 403 for the inventory without the keys.manage permission" do
+      get "/api/v1/repositories/#{repository.id}/api_keys", headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:forbidden)
+      expect(response.parsed_body["error"]).to eq("forbidden")
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "hide the ungranted inventory", behavior: "the key inventory of a repository outside the set answers 404, even with keys.manage held", layer: "request" }
+    it "answers 404 for the inventory of a repository outside the set, even holding keys.manage" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["keys.manage"])
+
+      get "/api/v1/repositories/#{other_repository.id}/api_keys", headers: bearer(key.raw_token)
+
+      expect(response).to have_http_status(:not_found)
     end
   end
 

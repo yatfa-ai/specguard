@@ -70,6 +70,21 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
       expect(row.attributes.values.map(&:to_s)).not_to include(a_string_including(token))
     end
 
+    # SPGD-993 — the mint block carries the row's `id`, and it is deliberately the SAME block
+    # `POST /api/v1/repositories/:repository_id/api_keys` serves, so a client that has read one
+    # mint response knows how to read the other. The id is the durable half of the exchange: the
+    # token above is reveal-once, and the revoke route and the keys inventory both name this row
+    # by the id — without it the caller could never act on what they just created.
+    # @intent: { entity: "registration api key", action: "serve the row id", behavior: "the registration mint serves the api_key block carrying the stored row id, the same block the api_keys mint serves", layer: "request" }
+    it "serves the minted key's id in the same api_key block the api_keys mint serves" do
+      register("acme/billing-service")
+
+      expect(response).to have_http_status(:created)
+      expect(response.parsed_body["api_key"].keys)
+        .to contain_exactly("id", "name", "token", "hint", "created_at")
+      expect(response.parsed_body.dig("api_key", "id")).to eq(ApiKey.last.id)
+    end
+
     # Attribution, which is the one property of this key that CANNOT be repaired after the fact:
     # `ApiKeysController#destroy` is a hard `destroy!` with no audit row, so a key minted with a
     # NULL creator is unattributed forever — the reason `add_created_by_user_to_api_keys` went to
