@@ -251,6 +251,12 @@ RSpec.describe ApiKeyPartition do
   # names an expression to explain why it must not be written again would fail a raw grep while
   # adding no copy at all. `ApiKey` itself is allowed because the predicates and scopes are the
   # rules this seam is BUILT from, not a re-derivation of them.
+  #
+  # SCOPE NOTE (SPGD-993 review): the census covers the four COLLECTION expressions only — a
+  # row-grain retirement question asked of the raw column (`revoked_at ?`, `if revoked_at`)
+  # passes it undetected, which the review showed is a load-bearing gap, not a theoretical one.
+  # A row site must still ask the predicate (`revoked?`); this guard holding the collections
+  # is no licence to re-derive the split one row at a time.
   describe "the single-source property" do
     expressions = [
       "reject(&:revoked?)",

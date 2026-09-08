@@ -139,9 +139,12 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
   # header's "no later endpoint serves the token" sentence stays true by construction here, since
   # the only plaintext this row could name was never persisted. `created_by` renders the same
   # degraded "Unknown" the web key table renders for a key minted before attribution existed or
-  # whose creator is gone (`User#display_name`, so it reads what the page reads). `status` is the
-  # model's own retirement split (`live`/`revoked` scopes) spelled out per row, with `revoked_at`
-  # served only when the row carries one — a live key's "revoked_at: null" would restate the
+  # whose creator is gone (`User#display_name`, so it reads what the page reads). `status` asks
+  # the model's own retirement PREDICATE — `revoked?`, `ApiKey`'s published reading of the
+  # `revoked_at` column — rather than the column itself, so the live/revoked question keeps its
+  # one spelling in the model and is not re-derived per row (the drift `ApiKeyPartition`'s
+  # repo-wide single-source guard exists to refuse). `revoked_at` itself is served only when the
+  # predicate says the row carries one — a live key's "revoked_at: null" would restate the
   # status field, and the two-writings-one-fact shape is what lets them drift.
   def serialize(api_key)
     row = {
@@ -151,9 +154,9 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
       created_at: api_key.created_at.iso8601,
       created_by: api_key.created_by_user&.display_name || "Unknown",
       last_used_at: api_key.last_used_at&.iso8601,
-      status: api_key.revoked_at ? "revoked" : "live"
+      status: api_key.revoked? ? "revoked" : "live"
     }
-    row[:revoked_at] = api_key.revoked_at.iso8601 if api_key.revoked_at
+    row[:revoked_at] = api_key.revoked_at.iso8601 if api_key.revoked?
     row
   end
 end
