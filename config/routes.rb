@@ -207,6 +207,15 @@ Rails.application.routes.draw do
       get "repositories/:repository_id/api_keys", to: "user_repository_api_keys#index"
       post "repositories/:repository_id/api_keys", to: "user_repository_api_keys#create"
       delete "repositories/:repository_id/api_keys/:id", to: "user_repository_api_keys#destroy"
+      # LISTING AND REVOKING A REPOSITORY'S `sga_` AGENT KEYS (SPGD-1004) — the API half SPGD-989
+      # scoped out and SPGD-993 fenced to this lane, so a `keys.manage` holder over a token (the
+      # `sga_` automation principal, an `sgu_` key in a script) can finally complete the
+      # offboarding arc the browser-only pair left open. The named-per-route shape the sgk_ trio
+      # above uses, for the reason its comment states; the `:repository_id` segment is what
+      # `RepositoryAuthorization#current_repository` reads, and the same `keys.manage` gate
+      # answers both verbs — zero new authorization, same noun, one controller.
+      get "repositories/:repository_id/agent_keys", to: "user_repository_agent_keys#index"
+      delete "repositories/:repository_id/agent_keys/:id", to: "user_repository_agent_keys#destroy"
       # ONE REPOSITORY, BY NAME, FOR THE PERSON HOLDING THE KEY — the reading `get "repositories"`
       # above stops one grain short of. That one lists what a person may open and serves six identity
       # fields per row; this opens one and serves the whole overview.
