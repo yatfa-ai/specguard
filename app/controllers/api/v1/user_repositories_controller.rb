@@ -168,7 +168,12 @@ class Api::V1::UserRepositoriesController < Api::BaseController
     repositories = stale_first(repositories, latest_runs) if requested_sort == "stale"
     verdicts = delivery_verdicts(repositories, latest_runs: latest_runs)
 
+    # THE CALLER'S OWN CREDENTIAL GRANT, splatted in at the top level — served under an `sga_`
+    # key, ABSENT under a `sgu_` one. Why it sits here rather than inside `#serialize`, and why
+    # its reading is asked of the policy rather than read off the column, is
+    # `serialized_credential_grant`'s subject, stated there.
     render json: {
+      **serialized_credential_grant,
       repositories: repositories.map do |repository|
         serialize(repository, verdicts[repository.id],
                   LatestRunSerializer.new(latest_runs[repository.id],
@@ -567,6 +572,82 @@ class Api::V1::UserRepositoriesController < Api::BaseController
       delivery_health: delivery_health,
       **(latest_run.equal?(NO_LATEST_RUN_BLOCK) ? {} : { latest_run: latest_run })
     }
+  end
+
+  # THE AGENT KEY'S OWN GRANT, SERVED TO ITSELF (SPGD-977) — the one block of this response that
+  # is not repository-scoped, and the reading an `sga_` caller historically had nowhere to get:
+  # the permission set is mint-time-fixed on the key, and before this block it was rendered in
+  # exactly one place, the minting person's browser account page. The refusal sentence
+  # deliberately names no capability (`Api::BaseController#render_forbidden` is person-shaped on
+  # purpose and stays untouched here), so a machine credential's only discovery path was
+  # trial-and-error against 403s. This block answers the one question the caller is
+  # unambiguously entitled to — what its own credential was granted.
+  #
+  # ## Placement: a top-level key alongside `repositories:`, NOT a field of each entry
+  #
+  # This is `Api::V1::RepositoriesController#serialized_api_key`'s distinction, cited for the
+  # same purpose it makes there: THE CREDENTIAL THAT MADE THIS REQUEST is the one block of an
+  # endpoint that is not repository-scoped. `#serialize` runs once per row, so threading the
+  # grant through it would repeat one fact N times — `latest_run`, the block `#serialize` DOES
+  # take, is per-entry, which is exactly why this is not that. For the same not-repository-
+  # scoped reason the block does not travel to a caller that holds no agent key: the
+  # conditional splat serves it ONLY under `sga_`, and under a `sgu_` person key the key is
+  # ABSENT rather than present-and-null — a person key has no mint-time permission set, and a
+  # null would assert one exists and is empty. That is the `NO_LATEST_RUN_BLOCK` marker's RULE
+  # (absent, never present-and-null) without its mechanism: there is no default argument here
+  # for a real `nil` to collide with, so a plain conditional splat is the whole trick.
+  #
+  # ## The reading is derived THROUGH the policy, never off the column
+  #
+  # The stored `permissions` array under-states and over-states the grant at once: it may omit
+  # `view` while the set implies it on every repository it names, and it cannot express that
+  # `:owner`-gated verbs — renaming — are refused regardless, because `AgentApiKeyPolicy#owner?`
+  # is hardcoded false and no storable permission maps to `RepositoryPolicy::OWNER_ONLY`. A
+  # client reading the raw array would conclude it may rename and may not view — both errors,
+  # in opposite directions. So every capability in `RepositoryPolicy::CAPABILITIES` — the
+  # vocabulary the gate itself answers in — is ASKED of the policy, and the booleans cannot
+  # disagree with a 403 the same key would get. An EMPTY permission set thereby gets its
+  # affirmative reading (`view` true, every further verb false) — the machine counterpart of
+  # the account page's "read only" — rather than an absent block a client must guess at.
+  #
+  # The policy is asked against ONE representative in-set repository, sound because the answer
+  # is uniform across the set: `member?` is `covers?` — set membership, all-or-nothing per
+  # repository — and the verb half reads the ONE permission array the key carries. The
+  # representative is a stand-in carrying an id from the key's own `repository_ids` rather
+  # than a row out of the served list, for two load-bearing reasons: the served list is the
+  # NARROWED view (`?q=` may empty it while the grant stands, and the reading must not flip
+  # with the filter), and the stand-in costs no query — `covers?`/`grants?` are in-memory
+  # array reads, so this block adds nothing to the request's query budget. That no-query choice
+  # buys a reading of the KEY's grant, not of the reachability of the rows behind it: `covers?`
+  # is an id-array read (`repository_ids.include?(repository.id)`) that never asks whether a row
+  # still exists, so a key whose granted repositories have all since been destroyed reads its
+  # held capabilities true beside an empty `repositories:` list. That is coherent as served —
+  # the body hands the client no id to act on, and `#show` on a dead id still answers 404 —
+  # and hardening it would take a row-existence lookup, the real query the stand-in was chosen
+  # to avoid.
+  #
+  # ## The disclosure boundary
+  #
+  # The capability reading and nothing else: never the minting owner's identity (this API does
+  # not serve it anywhere on this surface — see `#serialize`'s `role` note) and never a
+  # `grantable_permissions` reading. Those are different questions about the same key, with
+  # different answers: this block is the key reading what it HOLDS, while what the key may
+  # HAND OUT is the delegation bound `AgentApiKeyPolicy#grantable_permissions` (SPGD-973)
+  # answers for the member-write paths that mint grants — consumed at
+  # `UserRepositoryMembersController#refuse_credential_over_reach!`. SPGD-973 also retracted
+  # the policy header's old "end of a grant chain" stance when it opened keys.manage and
+  # members.manage, so that sentence is citable no longer — but the retraction did not merge
+  # the two questions, and this block still asks only the holding one.
+  def serialized_credential_grant
+    return {} unless @current_api_key.is_a?(AgentApiKey)
+
+    representative = Repository.new(id: @current_api_key.repository_ids.first)
+    policy = AgentApiKeyPolicy.new(@current_api_key, representative)
+    capabilities = RepositoryPolicy::CAPABILITIES.keys.index_with do |capability|
+      policy.can?(capability)
+    end
+
+    { credential: { capabilities: capabilities } }
   end
 
   # Which side of the owner/member line this entry sits on — or, under the agent credential, that
