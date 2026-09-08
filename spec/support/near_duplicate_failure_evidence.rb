@@ -80,8 +80,11 @@
 #
 # No mitigation, no second-guessing among residual mechanisms, and no change to any GUC the
 # production read sets: this file only instruments the failure. The recall-hardening decision is
-# SPGD-72's (paused roadmap), and filing a mechanism guess is the wrong shape against this
-# corpus's own precedent — the observer's job is to capture the plan, not to bet on one.
+# made, not pending — `relaxed_order` applied at `SpecIdentity.with_hnsw_planner_setup` on
+# SPGD-375's measured grid (recall 1.000), `ef_search` measured on that grid and declined on cost,
+# the residual refinement question unowned since roadmap SPGD-72 completed, 2026-09-06 — and
+# filing a mechanism guess is the wrong shape against this corpus's own precedent — the observer's
+# job is to capture the plan, not to bet on one.
 module NearDuplicateFailureEvidence
   # The pair read is identifiable on the wire by BOTH markers together: only
   # `near_duplicate_pairs_in`'s statement carries a `CROSS JOIN LATERAL` (twice — the neighbour
