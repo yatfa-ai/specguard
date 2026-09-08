@@ -252,8 +252,10 @@ class NearDuplicateClusters
   # tenant bind at `.near_duplicate_pairs_in` for what makes the difference.
   #
   # Extrapolated linearly, the 20,000-identity design point is tens of seconds. **So this is still
-  # not an object to hang off a synchronous page view at that size**, and SPGD-115 should consume it
-  # knowing so — the sentence above about a census is a statement about the shape of the work, not a
+  # not an object to hang off a synchronous page view at that size**, and the surfaces that consume
+  # it ship knowing so: the duplicate-clusters read (SPGD-115, completed 2026-09-06) is the opt-in
+  # `?near_duplicates=` ask, and {RequestedNearDuplicatesParam} quotes this very conclusion at its
+  # own flag. The sentence above about a census is a statement about the shape of the work, not a
   # claim that a suite of any size renders instantly.
   #
   # The residual is a per-probe constant of roughly 2ms, and it is not the plan's fault: HNSW draws
