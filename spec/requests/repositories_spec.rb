@@ -1896,8 +1896,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # The honest limitation, on the surface rather than left for a reader to discover.
         # RSpec/Knapsack partitions are arbitrary with respect to directories, so "this partition
         # is expensive per test" is a fact about the run's division and never about a code area.
-        # SPGD-114's file-shaped aggregation is the ticket that could say the latter, and it has
-        # not shipped; this panel must not read as though it had.
+        # SPGD-114 (completed 2026-09-06) did deliver file-shaped aggregation at run grain — the
+        # directory rollup and the by-spec-file wall-clock panel both render on this page — but
+        # nothing aggregates one shard's cause by code area, and this panel still must not read
+        # as though it had.
         # @intent: {"entity": "TestRun", "action": "call shard a partition", "behavior": "the cause says a shard is an arbitrary slice of the suite rather than a directory, and the page never mentions directories or which files", "layer": "request"}
         it "says a shard is a partition and not a code area" do
           repository = create_repository(user: @user)
