@@ -86,7 +86,12 @@ module Ingest
   #
   # == What is deliberately not here
   #
-  # Caching the embeddings — the rest of the *Cost* axis, still SPGD-72's. FOUR of that paragraph's
+  # Caching the embeddings — the rest of the *Cost* axis, the one lever named and never pulled:
+  # unowned since roadmap SPGD-72 completed, 2026-09-06. (The *Recall* half of the old deferral is
+  # in better shape: the directive is applied at {SpecIdentity.with_hnsw_planner_setup} on
+  # SPGD-375's measured grid, `ef_search` was measured on that grid and declined on cost, and only
+  # the residual refinement — re-running it past 10^5 rows or against real Voyage geometry — lacks
+  # an owner.) FOUR of that paragraph's
   # items ARE now here. Three of them do not depend on which provider is installed: skipping the
   # re-embed when a run's text is byte-identical to a row this repository already holds
   # ({#identical_text}); batching the lookup that answers it, so asking it costs one lookup per page
@@ -1805,8 +1810,12 @@ module Ingest
     # The embed is a billed HTTPS round trip on the provider this application ships, so an unchanged
     # re-ingest that skipped this equality would pay 20,000 of them to rediscover 20,000 rows it
     # already holds — every ingest, forever. It also narrows {#nearest}'s recall exposure by not
-    # reaching the index at all on the identical-text case — which does not settle the measurement
-    # that method hands to SPGD-72, only shrinks what rides on it.
+    # reaching the index at all on the identical-text case — which does not settle the recall
+    # question that method runs under, only shrinks what rides on it. That question is answered,
+    # not deferred: the directive stands on SPGD-375's measured grid (recall 1.000), `ef_search`
+    # was measured on that grid and declined on cost, and the residual refinement — re-running the
+    # grid past 10^5 rows or against real Voyage geometry — has been unowned since roadmap
+    # SPGD-72 completed, 2026-09-06.
     #
     # That removed the WORK. Removing the round trips is {#digest_index}, and it is the same
     # optimisation finished rather than a second one: the equality that answered a row for free still
@@ -2028,10 +2037,14 @@ module Ingest
     # candidates the scan drains rather than stopping at the first row that clears the threshold.
     # The cost is bounded, does not grow with the table, and is far smaller than the 20,000 x 1024
     # `Float` materialisations the narrowing above removes — it is **accepted deliberately**. What
-    # it scales with is `ef_search`, which is **SPGD-72's** to set: this key makes that ticket's
-    # likeliest move — raising `ef_search` — dearer than it was before, because the incremental sort
-    # drains the candidate list on every hit. SPGD-72 is measuring this plan, not the one that was
-    # here before.
+    # it scales with is `ef_search`, and that value is fixed by the applied decision, not open:
+    # the directive is applied at the seam on SPGD-375's measured grid, and raising `ef_search` was
+    # measured on that same grid — the same recall for strictly higher cost, every query dearer at
+    # the index level — and declined, a refusal this key reinforces, because the incremental sort
+    # drains the candidate list on every hit. The cost measured here is this plan's, not the one
+    # that was here before. What is left of the question — refining `ef_search`, or re-running the
+    # grid past 10^5 rows / against real Voyage geometry — has been unowned since roadmap SPGD-72
+    # completed, 2026-09-06.
     #
     # **But that plan was not the one this query got under the old column, and SPGD-375's run
     # closed the question.** On PG 17.10 / pgvector 0.8.0 over the retired 1536-float `vector`,

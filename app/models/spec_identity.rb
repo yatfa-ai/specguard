@@ -278,7 +278,12 @@ class SpecIdentity < ApplicationRecord
   # {SpecIdentity.with_hnsw_planner_setup}, the one seam both tenant-filtered ANN reads on this
   # table go through, and `ef_search` is issued nowhere at all, running at pgvector's default.
   # Nothing here touches either, and this setting changes only WHICH plan is chosen, never what a
-  # chosen plan returns. The recall decision itself stays **SPGD-72's**.
+  # chosen plan returns. The recall decision itself is applied, not pending: the seam issues
+  # `relaxed_order`, chosen on SPGD-375's measured grid (recall 1.000 at the design point), and
+  # `ef_search` was measured on that same grid — the same recall for strictly higher cost — and
+  # declined on it. What is left of the question, refining that choice or re-running the grid past
+  # 10^5 rows / against real Voyage geometry, has been unowned since roadmap SPGD-72 completed,
+  # 2026-09-06.
   #
   # Not `enable_sort = off` or any other `enable_*` switch either, and deliberately. Those assert
   # that the planner is wrong; these two corrections assert that it was misinformed, and then inform
@@ -429,7 +434,10 @@ class SpecIdentity < ApplicationRecord
   # small tenant's true nearest neighbour can fall outside the `hnsw.ef_search` candidates. There it
   # splits a history in two. Here it merely under-reports a cluster: a group of four presented as a
   # group of three, on a panel that is already explicit about presenting rather than concluding.
-  # Different exposure, same measurement — and that measurement is **SPGD-72's**, not this read's.
+  # Different exposure, same measurement — and that measurement is applied, not this read's to
+  # re-derive: the directive was installed from SPGD-375's measured grid (recall 1.000),
+  # `ef_search` was measured on that grid and declined on cost, and the residual refinement
+  # question has been unowned since roadmap SPGD-72 completed, 2026-09-06.
   #
   # == The plan is corrected, not forced, and it takes both corrections
   #
@@ -519,8 +527,12 @@ class SpecIdentity < ApplicationRecord
   # undone at commit — iterates past the first candidate page until the filters are satisfied,
   # measured at recall 1.000 on SPGD-375's grid, and it is inert whenever the planner declines
   # the index, which is the plan a small tenant honestly stat'ed gets. The recall DECISION itself
-  # — `relaxed_order` vs `strict_order`, and `ef_search` — remains **SPGD-72's**; this seam only
-  # fixes where the decision is applied, one executable line, and no read re-derives it.
+  # — `relaxed_order` vs `strict_order`, and `ef_search` — is made, not pending: `relaxed_order`
+  # was chosen and `ef_search` left at pgvector's default, both on SPGD-375's measured grid, where
+  # raising `ef_search` bought the same recall at strictly higher cost and was declined. What is
+  # left of the question — refining that choice, or re-running the grid past 10^5 rows / against
+  # real Voyage geometry — has been unowned since roadmap SPGD-72 completed, 2026-09-06. This seam
+  # only fixes where the decision is applied, one executable line, and no read re-derives it.
   #
   # == The operator price is the caller's answer, named at the call site
   #

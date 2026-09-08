@@ -259,9 +259,12 @@ class NearDuplicateClusters
   # The residual is a per-probe constant of roughly 2ms, and it is not the plan's fault: HNSW draws
   # its candidates from the whole index and applies `repository_id` afterwards, so a tenant that is
   # a fraction of the table pays for candidates it then discards. That is precisely the
-  # tenant-filtered-recall question {Ingest::IdentityResolver#nearest} hands to **SPGD-72** by name,
-  # along with the two knobs that would move it — `hnsw.ef_search` and `hnsw.iterative_scan`. Not
-  # re-derived here, by this slice's own carve-out.
+  # tenant-filtered-recall question {Ingest::IdentityResolver#nearest} runs under, and it is
+  # answered, not open: the seam issues `hnsw.iterative_scan = 'relaxed_order'`, applied and
+  # standing on SPGD-375's measured grid (recall 1.000), while `hnsw.ef_search` was measured on
+  # that same grid and declined on cost. Only the residual refinement — re-running the grid past
+  # 10^5 rows or against real Voyage geometry — has been unowned since roadmap SPGD-72 completed,
+  # 2026-09-06. Not re-derived here, by this slice's own carve-out.
   NEIGHBOURS = 10
 
   # How many clusters the ranking returns. Truncation is disclosed by `#truncated?` and
