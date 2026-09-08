@@ -10,13 +10,14 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_05_040000) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_07_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
 
   create_table "agent_api_keys", force: :cascade do |t|
     t.datetime "created_at", null: false
+    t.datetime "last_refused_at"
     t.datetime "last_used_at"
     t.string "name", null: false
     t.text "permissions", default: [], null: false, array: true

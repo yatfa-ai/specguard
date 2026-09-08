@@ -104,6 +104,52 @@ RSpec.describe "Account agent keys", type: :request do
     expect(response.body).to include("Doomed")
   end
 
+  # SPGD-991 — the whole story this column exists for, read across both surfaces: the owner
+  # revokes here, the leaked token keeps knocking at the agent API (401, stamped), and the row
+  # on THIS page dates the last observed presentation. `last_refused_at` is the LAST time the
+  # platform saw it — the line dates an observation, never a present tense
+  # (_connection_indicator.html.erb's rule).
+  # @intent: { entity: "AgentApiKey", action: "date the last refused presentation", behavior: "a revoked key whose token was refused since renders 'last presented N ago' beneath the Revoked badge", layer: "request" }
+  it "dates the last refused presentation on a revoked key the platform has seen since" do
+    repository = mint_grant
+    mint(name: "Leaked", repository_ids: [repository.id])
+    leaked_token = response.body[/sga_[A-Za-z0-9_-]+/]
+    key = person.agent_api_keys.sole
+
+    delete account_agent_key_path(key)
+    follow_redirect!
+
+    # The still-presenting token, presented for real: the failure path stamps it (SPGD-991's seam).
+    get "/api/v1/repositories", headers: { "Authorization" => "Bearer #{leaked_token}" }
+    expect(response).to have_http_status(:unauthorized)
+    expect(key.reload.last_refused_at).to be_present
+
+    get account_path
+
+    expect(response.body).to include("Revoked")
+    expect(response.body).to match(/last presented .+ ago/i)
+  end
+
+  # The honest half: a revoked key the platform never saw again carries no refusal datum, and the
+  # row renders exactly as it did before this column existed — the state was never OBSERVED, so it
+  # is absent rather than rendered as "never".
+  # @intent: { entity: "AgentApiKey", action: "not invent a presentation", behavior: "a revoked key with last_refused_at nil renders the Revoked badge with no presented line, exactly as before", layer: "request" }
+  it "renders a revoked key never refused again without a presented line" do
+    repository = mint_grant
+    mint(name: "Quietly retired", repository_ids: [repository.id])
+    key = person.agent_api_keys.sole
+
+    delete account_agent_key_path(key)
+    follow_redirect!
+
+    get account_path
+
+    expect(key.reload.last_refused_at).to be_nil
+    expect(response.body).to include("Quietly retired")
+    expect(response.body).to include("Revoked")
+    expect(response.body).not_to match(/last presented/i)
+  end
+
   # The association IS the authorization, asserted the way its sibling spec asserts it: one
   # signed-in person cannot reach another's key by typing an id.
   # @intent: { entity: "AgentApiKey", action: "refuse a foreign id", behavior: "DELETE on another person's agent key answers 404 and revokes nothing", layer: "request" }

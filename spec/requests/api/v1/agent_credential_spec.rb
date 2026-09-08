@@ -725,6 +725,61 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
 
       expect(agent_key.reload.last_used_at).to be_nil
     end
+
+    # SPGD-991 — the port of `ApiKey`'s evidence half (SPGD-804) to the third credential: the 401
+    # itself is attributable because the row the digest names still exists, so the failure path
+    # stamps it. A revoked token keeps arriving (decommissioned agents, leaked tokens) and the
+    # owner watching the row on /account needs the date the platform last saw it.
+    # @intent: { entity: "AgentApiKey", action: "attribute a refusal", behavior: "a revoked agent key presented again answers 401 AND stamps last_refused_at on the named row", layer: "request" }
+    it "stamps last_refused_at on the revoked row it refuses" do
+      token = agent_key.raw_token
+      agent_key.revoke!
+
+      expect {
+        get "/api/v1/repositories", headers: bearer(token)
+      }.to change { agent_key.reload.last_refused_at }.from(nil).to(be_present)
+
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    # The honest half of the same claim: an UNKNOWN `sga_` token names no row — there is nothing
+    # to attribute a refusal to, and nothing is synthesized for it (same rule as `ApiKey`'s seam).
+    # @intent: { entity: "AgentApiKey", action: "not invent a refusal", behavior: "an unknown sga_ token answers 401, writes no row, and leaves every existing stamp untouched", layer: "request" }
+    it "writes nothing for a token that never named a key" do
+      agent_key.revoke!
+      agent_key.touch_last_refused!
+
+      expect {
+        get "/api/v1/repositories", headers: bearer("sga_#{SecureRandom.urlsafe_base64(24)}")
+      }.not_to change { agent_key.reload.last_refused_at }
+
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    # The cost contract, held on the failure path the way "the cost of a valid presentation" holds
+    # it on the success path. Two reads of the credential table, both on the unique digest index:
+    # the resolving read EVERY presentation pays (a revoked token resolves to nil, the eager-loaded
+    # owner riding the same statement), and the ONE read the failure path itself adds — the
+    # `revoked_at IS NOT NULL AND token_digest = …` lookup — plus the stamp. No other credential
+    # table is touched. The VALID presentation above is unchanged and still pinned by its examples.
+    # @intent: { entity: "AgentApiKey", action: "attribute without probing", behavior: "the refused presentation costs resolution plus one revoked lookup on the digest index and one update, and no other credential table is read", layer: "request" }
+    it "attributes the refusal with one indexed lookup and one stamp, nothing else" do
+      token = agent_key.raw_token
+      agent_key.revoke!
+
+      statements = queries_against(/api_keys/) do
+        get "/api/v1/repositories", headers: bearer(token)
+      end
+
+      expect(response).to have_http_status(:unauthorized)
+      lookups = statements.grep(/FROM "agent_api_keys"/)
+      expect(lookups.size).to eq(2)
+      expect(lookups).to all(include("token_digest"))
+      expect(lookups.count { |sql| sql.include?('"agent_api_keys"."revoked_at" IS NOT NULL') }).to eq(1)
+      expect(statements.grep(/UPDATE "agent_api_keys"/).size).to eq(1)
+      expect(statements.grep(/FROM "api_keys"/)).to be_empty
+      expect(statements.grep(/FROM "user_api_keys"/)).to be_empty
+    end
   end
 
   describe "the cost of a valid presentation" do
