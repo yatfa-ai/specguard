@@ -1,0 +1,105 @@
+    <% if manage_keys %>
+      <%# THE AGENT CREDENTIAL'S PANEL (SPGD-989) — the third credential kind beside the `sgk_`
+          table above, and the repository-side face of SPGD-112's rule for it: a member who minted
+          an agent key over this repository and later lost access leaves the key authenticating
+          (the grant is frozen at mint time — AgentApiKey's header), so the repository's
+          `keys.manage` holders need to SEE it and hold the same Revoke lever they hold over
+          `sgk_` keys. Minting deliberately does not live here: an agent key's grant is a set of
+          repositories and permissions chosen once, at /account, from the minter's own rights.
+
+          The controller loads these rows behind the same `keys.manage` gate — one SELECT against
+          `agent_api_keys`, pinned beside this page's other budgets — and hands the partial only
+          LIVE rows (SPGD-804's rule, on this table too: a revoked row is retained but must not
+          present as a live credential, so it leaves the listing rather than changing its badge). %>
+      <%= render UI::PanelComponent.new(title: "Agent keys", id: "agent-keys", class: "lg:col-span-2") do |panel| %>
+        <p id="agent-keys-caption" class="mb-3 text-sm text-app-content-secondary">
+          Every live agent key whose grant covers this repository. Minted from the owner's
+          <%= link_to "account page", account_path %> — revoking one here cuts its token on every
+          repository in its set, which the confirm dialog names.
+        </p>
+
+        <% if @agent_api_keys.any? %>
+          <%= render UI::TableComponent.new(columns: ["Name", "Owner", "Key", "Repositories", "Permissions", "Created", ""],
+                                            describedby: "agent-keys-caption") do %>
+            <% @agent_api_keys.each do |agent_api_key| %>
+              <tr>
+                <td class="px-3 py-2"><%= agent_api_key.name %></td>
+                <td class="px-3 py-2 text-app-content-secondary">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <%# The OWNER, not a minting "Created by": an agent key speaks for nobody, but
+                        its rights were fixed by the person who minted it, and both the archived
+                        and the ex-member markers below are facts about that person. %>
+                    <span><%= agent_api_key.user&.display_name || "Unknown" %></span>
+                    <%# An archived owner's token resolves to nothing (`authenticate`'s
+                        `merge(User.active)`), so this row is a record, not a live hazard —
+                        `:neutral`, the tone /account gives a revoked row for the same reason. It
+                        is nevertheless still a `revoked_at: nil` row this page's viewer may need
+                        to retire (an archived owner cannot sign in to do it), so it stays listed
+                        and marked rather than being filtered out. This is a fact about the
+                        CREDENTIAL's own validity, so it renders for every `keys.manage` viewer;
+                        the membership fact below keeps its stricter gate. %>
+                    <% if agent_api_key.user&.archived? %>
+                      <%= render UI::BadgeComponent.new(
+                            tone: :neutral,
+                            title: "This key's owner archived their account, so the token no longer " \
+                                   "authenticates. The row stays until it is revoked."
+                          ) { "owner archived" } %>
+                    <% end %>
+                    <%# SPGD-124's marker, carried to the third credential: the person who minted
+                        this key no longer holds access to THIS repository, and the mint-time
+                        freeze means the key outlived their grant. Warning tone, matching what the
+                        `sgk_` table chose for the same fact. Renders only for a viewer who ALSO
+                        holds `members.manage` — see
+                        RepositoriesController#access_holder_ids; a `keys.manage`-only viewer is
+                        told nothing about membership status, not told less. %>
+                    <% if former_member?(agent_api_key.user) %>
+                      <%= render UI::BadgeComponent.new(
+                            tone: :warning,
+                            title: "#{agent_api_key.user.display_name} no longer has access to this repository, " \
+                                   "but this key still authenticates until it is revoked."
+                          ) { "no longer has access" } %>
+                    <% end %>
+                  </div>
+                </td>
+                <td class="px-3 py-2 font-mono text-xs text-app-content-secondary">
+                  <%= agent_api_key.token_hint %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# The stored set's size — the blast radius one Revoke press covers, since the
+                      cut lands on every repository in the set at once. The confirm dialog names
+                      them; this is the glanceable half of the same fact. %>
+                  <%= agent_api_key.repository_ids.size %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary">
+                  <%# The stored verb set, or the honest phrase for the minimal grant — the same
+                      rendering /account gives the same column, so one grant reads the same on
+                      both surfaces that show it. %>
+                  <%= agent_api_key.permissions.any? ? agent_api_key.permissions.join(", ") : "read only" %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= time_ago_in_words(agent_api_key.created_at) %> ago
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <%# No Regenerate here, deliberately: the model has no `regenerate!` — a lost
+                      agent token is recovered by minting another and revoking this one. The
+                      confirm names the FULL stored set because the cut lands on all of it, not
+                      only this repository's share of it. %>
+                  <%= button_to "Revoke", repository_agent_key_path(@repository, agent_api_key),
+                                method: :delete,
+                                class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                                form: { data: { turbo_confirm: agent_key_revoke_confirmation(
+                                                   agent_api_key,
+                                                   agent_key_repository_names(agent_api_key)
+                                                 ) } } %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No agent keys cover this repository",
+                description: "When an owner mints an agent key whose set includes this repository, it is listed here."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>

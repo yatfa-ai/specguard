@@ -77,6 +77,19 @@ class AgentApiKey < ApplicationRecord
   scope :live, -> { where(revoked_at: nil) }
   scope :revoked, -> { where.not(revoked_at: nil) }
 
+  # The LISTING boundary a repository-side reader asks (SPGD-989): the rows whose stored set names
+  # this repository. The SQL half of `covers?` — same column, same question, one containment
+  # predicate instead of loading every row and filtering in Ruby. This is a READ of the stored set
+  # and re-derives nothing: the bound stays a MINT-TIME fact, and a repository dropping out of a
+  # stored set is still not a thing that can happen after mint.
+  #
+  # The table is qualified because the listing reads with `eager_load(:user)` — the same join
+  # `authenticate` pays — and an unqualified column in a joined statement is one renamed column
+  # away from an ambiguity error.
+  scope :covering, lambda { |repository|
+    where("agent_api_keys.repository_ids @> ARRAY[?]::bigint[]", repository.id)
+  }
+
   def self.digest(token)
     OpenSSL::Digest::SHA256.hexdigest(token.to_s)
   end

@@ -173,4 +173,31 @@ RSpec.describe AgentApiKey do
       expect(key.covers?(nil)).to be(false)
     end
   end
+
+  # The SQL half of `covers?` (SPGD-989) — the listing boundary a repository-side reader asks.
+  # Kept beside `#covers?` because the two are one question in two media, and a change to one
+  # without the other is exactly the drift this pair of describes makes visible.
+  describe ".covering" do
+    it "selects exactly the rows whose stored set names the repository" do
+      key, mine = owned_key
+      other = create_repository(user: create_user(github_uid: "3003", github_handle: "other"),
+                                github_full_name: "other/owned")
+      stranger = create_agent_api_key(user: other.user, repositories: [other], name: "Elsewhere")
+
+      expect(AgentApiKey.covering(mine)).to contain_exactly(key)
+      expect(AgentApiKey.covering(other)).to contain_exactly(stranger)
+    end
+
+    # `covering` is a boundary read, not a retirement read: it deliberately does NOT filter
+    # revoked rows, which is why every listing caller composes `live.covering` — the same
+    # reader-picks-a-side rule the scopes' own comment states. Asserted so a later reader cannot
+    # "simplify" the composition away without this failing.
+    it "returns retired rows too, leaving the live side to the caller" do
+      key, mine = owned_key
+      key.revoke!
+
+      expect(AgentApiKey.covering(mine)).to contain_exactly(key)
+      expect(AgentApiKey.live.covering(mine)).to be_empty
+    end
+  end
 end

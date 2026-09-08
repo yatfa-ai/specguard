@@ -208,7 +208,37 @@ class RepositoriesController < ApplicationController
     # Both are pinned: the owner by the absolute page budget in `repositories_spec.rb`, the member
     # by the paired preload guard beside it. Separate guards because from here the paths differ.
     keys = @repository.api_keys.order(created_at: :desc)
-    keys = keys.includes(:created_by_user) if repository_policy.can?(:keys_manage)
+    if repository_policy.can?(:keys_manage)
+      keys = keys.includes(:created_by_user)
+      # THE AGENT CREDENTIAL'S REPOSITORY-SIDE LISTING (SPGD-989) — behind the SAME gate the
+      # `sgk_` table renders behind, because it is the same class of information: names, hints,
+      # who holds the credential and what it may do are credential metadata, and the member
+      # without `keys.manage` gets none of it. `live` first (SPGD-804's rule, applied here on its
+      # own table: a revoked row is retained but must not present as a live credential),
+      # `covering` for the boundary, `eager_load(:user)` for the owner cell — the same join
+      # `authenticate` pays, so the whole listing is ONE statement against `agent_api_keys` and
+      # the page's pinned one-SELECT budget for this table holds even when rows exist.
+      #
+      # ARCHIVED-OWNER rows stay in this listing, marked: `authenticate`'s `merge(User.active)`
+      # refuses their tokens, so they are records rather than live hazards — but they are still
+      # `revoked_at: nil` rows nobody but this page's viewer can retire (an archived owner cannot
+      # sign in to /account to do it), and filtering them here would hide an unrevokable grant
+      # from the only people who can revoke it. The badge beside the owner's name says what the
+      # listing itself must never say silently: this one does NOT authenticate.
+      @agent_api_keys = AgentApiKey.live.covering(@repository)
+                                        .eager_load(:user)
+                                        .order(created_at: :desc).to_a
+      # The name map the revoke confirmation reads — the dialog must name the key's FULL stored
+      # set (count + names), and building that copy from one preloaded map keeps it a single
+      # SELECT against `repositories` for the whole table, bought only when there is a row to
+      # confirm. Names missing from the map are repositories deleted since mint (nothing
+      # cascades into the stored array); the confirmation sentence discloses them as such rather
+      # than letting the count quietly disagree with the list.
+      @agent_key_repositories =
+        if @agent_api_keys.any?
+          Repository.where(id: @agent_api_keys.flat_map(&:repository_ids).uniq).index_by(&:id)
+        end
+    end
     # THE RETIREMENT SPLIT, one object off the ONE SELECT above. `ApiKeyPartition` owns the
     # live / revoked / stranded / presented-revoked split and every figure derived from it — the
     # same object the agent-facing credential-health block and the repositories grid read, so all

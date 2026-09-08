@@ -176,6 +176,58 @@ module RepositoriesHelper
     "Deleted run #{test_run.commit_sha.first(7)} (#{branch}) and its shards and observations."
   end
 
+  # The two halves of the SAME disclosure for the agent-key revoke (SPGD-989): what the presser
+  # is told BEFORE the cut, and what they are told after. They live together, and reach one
+  # shared coverage sentence, for the reason `remove_confirmation` / `remove_notice` above state
+  # in full — a fix applied to only one of them is a contradiction read in sequence.
+  #
+  # Both name the key's FULL stored repository set, count first and names beside it, because
+  # `revoke!` on a multi-repository key cuts the token everywhere: the dialog is the one-act
+  # honesty the members-page revoke dialog established, and it is what lets the trigger stay
+  # THIS repository's `keys.manage` rather than a wider grant (see
+  # RepositoryAgentKeysController's header). The count is the STORED set's, never the list's: a
+  # repository named at mint and deleted since leaves the array but not the count, so the
+  # sentence says so explicitly instead of letting "covers 3" sit beside two names.
+  #
+  # `repository_names` is handed in by both callers, already resolved — the page from the map
+  # `RepositoriesController#show` preloaded (one SELECT for the whole table, never one per row),
+  # the destroy action from its own single read — and sorted, so the copy is stable across
+  # renders and matches between the two halves.
+  # The names behind one key's stored set, read off the map `RepositoriesController#show`
+  # preloaded for the whole table — never a query per row, and the same map the destroy action
+  # resolves for its own notice. Sorted, so the confirm copy is stable across renders and the
+  # two halves of the disclosure cannot disagree about order.
+  def agent_key_repository_names(agent_api_key)
+    repository_map = @agent_key_repositories || {}
+    agent_api_key.repository_ids.filter_map { |id| repository_map[id]&.github_full_name }.sort
+  end
+
+  def agent_key_revoke_confirmation(agent_api_key, repository_names)
+    "Revoke #{agent_api_key.name}? It covers #{agent_key_coverage_sentence(agent_api_key, repository_names)}. " \
+      "Revoking it here cuts the token on every repository in that set — anything still using it stops working immediately."
+  end
+
+  def agent_key_revoke_notice(agent_api_key, repository_names)
+    "Revoked #{agent_api_key.name}. It covered #{agent_key_coverage_sentence(agent_api_key, repository_names)} — " \
+      "its token no longer authenticates anywhere."
+  end
+
+  # The one place the coverage phrase is decided for both sentences above — the same
+  # one-place rule `MembershipsHelper#minted_keys_agreement` states for its own pair. Count
+  # first (the blast radius, read off the STORED array), names second, deletions disclosed in
+  # the middle where the eye already is.
+  #
+  # Public in this module the way every other method here is: the file carries no private
+  # section, and an inline shared fragment is not worth becoming the first one.
+  def agent_key_coverage_sentence(agent_api_key, repository_names)
+    stored_count = agent_api_key.repository_ids.size
+    deleted_count = stored_count - repository_names.size
+    names = repository_names.any? ? ": #{repository_names.join(', ')}" : ""
+    deleted = deleted_count.positive? ? " (#{pluralize(deleted_count, 'repository')} since deleted)" : ""
+
+    "#{pluralize(stored_count, 'repository')}#{names}#{deleted}"
+  end
+
   # Why the "Suite growth" panel is not drawing a line, when there are runs on the branch but fewer
   # than two the platform will compare.
   #
