@@ -25,7 +25,12 @@ RSpec.describe "GitHub App installation", type: :request do
   # reach", plus the credential every later read is made with. Stubbed at the service rather than
   # over HTTP, the same discipline `GithubApi.factory` follows — no spec reaches github.com and none
   # needs a real code to exchange.
-  def stub_user_authorization(*installations, token: "ghu_from_callback", expires_at: 1.hour.from_now)
+  #
+  # `complete:` states whether the stubbed reading is GitHub's WHOLE answer — what the real walk
+  # declares and the callback's removal half acts on. `true`, the default: a stub names what
+  # GitHub reported, and nothing here simulates a page ceiling.
+  def stub_user_authorization(*installations, token: "ghu_from_callback", expires_at: 1.hour.from_now,
+                              complete: true)
     rows = installations.map do |attrs|
       GithubAppUserAuthorization::Installation.new(
         installation_id: attrs.fetch(:installation_id), account_login: attrs[:account_login]
@@ -34,7 +39,7 @@ RSpec.describe "GitHub App installation", type: :request do
 
     allow(GithubAppUserAuthorization).to receive(:authorize).and_return(
       GithubAppUserAuthorization::Authorization.new(token: token, expires_at: expires_at,
-                                                    installations: rows)
+                                                    installations: rows, complete: complete)
     )
   end
 
@@ -387,6 +392,159 @@ RSpec.describe "GitHub App installation", type: :request do
       GithubInstallation.record(user: user, installation_id: 777, account_login: "acme")
       get new_repository_path
       expect(response.body).to include("Reconnect to GitHub")
+    end
+
+    # GitHub's list is its COMPLETE answer to what this user holds — the same walk that records
+    # presence also states absence, and a row GitHub no longer names is a connection the user no
+    # longer has. These examples pin the removal half: what gets removed, what can never be
+    # removed (a truncated or unreadable reading, a failed exchange, another user's rows), and
+    # what the reader is told.
+    describe "reconciling the connected set against GitHub's answer" do
+      # The user connected acme (5001) and beta (888) earlier; this pass GitHub reports only 777.
+      # 5001 and 888 are gone on GitHub's side, so they are gone here — and the stranger who
+      # reaches the same installations keeps their own rows, because rows are per-user by design
+      # (`uniqueness: { scope: :user_id }`) and two members of one organization legitimately hold
+      # their own.
+      # @intent: {"entity": "GET /github/installation/callback", "action": "remove unreported rows", "behavior": "a complete reading reporting only 777 removes this user's 5001 and 888 rows, records 777, and leaves another user's rows untouched", "layer": "request"}
+      it "removes the rows GitHub no longer reports, and this user's rows only" do
+        user = sign_in_via_github
+        stranger = create_user(github_uid: "9009", github_handle: "hubot")
+        add_github_installation(user, installation_id: 888, account_login: "beta")
+        add_github_installation(stranger, installation_id: 888, account_login: "beta")
+        stub_user_authorization({ installation_id: 777, account_login: "acme" })
+
+        expect { get github_installation_callback_path, params: { code: "abc" } }
+          .to change { user.github_installations.count }.from(2).to(1)
+
+        expect(user.reload.github_installations.pluck(:installation_id)).to eq([777])
+        expect(stranger.reload.github_installations.pluck(:installation_id)).to contain_exactly(5001, 888)
+      end
+
+      # The ceiling applied mid-walk: the answer is a PARTIAL one, and its absences say nothing
+      # about what exists. What it did read is still recorded — recording stays additive — but
+      # nothing standing is removed on it.
+      # @intent: {"entity": "GET /github/installation/callback", "action": "never delete on incomplete reading", "behavior": "an incomplete reading records what it read and removes no existing row", "layer": "request"}
+      it "records what an incomplete reading reports but removes nothing on it" do
+        user = sign_in_via_github
+        add_github_installation(user, installation_id: 888, account_login: "beta")
+        stub_user_authorization({ installation_id: 777, account_login: "acme" }, complete: false)
+
+        expect { get github_installation_callback_path, params: { code: "abc" } }
+          .to change { user.github_installations.count }.from(2).to(3)
+
+        expect(user.reload.github_installations.pluck(:installation_id)).to contain_exactly(5001, 888, 777)
+      end
+
+      # The one deletion that would be worse than the drift this slice fixes: a garbled 200 read
+      # as "GitHub reports no installations" would wipe the user's connected set. Driven through
+      # the REAL service — a stubbed `authorize` cannot produce a malformed body, because the
+      # unreadable-body half of Trap 1 is decided inside the walk — with the walk stopping at the
+      # page it cannot read. Nothing is removed, and the rows stand.
+      # @intent: {"entity": "GET /github/installation/callback", "action": "never delete on unreadable answer", "behavior": "a 200 installations body that is not the promised object removes nothing, answers the no-installations notice, and stops the walk at one page request", "layer": "request"}
+      it "removes nothing when GitHub's answer cannot be read" do
+        user = sign_in_via_github
+        add_github_installation(user, installation_id: 888, account_login: "beta")
+
+        token_endpoint = Net::HTTPOK.new("1.1", "200", "OK")
+        allow(token_endpoint).to receive(:body).and_return({ "access_token" => "ghu_unreadable" }.to_json)
+        identity = Net::HTTPOK.new("1.1", "200", "OK")
+        allow(identity).to receive(:body).and_return({ "id" => 1001, "login" => "octocat" }.to_json)
+        unreadable = Net::HTTPOK.new("1.1", "200", "OK")
+        allow(unreadable).to receive(:body).and_return({ "total_count" => 0 }.to_json)
+        http = instance_double(Net::HTTP)
+        allow(http).to receive(:request).and_return(token_endpoint, identity, unreadable)
+        allow(Net::HTTP).to receive(:start).and_yield(http)
+
+        get github_installation_callback_path, params: { code: "abc" }
+
+        expect(user.reload.github_installations.pluck(:installation_id)).to contain_exactly(5001, 888)
+        expect(flash[:notice]).to eq("GitHub reported no SpecGuard installations for your account yet.")
+        expect(http).to have_received(:request).exactly(3).times
+      end
+
+      # Fail-closed covers removal too: a user whose exchange failed is exactly as connected as
+      # they were before, rows included.
+      # @intent: {"entity": "GET /github/installation/callback", "action": "never delete on failed exchange", "behavior": "an Unauthorized from the exchange leaves planted rows standing and flashes could not confirm", "layer": "request"}
+      it "removes nothing when the exchange fails" do
+        user = sign_in_via_github
+        add_github_installation(user, installation_id: 888, account_login: "beta")
+        allow(GithubAppUserAuthorization).to receive(:authorize)
+          .and_raise(GithubApi::Unauthorized, "bad code")
+
+        get github_installation_callback_path, params: { code: "abc" }
+
+        expect(user.reload.github_installations.pluck(:installation_id)).to contain_exactly(5001, 888)
+        expect(flash[:alert]).to include("could not confirm the installation")
+      end
+
+      # The defect this slice exists for, at its sharpest: everything uninstalled on GitHub's
+      # side, one pass through the callback, and the person is back to a fresh install — which
+      # they can only reach if `github_installed?` has stopped answering true. Asserted on a FRESH
+      # GET, deliberately: `github_installation_needed?` answers a write verdict FIRST when this
+      # request collected one, so an assertion made on a re-render reads the verdict seam rather
+      # than the stored fact — a vacuous green.
+      # @intent: {"entity": "GET /github/installation/callback", "action": "reach install affordance after all removed", "behavior": "a complete empty reading removes the last row, and a fresh GET /repositories/new offers the installation form rather than Reconnect to GitHub", "layer": "request"}
+      it "lets a user whose last row was reconciled away reach the install affordance again" do
+        user = sign_in_via_github
+        stub_user_authorization
+
+        get github_installation_callback_path, params: { code: "abc" }
+
+        expect(user.reload.github_installations).to be_empty
+        expect(flash[:notice])
+          .to eq("Disconnected acme, which GitHub no longer reports for your account.")
+
+        get new_repository_path
+
+        expect(response.body).to include('action="/github/installation?return_to=%2Frepositories%2Fnew"')
+        expect(response.body).not_to include("Reconnect to GitHub")
+      end
+
+      # THE MIRRORED INVARIANT, reached by the callback's door. The Disconnect button deletes the
+      # grant when it deletes the last row; reconciliation removing that row reaches the same
+      # state and must not answer the reader differently — a grant left standing names
+      # repositories the user can no longer be reading.
+      # @intent: {"entity": "GET /github/installation/callback", "action": "forget grant when last row reconciled away", "behavior": "a complete empty reading that removes the user's only row also destroys their registration grant", "layer": "request"}
+      it "forgets the registration grant when reconciliation removes the user's last row" do
+        user = sign_in_via_github
+        create_registration_grant(user: user, captured_at: 1.minute.ago)
+        stub_user_authorization
+
+        get github_installation_callback_path, params: { code: "abc" }
+
+        expect(user.reload.github_installations).to be_empty
+        expect(user.reload.github_registration_grant).to be_nil
+      end
+
+      # The guard's other half, on the callback path: with an installation left standing, the
+      # next picker render captures a real reading, and throwing away a still-redeemable grant
+      # would break registration for an agent holding a key that worked a moment ago.
+      # @intent: {"entity": "GET /github/installation/callback", "action": "keep grant when an installation stands", "behavior": "a complete reading that removes one row but leaves another keeps the registration grant", "layer": "request"}
+      it "keeps the registration grant when reconciliation leaves an installation standing" do
+        user = sign_in_via_github
+        create_registration_grant(user: user, captured_at: 1.minute.ago)
+        stub_user_authorization({ installation_id: 777, account_login: "acme" })
+
+        get github_installation_callback_path, params: { code: "abc" }
+
+        expect(user.reload.github_installations.pluck(:installation_id)).to eq([777])
+        expect(user.reload.github_registration_grant).to be_present
+      end
+
+      # A person who uninstalled the App themselves needs no telling; a person whose organization
+      # administrator removed them underneath does. Silence would leave the vanished account
+      # unexplained on the very page that just reconciled it away, so the notice names it — in
+      # the Disconnect button's own verb, so one sentence carries the same meaning both ways.
+      # @intent: {"entity": "GET /github/installation/callback", "action": "name removals in notice", "behavior": "a callback that removes acme alongside recording beta flashes Connected beta and the disconnection of acme", "layer": "request"}
+      it "names in the notice what the callback disconnected" do
+        user = sign_in_via_github
+        stub_user_authorization({ installation_id: 888, account_login: "beta" })
+
+        get github_installation_callback_path, params: { code: "abc" }
+
+        expect(flash[:notice])
+          .to eq("Connected beta. Disconnected acme, which GitHub no longer reports for your account.")
+      end
     end
   end
 

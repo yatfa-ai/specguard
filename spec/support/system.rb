@@ -131,7 +131,8 @@ module SystemAuthHelpers
     id = installation == true ? OmniAuthHelpers::DEFAULT_INSTALLATION_ID : installation
     rows = [GithubAppUserAuthorization::Installation.new(installation_id: id, account_login: "acme")]
     authorization = GithubAppUserAuthorization::Authorization.new(
-      token: OmniAuthHelpers::DEFAULT_USER_TOKEN, expires_at: 1.hour.from_now, installations: rows
+      token: OmniAuthHelpers::DEFAULT_USER_TOKEN, expires_at: 1.hour.from_now, installations: rows,
+      complete: true
     )
 
     allow(SpecGuard::GithubApp).to receive(:configured?).and_return(true)

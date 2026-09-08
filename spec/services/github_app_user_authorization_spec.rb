@@ -390,6 +390,57 @@ RSpec.describe GithubAppUserAuthorization do
     end
   end
 
+  describe "declaring whether the walk was complete" do
+    # The whole point of the flag: the callback deletes rows absent from GitHub's answer, so an
+    # answer that was not GitHub's WHOLE answer must be unmistakable. A short page is GitHub
+    # saying "that was the last one", so this walk saw everything.
+    # @intent: { entity: "GithubAppUserAuthorization", action: "declare complete on short page", behavior: "a walk that ends on a short page reports complete?", layer: "unit" }
+    it "reports a complete reading when the walk ends on a short page" do
+      with_responses(*opening, installations_response([installation_payload(5001)]))
+
+      expect(described_class.authorize(code: "abc123", github_uid: "1001").complete?).to be(true)
+    end
+
+    # The ceiling state `stops at the page ceiling rather than walking forever` builds: five full
+    # pages, and GitHub cut off somewhere unknown. Set the way `GithubApi#repositories` sets
+    # `truncated` — `page == MAX_PAGES` on a full page — so the conservative side of "exactly 500"
+    # reads as incomplete too.
+    # @intent: { entity: "GithubAppUserAuthorization", action: "declare incomplete at ceiling", behavior: "a walk that stops at MAX_PAGES full pages reports complete? false", layer: "unit" }
+    it "reports an incomplete reading when the walk stops at the page ceiling" do
+      responses = Array.new(described_class::MAX_PAGES) { |page| installations_response(full_page(page * 100)) }
+      with_responses(*opening, *responses)
+
+      expect(described_class.authorize(code: "abc123", github_uid: "1001").complete?).to be(false)
+    end
+
+    # A well-formed `{"total_count": 0, "installations": []}` is GitHub genuinely answering "you
+    # hold nothing" — what cancelling out of the picker looks like. Complete, and empty on purpose.
+    # @intent: { entity: "GithubAppUserAuthorization", action: "declare complete on empty answer", behavior: "a well-formed empty installations answer reports complete? true with no installations", layer: "unit" }
+    it "reports a well-formed empty answer as a complete reading" do
+      with_responses(*opening, installations_response([]))
+
+      result = described_class.authorize(code: "abc123", github_uid: "1001")
+
+      expect(result.installations).to eq([])
+      expect(result.complete?).to be(true)
+    end
+
+    # The other half of the malformed-body example above — the same body, the same empty list, but
+    # the reading is NOT complete, because "GitHub said something this code could not read" is not
+    # "GitHub says you hold nothing". The callback deletes nothing on the first and only on a
+    # complete reading; this flag is the line between them. A single "empty" example cannot tell
+    # the two apart, which is exactly how the conflation got in.
+    # @intent: { entity: "GithubAppUserAuthorization", action: "declare incomplete on unreadable body", behavior: "a 200 body lacking the installations wrapper yields no installations and complete? false", layer: "unit" }
+    it "refuses to call a body it could not read a complete answer" do
+      with_responses(*opening, http_response(Net::HTTPOK, body: { "total_count" => 0 }.to_json))
+
+      result = described_class.authorize(code: "abc123", github_uid: "1001")
+
+      expect(result.installations).to eq([])
+      expect(result.complete?).to be(false)
+    end
+  end
+
   describe "filtering what GitHub sends back" do
     # The result is used to write rows against a unique index. A duplicate would be an avoidable
     # failure halfway through recording, over something GitHub is entitled to repeat across pages.

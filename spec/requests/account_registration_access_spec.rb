@@ -135,10 +135,12 @@ RSpec.describe "Account registration access", type: :request do
     def stub_user_authorization(installation_id: 777, account_login: "acme")
       row = GithubAppUserAuthorization::Installation.new(installation_id: installation_id,
                                                          account_login: account_login)
+      # `complete: true` — the stub names GitHub's whole answer, the default reading a fixture
+      # states. (Same seam, same shape as `github_installation_spec.rb`'s helper of the same name.)
       allow(GithubAppUserAuthorization).to receive(:authorize).and_return(
         GithubAppUserAuthorization::Authorization.new(token: "ghu_from_callback",
                                                       expires_at: 1.hour.from_now,
-                                                      installations: [row])
+                                                      installations: [row], complete: true)
       )
     end
 

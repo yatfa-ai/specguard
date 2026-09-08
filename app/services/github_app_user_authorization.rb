@@ -53,10 +53,25 @@ class GithubAppUserAuthorization
   # trip to an endpoint that exists only to answer that.
   Installation = Data.define(:installation_id, :account_login)
 
+  # What one walk of `GET /user/installations` read, and whether it may be acted on as GitHub's
+  # whole answer. `GithubApi::Listing`'s rule applied to this walk — a Data rather than an Array,
+  # so a caller cannot read a truncated list as a complete one — with the flag named positively
+  # because the walk fails it in a second way `truncated` cannot honestly carry: a page whose body
+  # this code could not read at all (see `page_of_installations`). Both causes read the same to a
+  # caller, and both mean the same thing: absences from this answer prove nothing.
+  Listing = Data.define(:installations, :complete)
+
   # What one completed round trip through GitHub produced. The token and the installations travel
   # together because they are two halves of one answer: the installations are only meaningful to
   # the user this token speaks for, and reading them later needs the token that read them now.
-  Authorization = Data.define(:token, :expires_at, :installations)
+  #
+  # `complete` is the walk's own declaration riding along (`Listing`'s flag, promoted so the
+  # caller can act on it without reaching into the walk). `Data` requires every keyword, so an
+  # `Authorization` cannot be constructed without stating whether its installation list may be
+  # read as GitHub's whole answer — the distinction the callback's removal half is gated on.
+  Authorization = Data.define(:token, :expires_at, :installations, :complete) do
+    def complete? = complete
+  end
 
   TOKEN_URL = "https://github.com/login/oauth/access_token"
   API_ROOT = "https://api.github.com"
@@ -84,6 +99,9 @@ class GithubAppUserAuthorization
     #
     # An empty `installations` is a real answer, not a failure: a user who authorized the App but
     # selected no repositories — or who cancelled out of the picker — legitimately holds nothing.
+    # Whether that answer may be read as GitHub's WHOLE answer is a separate fact, and the walk
+    # says so: `complete?` is false when it hit the page ceiling or could not read a page, and a
+    # caller may act on the answer's absences only when it is true.
     #
     # ## `github_uid` is required, and is the whole of what makes the callback safe
     #
@@ -110,7 +128,9 @@ class GithubAppUserAuthorization
       token, expires_at = exchange(code)
       bind_to_identity(token, github_uid)
 
-      Authorization.new(token: token, expires_at: expires_at, installations: list(token))
+      listing = list(token)
+      Authorization.new(token: token, expires_at: expires_at,
+                        installations: listing.installations, complete: listing.complete)
     end
 
     private
@@ -168,29 +188,58 @@ class GithubAppUserAuthorization
       Time.current + [seconds - 60, 0].max.seconds
     end
 
+    # Walk `GET /user/installations` to its end — a short page, or the ceiling — and say whether
+    # what came back may be acted on as GitHub's whole answer. `complete` comes out false two
+    # ways, deliberately not distinguished: the ceiling stopped the walk mid-answer, or a page
+    # this code could not read ended it early. Either way the caller holds a READING, never THE
+    # reading, and must not act on its absences.
+    #
+    # The ceiling's flag is set the way `GithubApi#repositories` sets `truncated`
+    # (`page == MAX_PAGES` on a full page), so a user holding exactly `PER_PAGE * MAX_PAGES`
+    # installations reads as incomplete — the conservative side of that ambiguity, and the reason
+    # the ceiling exists at all.
     def list(token)
       installations = []
+      complete = true
 
       (1..MAX_PAGES).each do |page|
         batch = page_of_installations(token, page)
+
+        if batch.nil?
+          complete = false
+          break
+        end
+
         installations.concat(batch.filter_map { |payload| installation_from(payload) })
 
         break if batch.length < PER_PAGE
+
+        complete = false if page == MAX_PAGES
       end
 
-      installations.uniq(&:installation_id)
+      Listing.new(installations: installations.uniq(&:installation_id), complete: complete)
     end
 
+    # One page of the walk: the installations it carried, or `nil` when the body was not the
+    # promised shape — a fact the WALK must see rather than have smoothed into "nothing here".
+    #
+    # This endpoint answers with an object — `{total_count:, installations: […]}`. Before the
+    # completeness flag existed, a body of an unexpected shape and a well-formed empty answer both
+    # ended the walk as `[]`, which was harmless while recording was purely additive and became
+    # the worst possible reading the moment a caller started deleting on absences: a garbled 200
+    # would have read as "GitHub reports no installations" and wiped the user's connected set. So
+    # the two facts are split at this, the only seam that can tell them apart. A well-formed
+    # answer — `{"total_count": 0, "installations": []}` included — returns its rows, empty or
+    # not, and is a complete reading. Anything else returns `nil`, which `list` marks incomplete.
     def page_of_installations(token, page)
       uri = URI.parse("#{API_ROOT}/user/installations")
       uri.query = URI.encode_www_form(per_page: PER_PAGE, page: page)
 
       payload = get(uri, token)
 
-      # This endpoint answers with an object — `{total_count:, installations: […]}` — and is
-      # defaulted to `[]` so a body of an unexpected shape ends the walk rather than raising a
-      # NoMethodError several frames up.
-      Array(payload.is_a?(Hash) ? payload["installations"] : payload).grep(Hash)
+      return nil unless payload.is_a?(Hash) && payload["installations"].is_a?(Array)
+
+      payload["installations"].grep(Hash)
     end
 
     def installation_from(payload)

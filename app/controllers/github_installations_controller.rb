@@ -43,7 +43,9 @@
 # The exchange also yields the credential every later read is made with, which is kept in the
 # session for as long as the session lasts and nowhere else at all — see `GithubUserSession`.
 #
-# Every installation GitHub reports is recorded, not only the one just created. A user who
+# Every installation GitHub reports is recorded, not only the one just created — and, the list
+# being GitHub's COMPLETE answer to what this user holds, the rows it no longer names are removed
+# on the same pass (see `reconcile`; nothing is removed when the reading is incomplete). A user who
 # administers two organizations reaches both in one trip, and asking them to run the flow again per
 # organization would be asking them to repeat a journey GitHub has already answered in full.
 # Recording an installation is not by itself permission to register what is in it: what this user
@@ -94,15 +96,18 @@ class GithubInstallationsController < ApplicationController
   # here, and the installation is picked up on that pass.
   #
   # `setup_action` is deliberately not branched on. GitHub sends `install` or `update` and the
-  # response to both is identical: ask GitHub what this user holds now, and record that. Reading it
-  # would be reading our own guess about what changed instead of GitHub's statement of what is.
+  # response to both is identical: ask GitHub what this user holds now, and make the record match —
+  # what GitHub names is written, and, the list being GitHub's complete answer, what it no longer
+  # names is removed (`reconcile`). Reading it would be reading our own guess about what changed
+  # instead of GitHub's statement of what is.
   def callback
     authorization = GithubAppUserAuthorization.authorize(code: params[:code],
                                                         github_uid: current_user.github_uid)
     store_github_user_token(authorization.token, expires_at: authorization.expires_at)
     recorded = record(authorization.installations)
+    disconnected = reconcile(authorization)
 
-    redirect_to destination, notice: connected_notice(recorded)
+    redirect_to destination, notice: connected_notice(recorded, disconnected)
   rescue GithubApi::Error => e
     # Failing closed: nothing is recorded and no credential is kept, so a user whose exchange failed
     # is exactly as connected as they were before — which is the only safe reading of "GitHub would
@@ -167,6 +172,10 @@ class GithubInstallationsController < ApplicationController
   # Guarded on the last installation rather than run unconditionally: with an installation left,
   # the next picker render captures a real reading, and throwing away a still-redeemable grant in
   # the meantime would break registration for an agent holding a key that worked a moment ago.
+  #
+  # Reached by two doors, deliberately through this one helper: `destroy` above, and the callback's
+  # `reconcile` when GitHub's complete answer stops naming the user's last installation. The two
+  # reach the same state and must answer the reader identically.
   def forget_registration_grant_if_last_installation
     return if current_user.github_installations.exists?
 
@@ -195,6 +204,33 @@ class GithubInstallationsController < ApplicationController
     end
   end
 
+  # The absence half of `record`: bring this user's rows into agreement with the reading GitHub
+  # just gave. GitHub's list is its complete answer to what the user holds, so — ON A COMPLETE
+  # READING ONLY — a row it does not name is a connection the user no longer has, and keeping it
+  # would leave `/account` listing accounts they no longer reach and `github_installed?` answering
+  # true after everything was uninstalled, which is the state that hides the one control (the
+  # install button) that fixes it.
+  #
+  # On an INCOMPLETE reading — the walk hit the page ceiling, or a page this code could not read —
+  # it removes nothing: absences from a partial answer say nothing about what exists, and deleting
+  # on one could only ever destroy live connections on the strength of a guess. Recording stays
+  # additive in both cases; only this half is gated.
+  #
+  # The grant consequence is the Disconnect path's own invariant (`THE MIRRORED INVARIANT`, below):
+  # when the removal takes the user's LAST row, the same `forget_registration_grant_if_last_installation`
+  # runs, so reaching that state by uninstalling on GitHub answers the reader exactly as reaching
+  # it by pressing Disconnect does.
+  def reconcile(authorization)
+    return [] unless authorization.complete?
+
+    disconnected = GithubInstallation.forget_unreported(
+      user: current_user,
+      reported: authorization.installations.map(&:installation_id)
+    )
+    forget_registration_grant_if_last_installation if disconnected.any?
+    disconnected
+  end
+
   # Where the user was when they left. Carried out in GitHub's `state` and read back here, so it
   # arrives as user-controlled input and is admitted only as a path on this site.
   def destination = safe_return_path(params[:state], fallback: repositories_path)
@@ -208,10 +244,24 @@ class GithubInstallationsController < ApplicationController
   # organizations and GitHub reported one. An empty result is its own case: GitHub confirmed the
   # authorization and reported no installations, which is what cancelling out of the picker looks
   # like, and telling that user "repositories connected" would be telling them something false.
-  def connected_notice(recorded)
-    return "GitHub reported no SpecGuard installations for your account yet." if recorded.empty?
+  #
+  # Removals are named, deliberately: a person who uninstalled the App themselves needs no
+  # telling, but a person whose organization administrator removed them underneath does, and
+  # silence would leave a vanished account unexplained on the very page that just reconciled it
+  # away. "Disconnected" is the Disconnect button's own verb, so one sentence carries the same
+  # meaning from whichever door the row went.
+  def connected_notice(recorded, disconnected)
+    if recorded.empty? && disconnected.empty?
+      return "GitHub reported no SpecGuard installations for your account yet."
+    end
 
-    "Connected #{recorded.map(&:display_name).to_sentence}."
+    sentences = []
+    sentences << "Connected #{recorded.map(&:display_name).to_sentence}." if recorded.any?
+    if disconnected.any?
+      sentences << "Disconnected #{disconnected.map(&:display_name).to_sentence}, " \
+                   "which GitHub no longer reports for your account."
+    end
+    sentences.join(" ")
   end
 
   def connection_failed_alert

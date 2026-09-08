@@ -241,7 +241,9 @@ class User < ApplicationRecord
   # This is deliberately NOT an authorization check. It says a user reached SpecGuard through an
   # installation at some point, which is a fact about our own table; what may actually be
   # registered is decided by reading that installation live (`InstallationRepositories`), because
-  # nothing here is kept in step with GitHub and a row can outlive the installation it names.
+  # nothing here is kept in step with GitHub BETWEEN callbacks — a row can outlive the
+  # installation it names until the user's next pass through the App callback, where GitHub's own
+  # complete list removes it.
   def github_installed? = github_installations.any?
 
   def display_name = github_handle
