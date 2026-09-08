@@ -86,12 +86,13 @@ module Ingest
   #
   # == What is deliberately not here
   #
-  # Caching the embeddings — the rest of the *Cost* axis, the one lever named and never pulled:
-  # unowned since roadmap SPGD-72 completed, 2026-09-06. (The *Recall* half of the old deferral is
-  # in better shape: the directive is applied at {SpecIdentity.with_hnsw_planner_setup} on
-  # SPGD-375's measured grid, `ef_search` was measured on that grid and declined on cost, and only
-  # the residual refinement — re-running it past 10^5 rows or against real Voyage geometry — lacks
-  # an owner.) FOUR of that paragraph's
+  # Caching the embeddings — the rest of the *Cost* axis — is no longer open either: that half of
+  # the old deferral landed (SPGD-420 for the store, SPGD-428 for the reclaim that bounds what it
+  # costs to keep), so nothing of the *Cost* axis is unowned. What has lacked an owner since
+  # roadmap SPGD-72 completed, 2026-09-06 is only the *Recall* refinement — the decision itself is
+  # applied at {SpecIdentity.with_hnsw_planner_setup} on SPGD-375's measured grid, `ef_search` was
+  # measured on that same grid and declined on cost, and re-running it past 10^5 rows or against
+  # real Voyage geometry is the residual question nobody has claimed. FOUR of the old deferral's
   # items ARE now here. Three of them do not depend on which provider is installed: skipping the
   # re-embed when a run's text is byte-identical to a row this repository already holds
   # ({#identical_text}); batching the lookup that answers it, so asking it costs one lookup per page
@@ -109,8 +110,9 @@ module Ingest
   # than never. CACHING those vectors was the rest of
   # that axis and it is now here too — {EmbeddingCacheEntry} for the store (SPGD-420) and
   # {#reclaim_expired_cache} for the half that bounds what it costs to keep (SPGD-428), which is
-  # what makes it a store-and-invalidate answer rather than only the store. Also the ANN recall
-  # measurement {#nearest} hands over by name.
+  # what makes it a store-and-invalidate answer rather than only the store. The ANN recall
+  # question {#nearest} runs under is answered too — the seam issues `relaxed_order` on SPGD-375's
+  # measured grid — so the old deferral closes with only the refinement re-run left unowned.
   #
   # **Not** a `retry_on` / `discard_on` policy on {Ingest::IdentityResolutionJob}, and that omission
   # is now a finding rather than a deferral: `retry_on EmbeddingGenerator::Error` cannot fire.
