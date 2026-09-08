@@ -182,11 +182,19 @@ Rails.application.routes.draw do
       # matching the web `RepositoriesController#destroy` exactly, because the two are the same
       # code now and a member granted `repo.delete` may remove a repository in either surface.
       delete "repositories/:id", to: "user_repositories#destroy"
-      # MINTING AND REVOKING A REPOSITORY'S OWN `sgk_` KEYS — mirroring the web nesting
-      # (`resources :api_keys, only: %i[create destroy]` under `resources :repositories`), WITHOUT
-      # the member `regenerate`: in-place rotation is ruled out of the API surface, and its
-      # no-grace-window stop is the model's own documented behaviour rather than something to port.
-      # The `:repository_id` segment is what `RepositoryAuthorization#current_repository` reads.
+      # LISTING, MINTING, AND REVOKING A REPOSITORY'S OWN `sgk_` KEYS — mirroring the web nesting
+      # (`resources :api_keys, only: %i[create destroy]` under `resources :repositories`) for the
+      # two writes, WITHOUT the member `regenerate`: in-place rotation is ruled out of the API
+      # surface, and its no-grace-window stop is the model's own documented behaviour rather than
+      # something to port. The `:repository_id` segment is what
+      # `RepositoryAuthorization#current_repository` reads.
+      # The GET is the one verb the web nesting has no route for — the browser inventory is the
+      # repository page's key table, session- and CSRF-gated, which a token-holder cannot render —
+      # and it is what closes rotation over the API alone: a mint reveals its token once, a
+      # revoke names a row by id, and only this read serves the id (SPGD-993). It answers to the
+      # same `keys.manage` gate its two siblings call, so the listing reaches nobody the writes
+      # could not.
+      get "repositories/:repository_id/api_keys", to: "user_repository_api_keys#index"
       post "repositories/:repository_id/api_keys", to: "user_repository_api_keys#create"
       delete "repositories/:repository_id/api_keys/:id", to: "user_repository_api_keys#destroy"
       # ONE REPOSITORY, BY NAME, FOR THE PERSON HOLDING THE KEY — the reading `get "repositories"`
