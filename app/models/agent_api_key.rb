@@ -36,7 +36,9 @@ require "openssl"
 #
 # The bound is a MINT-TIME fact. Nothing re-derives it per request: narrowing the owner's own
 # membership afterwards does not narrow a key they already minted (revoking the key is the lever
-# for that, and it is deliberately owner-facing in `/account`). Two things DO reach past mint time,
+# for that, and the mint-time freeze needs a retirement lever reachable from every context that
+# holds the grant: the owner's own at `/account`, and a covering repository's `keys.manage`
+# wherever it is served). Two things DO reach past mint time,
 # both at the resolution site: `revoke!` retires the key, and an ARCHIVED owner's key resolves to
 # nothing — see `authenticate`, which carries the same offboarding cut `UserApiKey.authenticate`
 # does, because a key whose rights were fixed by somebody the offboarding control has already
