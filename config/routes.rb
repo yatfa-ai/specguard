@@ -216,6 +216,14 @@ Rails.application.routes.draw do
       # answers both verbs — zero new authorization, same noun, one controller.
       get "repositories/:repository_id/agent_keys", to: "user_repository_agent_keys#index"
       delete "repositories/:repository_id/agent_keys/:id", to: "user_repository_agent_keys#destroy"
+      # THE VERIFY HALF (SPGD-1023) — the still-presented triage the stamp writer already writes
+      # evidence for: which RETAINED revoked keys were last seen arriving at the API. Live-only
+      # stays the inventory's rule (SPGD-804); this read is a question about retained rows, the
+      # same reading the `sgk_` sibling's credential_health performs, behind the same
+      # `keys.manage` gate — the revoker is the one role that needs to know whether
+      # offboarding actually took. See `Api::V1::UserRepositoryAgentKeysController#presented_revoked`.
+      get "repositories/:repository_id/agent_keys/presented_revoked",
+          to: "user_repository_agent_keys#presented_revoked"
       # ONE REPOSITORY, BY NAME, FOR THE PERSON HOLDING THE KEY — the reading `get "repositories"`
       # above stops one grain short of. That one lists what a person may open and serves six identity
       # fields per row; this opens one and serves the whole overview.

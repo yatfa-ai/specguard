@@ -187,8 +187,11 @@ class Api::BaseController < ActionController::API
   # rather than deletes), the digest still names it, and this platform stamped the instant the
   # token was retired — so the refused presentation is a fact about a row this application owns,
   # the same criterion `credential_health` already states for reporting a 401 it did not observe.
-  # Stamping `last_refused_at` is what lets the repository page, /account and the agent API say
-  # "a key you revoked is still being presented" instead of "Not connected yet".
+  # Stamping `last_refused_at` is what lets a surface that reads it say "a key you revoked is
+  # still being presented" instead of "Not connected yet" — for a revoked `sgk_` key, the
+  # credential-health block on the repository overview (`RepositoryOverview#
+  # serialized_credential_health`); for a revoked `sga_` key, the owner's /account and the
+  # agent-key triage route (`GET repositories/:repository_id/agent_keys/presented_revoked`).
   #
   # COST, and the shape it is held to: at most ONE indexed read — the same unique digest index
   # resolution uses, with `revoked_at` checked on the row it returns — plus, on a hit, the stamp.
