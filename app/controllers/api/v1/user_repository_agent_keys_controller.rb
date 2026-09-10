@@ -30,9 +30,11 @@
 # comment states the same rule for the web face. No `regenerate!` either — the model has none,
 # deliberately: a lost agent token is recovered by minting another and revoking this one, and as
 # of this controller that arc finally works over the API alone for the third credential kind,
-# exactly as SPGD-993 made it work for the second. The row shape is web-panel parity: no
-# `last_refused_at` (SPGD-991 added that field for the /account surface; if the API row wants
-# it, that is a follow-up, not a rider on this slice).
+# exactly as SPGD-993 made it work for the second. The inventory's row shape is web-panel
+# parity; the one deliberate extension beyond it is `presented_revoked` (SPGD-1023) — the
+# verify half this header's own fence anticipated as "a follow-up if the API wants it", and
+# the API does: the still-presented triage reads the retained revoked rows `last_refused_at`
+# is stamped on, which no live-only listing could serve.
 class Api::V1::UserRepositoryAgentKeysController < Api::BaseController
   # WHO MAY LIST AND REVOKE: a person over their `sgu_` key, or an `sga_` agent credential
   # holding `keys.manage` on a repository in its own set — both answered by the same
@@ -84,6 +86,49 @@ class Api::V1::UserRepositoryAgentKeysController < Api::BaseController
     render json: revoked_body(agent_api_key)
   end
 
+  # THE VERIFY HALF OF THE OFFBOARDING ARC (SPGD-1023) — the still-presented triage over the
+  # API. `#index` and `#destroy` are the write half of the arc: they answer "what is live"
+  # and "cut this one". Neither can answer the question a revoker is left with after the cut —
+  # "is the dead token still arriving?" — because both read LIVE rows only, and the stamp
+  # could not ride a live row anyway: `last_refused_at` is stamped by the 401 failure path
+  # (`Api::BaseController#attribute_refused_revocation`) on RETAINED revoked rows, and the
+  # model pins live-with-stamp as structurally unreachable. The evidence has been written
+  # since SPGD-991; this action is the API surface that serves it, behind the same
+  # `current_repository(:keys_manage)` gate the other two actions answer to — the revoker is
+  # the one role that needs to know whether offboarding actually took, and in the offboarding
+  # arc (a departed member's key) is precisely NOT the key's owner, so /account cannot answer
+  # them.
+  #
+  # The read mirrors `RepositoryOverview#serialized_credential_health`'s construction for the
+  # `sgk_` sibling, including the seam the split is read through: the retained rows a `WHERE`
+  # would have filtered out are loaded ONCE — `revoked.covering(repository).eager_load(:user)`,
+  # every row REVOKED, so the partition's stranded half (a rotation question AgentApiKey has no
+  # concept of) is never reached — and the presented side comes from `ApiKeyPartition`, the one
+  # place the collection split is spelled (`spec/models/api_key_partition_spec.rb` holds that
+  # repo-wide property). Filtering these rows by hand here would be a second spelling of the
+  # split, free to drift from the one /account reads, and this block exists to stop the API and
+  # /account disagreeing about a key.
+  #
+  # THE NEGATIVE IS SERVED, NOT OMITTED — the sibling block's standing rule: an empty result
+  # renders `{"agent_keys": []}` with 200, so "no revoked key is still being presented" is an
+  # ANSWER, distinguishable from "the API does not track that". The honesty clause travels
+  # with the row: `last_refused_at` is the LAST observed presentation — a recency, never a
+  # present-tense claim about a client presenting it now. Name, hint and blast radius travel
+  # so the remedy (update whichever secret store still holds it) is actionable; the token
+  # itself never does — the plaintext existed for exactly one response at mint time and
+  # nothing persisted it.
+  def presented_revoked
+    repository = current_repository(:keys_manage)
+    partition = ApiKeyPartition.for(AgentApiKey.revoked.covering(repository)
+                                                  .eager_load(:user).order(:id))
+
+    render json: {
+      agent_keys: partition.presented_revoked_rows.map do |agent_api_key|
+        serialize_presented_revoked(agent_api_key)
+      end
+    }
+  end
+
   private
 
   # One inventory row — the web panel's row, served as JSON: name, owner, hint, the stored
@@ -131,5 +176,27 @@ class Api::V1::UserRepositoryAgentKeysController < Api::BaseController
     deleted = agent_api_key.repository_ids.size - names.size
     body[:agent_key][:deleted_repository_count] = deleted if deleted.positive?
     body
+  end
+
+  # One presented-revoked triage row — the remedy story, seven fields exactly: who held it
+  # (`owner`, null-safe the way the panel's cell is — "Unknown" for a dangling id, a defensive
+  # rendering, not a state the application writes), which hint to hunt for in the secret store
+  # (`token_hint`, NEVER the token), how wide the blast radius is (`repository_count`, the
+  # STORED set's size — read off the array the grant froze at mint time, the same figure the
+  # revoke response discloses), when it died (`revoked_at`) and when it was last seen arriving
+  # (`last_refused_at`). Both stamps are present by construction of the partition side the
+  # action serves, so neither renders with a `&.` — the sibling block's own spelling. With
+  # the action's `eager_load(:user)` every read here is off the one loaded join: no query per
+  # row, and the whole response is ONE statement against `agent_api_keys`.
+  def serialize_presented_revoked(agent_api_key)
+    {
+      id: agent_api_key.id,
+      name: agent_api_key.name,
+      owner: agent_api_key.user&.display_name || "Unknown",
+      token_hint: agent_api_key.token_hint,
+      repository_count: agent_api_key.repository_ids.size,
+      revoked_at: agent_api_key.revoked_at.iso8601,
+      last_refused_at: agent_api_key.last_refused_at.iso8601
+    }
   end
 end

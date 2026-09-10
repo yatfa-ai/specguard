@@ -32,6 +32,7 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
 
   def index_path(repo = repository) = "/api/v1/repositories/#{repo.id}/agent_keys"
   def revoke_path(key, repo = repository) = "/api/v1/repositories/#{repo.id}/agent_keys/#{key.id}"
+  def triage_path(repo = repository) = "/api/v1/repositories/#{repo.id}/agent_keys/presented_revoked"
 
   # The granted principal the offboarding arc is about: an `sga_` key whose stored set covers
   # `repository` and whose permission set carries `keys.manage` there. `member` is the same
@@ -353,21 +354,261 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
   end
 
   describe "the routes (AC7)" do
-    # The namespace gains exactly the two new routes; the sgk_ sibling, the web resource and
-    # /account are untouched — asserted by recognition here and by the specs that already pin
-    # those surfaces' behaviour.
-    # @intent: { entity: "routes", action: "mount the pair", behavior: "the two new api routes recognize to user_repository_agent_keys and the sgk_ inventory route still recognizes to user_repository_api_keys", layer: "request" }
-    it "recognizes the two new routes and leaves the sgk_ route pointing at its own controller" do
+    # The namespace gains the landed pair plus the SPGD-1023 triage route; the sgk_ sibling,
+    # the web resource and /account are untouched — asserted by recognition here and by the
+    # specs that already pin those surfaces' behaviour.
+    # @intent: { entity: "routes", action: "mount the agent-key routes", behavior: "the agent-key api routes recognize to user_repository_agent_keys and the sgk_ inventory route still recognizes to user_repository_api_keys", layer: "request" }
+    it "recognizes the agent-key routes and leaves the sgk_ route pointing at its own controller" do
       expect(Rails.application.routes.recognize_path(index_path, method: :get))
         .to include(controller: "api/v1/user_repository_agent_keys", action: "index")
       expect(Rails.application.routes.recognize_path(revoke_path(agent_key), method: :delete))
         .to include(controller: "api/v1/user_repository_agent_keys", action: "destroy")
+      expect(
+        Rails.application.routes.recognize_path(
+          "/api/v1/repositories/#{repository.id}/agent_keys/presented_revoked", method: :get
+        )
+      ).to include(controller: "api/v1/user_repository_agent_keys", action: "presented_revoked")
 
       expect(
         Rails.application.routes.recognize_path(
           "/api/v1/repositories/#{repository.id}/api_keys", method: :get
         )
       ).to include(controller: "api/v1/user_repository_api_keys", action: "index")
+    end
+  end
+
+  # SPGD-1023 — the verify half. The inventory above reads LIVE rows; the stamp
+  # `attribute_refused_revocation` writes can only land on a RETAINED revoked row, so the
+  # question "is the dead token still arriving?" needs its own read — behind the same gate,
+  # filtered by the model's own predicate, the negative served like the `sgk_` sibling's
+  # credential_health serves its own.
+  describe "GET /api/v1/repositories/:repository_id/agent_keys/presented_revoked" do
+    # The still-presented key, produced through the REAL path end to end: revoked, its dead
+    # token presented and refused (which stamps `last_refused_at`), so every example below
+    # asserts against a row the production path actually writes — the sibling
+    # credential-health spec's own rule about hand-set columns.
+    let!(:dead_key) do
+      create_agent_api_key(user: member, repositories: [repository],
+                           permissions: [RepositoryMembership::KEYS_MANAGE], name: "Old automation")
+    end
+    let!(:dead_token) { dead_key.raw_token }
+
+    before do
+      dead_key.revoke!
+      get triage_path, headers: bearer(dead_token)
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    # AC1 + AC8 — the row exists if and only if a revoked covering key carries a stamp, its
+    # field set is exactly the seven served fields, and the token itself is not among them —
+    # under any spelling, and nowhere in the body.
+    # @intent: { entity: "AgentApiKey", action: "serve the still-presented triage", behavior: "an sga_ key holding keys.manage reads a revoked covering key that was presented again, with exactly the seven triage fields and never the token", layer: "request" }
+    it "serves the still-presented revoked key with the seven triage fields to an sga_ key holding keys.manage" do
+      get triage_path, headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      rows = response.parsed_body["agent_keys"]
+      expect(rows.map { |r| r["id"] }).to eq([dead_key.id])
+
+      row = rows.first
+      expect(row.keys).to contain_exactly("id", "name", "owner", "token_hint",
+                                          "repository_count", "revoked_at", "last_refused_at")
+      expect(row["name"]).to eq("Old automation")
+      expect(row["owner"]).to eq("hubot")
+      expect(row["token_hint"]).to eq(dead_key.reload.token_hint)
+      expect(row["repository_count"]).to eq(1)
+      expect(row["revoked_at"]).to eq(dead_key.reload.revoked_at.iso8601)
+      expect(row["last_refused_at"]).to eq(dead_key.reload.last_refused_at.iso8601)
+
+      expect(row.keys).not_to include("token")
+      expect(JSON.parse(response.body)).not_to include("token")
+      expect(response.body).not_to include(dead_token)
+    end
+
+    # AC2 — the whole chain through the landed write half, on a key the `before` block has not
+    # touched: revoke over the API, the dead token arrives and is refused (stamped), and the
+    # triage now names it with both stamps.
+    # @intent: { entity: "AgentApiKey", action: "close the offboarding arc", behavior: "a key revoked over the API and presented again appears on the triage with its revocation and last refusal", layer: "request" }
+    it "lists a key revoked over the API once its dead token is presented again" do
+      arc = create_agent_api_key(user: member, repositories: [repository],
+                                 permissions: [RepositoryMembership::KEYS_MANAGE], name: "Cron")
+      arc_token = arc.raw_token
+
+      delete revoke_path(arc), headers: bearer(agent_key.raw_token)
+      expect(response).to have_http_status(:ok)
+      expect(arc.reload.last_refused_at).to be_nil
+
+      get triage_path, headers: bearer(arc_token)
+      expect(response).to have_http_status(:unauthorized)
+      expect(arc.reload.last_refused_at).to be_present
+
+      get triage_path, headers: bearer(member_key.raw_token)
+      expect(response).to have_http_status(:ok)
+      rows = response.parsed_body["agent_keys"]
+      expect(rows.map { |r| r["id"] }).to contain_exactly(dead_key.id, arc.id)
+
+      row = rows.find { |r| r["id"] == arc.id }
+      expect(row["revoked_at"]).to eq(arc.reload.revoked_at.iso8601)
+      expect(row["last_refused_at"]).to eq(arc.reload.last_refused_at.iso8601)
+    end
+
+    # AC6 — one gate serves both credential classes, so the two views of one inventory
+    # cannot disagree.
+    # @intent: { entity: "AgentApiKey", action: "serve both credentials identically", behavior: "an sgu_ key of a keys.manage holder reads a byte-identical triage to the sga_ key", layer: "request" }
+    it "serves the identical triage to an sgu_ key of a keys.manage holder" do
+      get triage_path, headers: bearer(agent_key.raw_token)
+      agent_view = response.parsed_body
+
+      get triage_path, headers: bearer(member_key.raw_token)
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body).to eq(agent_view)
+    end
+
+    # AC3 — the sibling pin (repository_credential_health_spec.rb:168): a revoked key that was
+    # never presented again is not a finding, and nothing is synthesized for it.
+    # @intent: { entity: "AgentApiKey", action: "not invent a presentation", behavior: "a revoked covering key with no refused attempt adds nothing to the triage — the finding requires an observed refused presentation", layer: "request" }
+    it "adds nothing for a key revoked and never presented again" do
+      quiet = create_agent_api_key(user: owner, repositories: [repository],
+                                   permissions: [RepositoryMembership::KEYS_MANAGE], name: "Quiet")
+      quiet.revoke!
+
+      get triage_path, headers: bearer(member_key.raw_token)
+
+      expect(response.parsed_body["agent_keys"].map { |r| r["id"] }).to eq([dead_key.id])
+    end
+
+    # `order(:id)` — the response is stable between calls, the same spelling the inventory
+    # uses, pinned with two served rows.
+    # @intent: { entity: "AgentApiKey", action: "serve a stable order", behavior: "two still-presented keys list in id order on every call", layer: "request" }
+    it "orders the rows by id so the response is stable between calls" do
+      second = create_agent_api_key(user: owner, repositories: [repository],
+                                    permissions: [RepositoryMembership::KEYS_MANAGE], name: "Second dead")
+      second.revoke!
+      get triage_path, headers: bearer(second.raw_token)
+      expect(response).to have_http_status(:unauthorized)
+
+      get triage_path, headers: bearer(member_key.raw_token)
+      ids = response.parsed_body["agent_keys"].map { |r| r["id"] }
+
+      expect(ids).to eq(ids.sort)
+      expect(ids).to contain_exactly(dead_key.id, second.id)
+    end
+
+    # The null-safe owner fork the inventory's serializer carries, pinned on the serializer
+    # directly the same way — no writable row can reach the fork, so the rendering is stated
+    # against the method: nil in, "Unknown" out, no exception.
+    # @intent: { entity: "AgentApiKey", action: "render a missing owner", behavior: "a triage row with no resolvable owner serializes owner as Unknown rather than raising", layer: "request" }
+    it "renders an unresolvable owner as Unknown" do
+      orphan = AgentApiKey.new(name: "Orphan", user: nil, repository_ids: [repository.id],
+                               permissions: [], token_digest: "digest", revoked_at: Time.current,
+                               last_refused_at: Time.current, created_at: Time.current)
+
+      serialized = Api::V1::UserRepositoryAgentKeysController.new
+                           .send(:serialize_presented_revoked, orphan)
+
+      expect(serialized[:owner]).to eq("Unknown")
+    end
+
+    # THE GATE, refusals asserted on this route rather than inherited from the sibling pair —
+    # the same principal matrix the inventory walks, with a row present to serve, so every
+    # refusal below is about authorization and not about an empty list.
+    describe "the gate" do
+      # @intent: { entity: "credential seam", action: "refuse a repository key at the triage", behavior: "an sgk_ repository key at the presented-revoked triage answers 401 at the credential layer", layer: "request" }
+      it "answers 401 to a repository's own sgk_ key" do
+        sgk_token = repository.api_keys.create!.raw_token
+
+        get triage_path, headers: bearer(sgk_token)
+
+        expect(response).to have_http_status(:unauthorized)
+      end
+
+      # @intent: { entity: "AgentApiKey", action: "refuse an unpermitted read", behavior: "an in-set sga_ key without keys.manage answers 403 with the api error JSON", layer: "request" }
+      it "answers 403 to an in-set sga_ key without keys.manage" do
+        read_only = create_agent_api_key(user: owner, repositories: [repository], permissions: [])
+
+        get triage_path, headers: bearer(read_only.raw_token)
+
+        expect(response).to have_http_status(:forbidden)
+        expect(response.parsed_body).to include("error" => "forbidden")
+        expect(response.media_type).to eq("application/json")
+      end
+
+      # @intent: { entity: "user key", action: "refuse a view member", behavior: "an sgu_ holder with only view answers 403", layer: "request" }
+      it "answers 403 to an sgu_ holder with only view" do
+        create_membership(repository: repository, user: stranger, permissions: %w[view])
+
+        get triage_path, headers: bearer(stranger_key.raw_token)
+
+        expect(response).to have_http_status(:forbidden)
+        expect(response.parsed_body).to include("error" => "forbidden")
+      end
+
+      # The read boundary: out-of-set reads as out of existence, on the nil-is-404 fork every
+      # repository-scoped read takes — for a non-member, an unknown id, and an `sga_`
+      # credential whose stored set excludes the repository, keys.manage held or not.
+      # @intent: { entity: "AgentApiKey", action: "hide the out-of-set triage", behavior: "the triage answers 404 to a non-member sgu_ holder, an unknown repository id, and an out-of-set sga_ key even holding keys.manage", layer: "request" }
+      it "answers 404 to a non-member, an unknown repository id, and an out-of-set sga_ key" do
+        get triage_path, headers: bearer(stranger_key.raw_token)
+        expect(response).to have_http_status(:not_found)
+        expect(response.parsed_body).to include("error" => "not_found")
+
+        get triage_path(Repository.new(id: 999_999)), headers: bearer(owner_key.raw_token)
+        expect(response).to have_http_status(:not_found)
+
+        elsewhere = create_agent_api_key(user: owner, repositories: [repository],
+                                         permissions: [RepositoryMembership::KEYS_MANAGE])
+        other = create_repository(user: owner, github_full_name: "acme/other-service")
+        get triage_path(other), headers: bearer(elsewhere.raw_token)
+        expect(response).to have_http_status(:not_found)
+      end
+    end
+
+    # AC7 — the N+1 guard, in the per-table budget discipline the inventory pins: under an
+    # `sgu_` credential (whose own authentication statement names `user_api_keys`, matching
+    # neither pattern below) the whole triage is ONE statement against `agent_api_keys` —
+    # `eager_load(:user)` paying the owner join inside it — no matter how many rows serve.
+    # @intent: { entity: "AgentApiKey", action: "read the triage cheaply", behavior: "the triage costs one agent_api_keys statement for the whole response, the owner join inside it, never one query per row", layer: "request" }
+    it "pays one statement for the whole triage, the owner join inside it" do
+      second = create_agent_api_key(user: owner, repositories: [repository],
+                                    permissions: [RepositoryMembership::KEYS_MANAGE], name: "Second dead")
+      second.revoke!
+      get triage_path, headers: bearer(second.raw_token)
+      expect(response).to have_http_status(:unauthorized)
+
+      statements = queries_against(/agent_api_keys/) do
+        get triage_path, headers: bearer(member_key.raw_token)
+      end
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body["agent_keys"].size).to eq(2)
+      expect(statements.grep(/FROM "agent_api_keys"/).size).to eq(1)
+    end
+  end
+
+  # THE NEGATIVE, served rather than omitted (the sibling pin :46): "no revoked key is still
+  # being presented" is an answer, and it covers both ways of arriving at it — revocations
+  # with no refusal and no revocations at all. Deliberately a SIBLING example group rather
+  # than a nested one: the still-presented `dead_key` above is the positive fixture, and an
+  # inherited `before` would contradict the very emptiness these pin.
+  describe "GET /api/v1/repositories/:repository_id/agent_keys/presented_revoked — the negative" do
+    # AC4 — revoked but never presented.
+    # @intent: { entity: "AgentApiKey", action: "serve the empty negative", behavior: "a repository whose revoked keys were never presented again gets an empty list with 200", layer: "request" }
+    it "serves an empty list when a revoked key was never presented again" do
+      agent_key.revoke!
+
+      get triage_path, headers: bearer(member_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body).to eq("agent_keys" => [])
+    end
+
+    # AC4 — no revocations at all.
+    # @intent: { entity: "AgentApiKey", action: "serve the empty negative", behavior: "a repository with no revoked keys gets an empty list with 200 rather than an omitted answer", layer: "request" }
+    it "serves an empty list when there are no revoked keys at all" do
+      get triage_path, headers: bearer(member_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body).to eq("agent_keys" => [])
     end
   end
 end
