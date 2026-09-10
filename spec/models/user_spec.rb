@@ -33,6 +33,56 @@ RSpec.describe User do
     expect(described_class.count).to eq(1)
   end
 
+  # One GitHub identity is one person — `github_uid` is the stable key every session, repository,
+  # membership and minted key ultimately hangs off — and the rule is enforced TWICE while pinned
+  # NOWHERE until this block: the `validates :github_uid, uniqueness: true` above, and the unique
+  # index on `github_uid` in the founding migration. Neither of the two examples above that looks
+  # like coverage reaches either half: both drive the SEQUENTIAL path, where `find_or_initialize_by`
+  # finds the row and no INSERT is ever attempted, so neither can observe the validation or the
+  # index. (The request-level twin, `spec/requests/sessions_spec.rb`, has the same shape.)
+  # `github_handle` carries no such constraint on purpose — see sessions_spec.rb for the deliberate
+  # contrast; this block pins the uid only.
+  describe "one GitHub identity is one person" do
+    # The APP half. The write goes through `create!`, so `validates :github_uid, uniqueness: true`
+    # refuses before an INSERT is ever issued and Postgres is never consulted.
+    # @intent: { entity: "User", action: "enforce one person per GitHub identity", behavior: "a second user for a github_uid already held is refused by the Rails uniqueness validation before any insert is issued", layer: "unit" }
+    it "permits only one user per GitHub uid — the Rails validation refuses the second" do
+      create_user(github_uid: "1001", github_handle: "octocat")
+
+      expect {
+        described_class.create!(github_uid: "1001", github_handle: "someone-else")
+      }.to raise_error(ActiveRecord::RecordInvalid)
+    end
+
+    # The DATABASE half, and the half that actually holds the line. `from_github_omniauth` is a
+    # read-then-write with no rescue: two concurrent first sign-ins for the same uid both miss the
+    # SELECT, both pass the validation, and both INSERT. `validate: false` is what the validation
+    # does on its own in exactly that race — it cannot see the winning row yet — so the INSERT
+    # reaches Postgres, and the index, not the validation, is what refuses the row. Drop
+    # `unique: true` from the migration and this example dies: nothing else in the stack objects.
+    # @intent: { entity: "User", action: "enforce one person per GitHub identity", behavior: "saving a second user with the same github_uid with validation skipped still raises RecordNotUnique because the unique index refuses the row", layer: "unit" }
+    it "enforces one row per GitHub uid in the database" do
+      create_user(github_uid: "1001", github_handle: "octocat")
+
+      expect {
+        described_class.new(github_uid: "1001", github_handle: "impostor").save!(validate: false)
+      }.to raise_error(ActiveRecord::RecordNotUnique)
+    end
+
+    # The index itself, asserted directly rather than only through a write — the same idiom the
+    # grant spec pins its own with (`github_registration_grant_spec.rb`). The write above proves the
+    # index FIRES; this one says it EXISTS and is unique, so deleting `unique: true` from the
+    # migration cannot sail through a green suite.
+    # @intent: { entity: "User", action: "enforce one person per GitHub identity", behavior: "the unique index on github_uid exists in the schema with github_uid as its only column, which is what refuses duplicates under concurrency", layer: "unit" }
+    it "is the unique index on github_uid that enforces that rule under concurrency" do
+      index = ActiveRecord::Base.connection.indexes("users")
+                                .find { |candidate| candidate.columns == ["github_uid"] }
+
+      expect(index).to be_present
+      expect(index.unique).to be(true)
+    end
+  end
+
   # The whole reason `created_api_keys` is `dependent: :nullify` and not `dependent: :destroy` like
   # every other association in this codebase. A key belongs to the *repository*; the person who
   # minted it is an attribution, not an owner. Deleting a departed collaborator must never revoke
