@@ -737,6 +737,14 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
     def agent_key_confirm(name) = agent_key_row(name).find("form")["data-turbo-confirm"]
 
+    # SPGD-1054's still-presented section, scoped to its own id for the same reason the finders
+    # above are scoped: the page is full of prose, and a bare whole-document match proves
+    # nothing about WHERE the fact rendered. The section is deliberately a LIST and not a second
+    # table — `find` raises on an ambiguous match rather than returning the first element, so a
+    # second <table> in this panel would break every `#agent-keys table` lookup above the moment
+    # any fixture rendered the section. The live table keeps the panel's only <table>.
+    def revoked_still_presented_section = Capybara.string(response.body).find("#agent-keys-revoked")
+
     # The grant's verb half renders as the stored set, "read only" for the minimal one — the same
     # rendering /account gives the same column, so one grant reads the same on both surfaces.
     # @intent: {"entity": "AgentApiKey", "action": "list covering keys", "behavior": "the panel lists every live agent key whose set covers the repository with owner, hint, set size, permission set and minted age, and no key that does not cover it or is revoked", "layer": "request"}
@@ -774,13 +782,16 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(agent_keys_table).to have_no_text("Retired")
     end
 
-    # AC2 and AC3 as one pin, because they are one discipline at two gates: exactly ONE SELECT
-    # against `agent_api_keys` for a keys.manage viewer — `eager_load` keeps the owner ride-along
-    # inside that same statement — and ZERO for a viewer without the gate, who is not told there
-    # is such a panel. The String spelling of `queries_against` cannot be used here: `"api_keys"`
-    # is a substring of `"agent_api_keys"`, so both counts are matched on the FROM clause.
-    # @intent: {"entity": "AgentApiKey", "action": "gate and bound the listing read", "behavior": "a keys.manage viewer's page issues exactly one agent_api_keys SELECT and still exactly one api_keys SELECT while a view-only member's page issues neither and renders no panel", "layer": "request"}
-    it "costs one agent-key SELECT behind the gate, and none for a viewer without it" do
+    # AC2 and AC3 as one pin, because they are one discipline at two gates: for a keys.manage
+    # viewer, TWO SELECTs against `agent_api_keys` — the live listing (with `eager_load`
+    # keeping the owner ride-along inside that statement) and, since SPGD-1054, the
+    # still-presented triage beside it, whose load is revoked-only and reads through the same
+    # partition the API endpoint serves. A viewer without the gate gets ZERO of either, and is
+    # not told there is such a panel. The String spelling of `queries_against` cannot be used
+    # here: `"api_keys"` is a substring of `"agent_api_keys"`, so both counts are matched on
+    # the FROM clause.
+    # @intent: {"entity": "AgentApiKey", "action": "gate and bound the listing read", "behavior": "a keys.manage viewer's page issues exactly two agent_api_keys SELECTs and still exactly one api_keys SELECT while a view-only member's page issues neither and renders no panel", "layer": "request"}
+    it "costs two agent-key SELECTs behind the gate, and none for a viewer without it" do
       repository = create_repository(user: @user)
       create_agent_api_key(user: @user, repositories: [repository], name: "Listed")
 
@@ -789,7 +800,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       owner_key_reads = queries_against(/FROM "api_keys"/) { get repository_path(repository) }.count
 
       expect(response.body).to include("Listed") # the read is non-vacuous, not a count of nothing
-      expect(owner_agent_reads).to eq(1)
+      expect(owner_agent_reads).to eq(2)
       expect(owner_key_reads).to eq(1)
 
       member = create_user(github_uid: "7203", github_handle: "viewer")
@@ -802,6 +813,84 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(member_agent_reads).to eq(0)
       expect(response.body).not_to include("Listed")
       expect(response.body).not_to include("agent-keys")
+    end
+
+    # SPGD-1054 — the verify half, repository-side. The API endpoint SPGD-1023 shipped answers
+    # "is the dead token still arriving?" to a `keys.manage` TOKEN holder; /account answers it
+    # to the key's MINTER. This page hosts the Revoke lever and the indicator beside it ranks
+    # the revoked-still-presented state above everything, yet for `sga_` keys it was the one
+    # credential kind whose answer never reached the panel. These examples pin the section the
+    # panel now carries, read through the same partition construction the API endpoint serves.
+    #
+    # The stamp is applied through the model's own writer (`touch_last_refused!`) rather than by
+    # replaying a real 401: the request-level fact that the failure path stamps the row is
+    # /account's and the API's suite to pin (and SPGD-991's). What is new HERE is the page's
+    # reading of that stored fact, so the fixture states the stored fact directly.
+    #
+    # @intent: {"entity": "AgentApiKey", "action": "render still-presented section", "behavior": "a keys.manage viewer's panel shows a revoked key whose token was refused since in a still-presented section naming owner, hint, set size, revoked age and last-presented age, while the key stays out of the live table", "layer": "request"}
+    it "shows a revoked key the platform has seen since in a still-presented section" do
+      repository = create_repository(user: @user)
+      key = create_agent_api_key(user: @user, repositories: [repository], name: "Leaked")
+      key.revoke!
+      key.touch_last_refused!
+      # A live key beside the revoked one, so the live table renders and the "not in the live
+      # listing" assertion below is a real absence and not an empty panel.
+      create_agent_api_key(user: @user, repositories: [repository], name: "Healthy")
+
+      get repository_path(repository)
+
+      expect(revoked_still_presented_section).to have_text("Leaked")
+        .and have_text("octocat")
+        .and have_text(key.token_hint)
+        .and have_text("1 repository")
+        .and have_text("revoked")
+        .and have_text("last presented")
+        .and have_text("ago")
+      # The revoked row went to the section, never the live listing — SPGD-804's rule is
+      # untouched by this slice.
+      expect(agent_keys_table).to have_no_text("Leaked")
+      # The honesty clause travels with the section, so the age reads as a recency and not a
+      # claim about the present tense.
+      expect(revoked_still_presented_section).to have_text("recency, never a claim")
+    end
+
+    # The honest bound, stated the way /account's own example states it: a key revoked and never
+    # presented again is not a finding, and synthesizing one is what the indicator's state-1 rule
+    # forbids. Nothing renders — not an empty section, not a "never" row.
+    # @intent: {"entity": "AgentApiKey", "action": "not synthesize a presentation", "behavior": "a revoked agent key whose token was never refused again renders no still-presented section at all", "layer": "request"}
+    it "renders no still-presented section for a revoked key never presented again" do
+      repository = create_repository(user: @user)
+      create_agent_api_key(user: @user, repositories: [repository], name: "Quietly retired").revoke!
+      # The live table must be on the page for the "stays out of the live listing" assertion
+      # below to mean anything.
+      create_agent_api_key(user: @user, repositories: [repository], name: "Healthy")
+
+      get repository_path(repository)
+
+      expect(response.body).not_to include("agent-keys-revoked")
+      expect(response.body).not_to match(/still presented/i)
+      # The key itself stays out of the live listing — this fixture is not about SPGD-804.
+      expect(agent_keys_table).to have_no_text("Quietly retired")
+    end
+
+    # AC2's third leg: the section inherits the panel's `manage_keys` gate because it sits inside
+    # it — a viewer without `keys.manage` sees neither panel nor section, exactly as before this
+    # slice, whatever the keys' state.
+    # @intent: {"entity": "AgentApiKey", "action": "gate still-presented section", "behavior": "a viewer without keys.manage sees neither the agent-keys panel nor the still-presented section even when a presented revoked key exists", "layer": "request"}
+    it "shows neither the panel nor the still-presented section to a viewer without keys.manage" do
+      owner = create_user(github_uid: "7210", github_handle: "section-owner")
+      repository = create_repository(user: owner)
+      key = create_agent_api_key(user: owner, repositories: [repository], name: "Leaked")
+      key.revoke!
+      key.touch_last_refused!
+      viewer = create_user(github_uid: "7211", github_handle: "plain-viewer")
+      create_membership(repository: repository, user: viewer)
+
+      sign_in_via_github(uid: "7211")
+      get repository_path(repository)
+
+      expect(response.body).not_to include("agent-keys")
+      expect(response.body).not_to include("Leaked")
     end
 
     # SPGD-124's marker, carried to the third credential — and its RULE with it: "does this
@@ -2425,7 +2514,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # spec/requests/repository_unannotated_directories_spec.rb, which also carries the panel's own
       # N+1 guard: the equality across two suite sizes that an absolute count here cannot tell from
       # an ordinary widening.
-      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 23 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
+      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 24 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -2458,10 +2547,16 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # agent keys, exactly as the `sgk_` load above is priced. The name map for the revoke
         # confirmations is bought only when a row exists, so this fixture pays nothing for it.
         #
+        # +1 from SPGD-1054: the agent credential's still-presented triage, in the SAME gate as
+        # the listing read above — ONE revoked-only statement against `agent_api_keys`
+        # (`revoked.covering`, read through `ApiKeyPartition`), so the page's `agent_api_keys`
+        # count is TWO statements total, and this fixture prices the second even with no agent
+        # keys at all, exactly as it prices the first.
+        #
         # Rebaselined by two rather than carved out, because this is an ABSOLUTE page budget:
         # hiding a real new query behind a filter would be the regression this count exists to
         # catch.
-        expect(count_all_queries { get repository_path(repository) }).to eq(23)
+        expect(count_all_queries { get repository_path(repository) }).to eq(24)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

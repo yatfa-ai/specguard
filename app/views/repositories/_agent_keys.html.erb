@@ -101,5 +101,59 @@
                 description: "When an owner mints an agent key whose set includes this repository, it is listed here."
               ) %>
         <% end %>
+
+        <% if @presented_revoked_agent_keys.any? %>
+          <%# THE VERIFY HALF OF THE OFFBOARDING ARC, REPOSITORY-SIDE (SPGD-1054) — the same
+              answer SPGD-1023 serves over the API, rendered inside the panel that holds the
+              Revoke lever, so the web revoker who is not the key's minter (the common case)
+              does not have to curl for the fact this page's indicator already declares the
+              worst state a repository can be in. The rows are the still-presented side of the
+              revoked agent keys, read through `ApiKeyPartition` in the dashboard behind the
+              SAME gate as the live table above — this section sits inside the `manage_keys`
+              branch, so it renders for exactly the viewers who may act on it, and zero new
+              authorization exists.
+
+              Rendered only when rows exist: a key revoked and never presented again produces
+              no row, nothing synthesized — the indicator's honest-bound rule (state 1) and
+              the API endpoint's, shared.
+
+              Deliberately a LIST and not a second table: the request specs read the live
+              table through `#agent-keys table`, and a second <table> in the panel would make
+              that finder ambiguous — the live listing is the surface these specs pin, so it
+              keeps the panel's only table.
+
+              The caption carries the honesty clause the stamp's own epistemics demand
+              (AgentApiKey#revoked_and_still_presented?): `last_refused_at` is the LAST
+              observed presentation — a recency, never present tense. The "last presented N
+              ago" cell is /account's rendering of the same column, so one fact reads the same
+              on both surfaces. %>
+          <div id="agent-keys-revoked" class="mt-6 border-t border-app-panel-border pt-4">
+            <p id="agent-keys-revoked-caption" class="mb-3 text-sm text-app-content-secondary">
+              <span class="font-medium text-app-content">Revoked and still presented.</span>
+              Each key below was revoked and its token has arrived at the API since, where it
+              was refused. The presented age is the last time the platform saw the token — a
+              recency, never a claim that something is presenting it now. The token lives in
+              the client's secret store; the fix is updating it.
+            </p>
+            <ul class="space-y-2">
+              <% @presented_revoked_agent_keys.each do |agent_api_key| %>
+                <li class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-md border border-app-panel-border px-3 py-2 text-sm">
+                  <span class="font-medium text-app-content"><%= agent_api_key.name %></span>
+                  <span class="text-app-content-secondary"><%= agent_api_key.user&.display_name || "Unknown" %></span>
+                  <span class="font-mono text-xs text-app-content-secondary"><%= agent_api_key.token_hint %></span>
+                  <span class="text-app-content-secondary tabular-nums">
+                    covers <%= pluralize(agent_api_key.repository_ids.size, "repository") %>
+                  </span>
+                  <span class="text-app-content-secondary tabular-nums">
+                    revoked <%= time_ago_in_words(agent_api_key.revoked_at) %> ago
+                  </span>
+                  <span class="text-app-content-secondary tabular-nums">
+                    last presented <%= time_ago_in_words(agent_api_key.last_refused_at) %> ago
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+          </div>
+        <% end %>
       <% end %>
     <% end %>

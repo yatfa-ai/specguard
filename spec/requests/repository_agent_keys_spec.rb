@@ -54,9 +54,15 @@ RSpec.describe "Revoking an agent key from the repository page", type: :request 
     expect(response).to have_http_status(:unauthorized)
 
     # LIVE-only listing (SPGD-804's rule on this table too): the retired row must not present as
-    # a live credential on the very page that retired it.
+    # a live credential on the very page that retired it. Scoped to "no table row in the panel",
+    # not to the whole body, and scoped deliberately — the 401 above is a real refused
+    # presentation, so it stamped `last_refused_at` (SPGD-991's seam), and since SPGD-1054 the
+    # panel names a still-presented revoked key in its own section beside the live table. That
+    # naming is the verify half working, not the row presenting as live; what this example pins
+    # is that the row never re-enters the listing itself — here, as no row at all, the live
+    # listing having emptied.
     get repository_path(repository)
-    expect(response.body).not_to include(key.name)
+    expect(Capybara.string(response.body).find("#agent-keys")).to have_no_selector("tr", text: key.name)
   end
 
   # AC8 — the `covers?` bound. A keys.manage holder of repo A may not revoke a key whose stored
