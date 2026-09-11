@@ -365,7 +365,7 @@ class SlowestTests
     # How much of the window this test was seen in. The denominator is passed rather than held: a
     # row does not know the window, and a row that invented one would be the drift this object's
     # class comment exists to refuse.
-    def appearance_label(window_run_count) = "#{run_count} of #{window_run_count}"
+    def appearance_label(window_run_count) = SpecObservation.coverage_fraction(run_count, window_run_count)
 
     # This test ran more than once in at least one run of the window — a table-driven loop, a shared
     # example group, or two verbatim-identical tests, which {NearDuplicateClusters} records resolve
