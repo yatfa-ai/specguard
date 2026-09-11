@@ -2635,16 +2635,9 @@ class RepositoryOverview
   # `spec_directory_window_growth` further down is the OTHER anchor site, and asks for the same
   # orientation this one does.
   #
-  # The no-mutation rule is structural rather than warned-about: `RunWindow` freezes its loaded
-  # array, and hands back either that frozen array (the orientation the window carries, and
-  # `#runs`) or a fresh copy nobody else holds (the opposite orientation). A caller-side
-  # `reverse!`, `sort!` or `<<` therefore either raises FrozenError at the mutating line or
-  # mutates an unshared copy — in neither case can a consumer reorder the memoized rows. That is
-  # the hazard this comment used to spend a paragraph on (`serialized_history` maps the same
-  # memoized rows under the declared `ingested_at_desc,ingest_sequence_desc` contract, and an
-  # in-place reversal would make that contract a lie in the same response body): it now ends in
-  # an exception, never in a silently reordered response. The reasoning stays because the
-  # contract it protects is still the one every client reads.
+  # The no-mutation rule is `RunWindow`'s to enforce, guaranteed by the object rather than
+  # restated by its readers — the reasoning lives in the `== Non-mutating, by construction`
+  # header of `app/models/run_window.rb`.
   #
   # NO SECOND WINDOW QUERY, and that is deliberate rather than incidental: `history_runs` is
   # materialized once, and both `UnstableTests` and `SlowestTests` document their window as handed
@@ -3864,16 +3857,9 @@ class RepositoryOverview
   # the window straight in and is right to. This one is not order-indifferent, and the two lines
   # are otherwise identical.
   #
-  # The no-mutation rule is structural rather than warned-about: `RunWindow` freezes its loaded
-  # array, and hands back either that frozen array (the orientation the window carries, and
-  # `#runs`) or a fresh copy nobody else holds (the opposite orientation). A caller-side
-  # `reverse!`, `sort!` or `<<` therefore either raises FrozenError at the mutating line or
-  # mutates an unshared copy — in neither case can a consumer reorder the memoized rows. That is
-  # the hazard this comment used to spend a paragraph on (`serialized_history` maps the same
-  # memoized rows under the declared `ingested_at_desc,ingest_sequence_desc` contract, and an
-  # in-place reversal would make that contract a lie in the same response body): it now ends in
-  # an exception, never in a silently reordered response. The reasoning stays because the
-  # contract it protects is still the one every client reads.
+  # The no-mutation rule is `RunWindow`'s to enforce, guaranteed by the object rather than
+  # restated by its readers — the reasoning lives in the `== Non-mutating, by construction`
+  # header of `app/models/run_window.rb`.
   #
   # The branch gate lives HERE, in one place, so the boolean the window serves and the decision that
   # produced it cannot come apart — see `serialized_directory_growth_window` for why an unfiltered
