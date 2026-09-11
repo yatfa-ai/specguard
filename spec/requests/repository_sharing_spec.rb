@@ -145,6 +145,25 @@ RSpec.describe "Repository sharing", type: :request do
       expect(response.body).to include("1,234 tests")
     end
 
+    # The COST half of that card example's rule, on the page the card links to. The minted-key
+    # count behind this viewer's Leave dialog is gated — `keys_minted_by` answers `{}` before its
+    # grouped `api_keys` query runs — but repositories#show has exactly ONE legitimate `api_keys`
+    # reader this viewer still pays for: the ungated key collection the Connection stat loads on
+    # every render ("the query runs on every render of this page and is meant to", priced in
+    # repositories_spec.rb's absolute page budget). So the honest figure is 1, not 0, and the pin
+    # is the difference: the count this viewer may not read costs nothing BEYOND that read. A
+    # second `api_keys` statement here means the gate ran after its query — the hidden grouped
+    # read charged to the exact viewer the page refuses to tell anything.
+    # @intent: {"entity": "RepositoryMembership", "action": "bound show key reads", "behavior": "a view-only member who minted a key renders repositories show and exactly one api_keys statement is issued, the connection indicator's", "layer": "request"}
+    it "pays the indicator's one api_keys read and nothing for the minted-key count" do
+      repository.api_keys.create!(name: "CI — main", created_by_user: repository.repository_memberships.sole.user)
+
+      queries = queries_against("api_keys") { get repository_path(repository) }
+
+      expect(response).to have_http_status(:ok)
+      expect(queries.size).to eq(1)
+    end
+
     # Decision (d). "Every repository you have registered" stopped being true the moment shared
     # repositories appeared in this list — the member registered none of them.
     # @intent: {"entity": "RepositoryMembership", "action": "admit shared subtitle", "behavior": "the index subtitle says shared with you rather than every repository you have registered", "layer": "request"}

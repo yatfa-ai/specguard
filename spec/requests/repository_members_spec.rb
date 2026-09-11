@@ -1150,6 +1150,21 @@ RSpec.describe "Repository members", type: :request do
         expect(response.body).not_to match(/\d+ API keys? minted/)
       end
 
+      # The COST half of the rule the examples here pin the WORDING of. The fixture has dependabot's
+      # two keys on the page, and `keys_minted_by` still must ask the credential table for nothing:
+      # its gate returns `{}` BEFORE the grouped `api_keys` query — an ordering the concern's own
+      # comment calls load-bearing. The query-count pin that comment cites lives on the admitted
+      # side only (`api_key_queries` in "the API keys a member minted", the owner's render); a
+      # reordering that hoists the query above the guards changes no copy this viewer reads, so
+      # without this example nothing would catch it.
+      # @intent: {"entity": "RepositoryMembership", "action": "skip gated minted-key read", "behavior": "a members.manage viewer without keys.manage renders the members page and zero api_keys statements are issued though a listed member minted two keys", "layer": "request"}
+      it "is charged nothing for the count the examples above withhold" do
+        queries = queries_against("api_keys") { get repository_members_path(repository) }
+
+        expect(response).to have_http_status(:ok)
+        expect(queries.size).to eq(0)
+      end
+
       # The same answer this viewer already gets one page over, asserted here so the two pages are
       # pinned to each other rather than merely happening to agree today. Matched against the
       # index's own badge copy — `pluralize(count, "key")`, not this page's "API key" — because a
