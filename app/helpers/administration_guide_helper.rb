@@ -152,6 +152,7 @@ module AdministrationGuideHelper
         "registered_at" => "2026-01-15T09:24:11Z"
       },
       "api_key" => {
+        "id" => 1042,
         "name" => Api::V1::UserRepositoriesController::FIRST_KEY_NAME,
         "token" => EXAMPLE_TOKEN,
         "hint" => AdministrationGuideHelper.example_token_hint,

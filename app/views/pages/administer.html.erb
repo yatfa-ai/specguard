@@ -27,12 +27,13 @@
     WHAT IT DOES NOT DO. It promises no capability the API does not currently have, and it covers
     exactly the two founding endpoints of the `sgu_` surface: the list and the registration. The
     surface has grown since this page was first drafted — deleting and renaming a repository,
-    minting and revoking a repository's CI keys, the registrable listing and member management are
-    all served over the API today, and the SpecGuard MCP bridge carries tools over these same
-    credentials — and none of that is documented here. Nothing on this page describes any of it as
-    absent, and none of its request lines appear on this page, because a contract this page has
-    not verified is not this page's to publish. Where a reader needs a gesture that only the
-    browser has, the page says so plainly and sends them there.
+    minting and revoking a repository's CI keys, listing and revoking a repository's agent keys,
+    the registrable listing and member management are all served over the API today, and the
+    SpecGuard MCP bridge carries tools over these same credentials — and none of that is
+    documented here. Nothing on this page describes any of it as absent, and none of its request
+    lines appear on this page, because a contract this page has not verified is not this page's
+    to publish. Where a reader needs a gesture that only the browser has, the page says so
+    plainly and sends them there.
 %>
 
 <% endpoint = administration_guide_endpoint %>
@@ -406,25 +407,30 @@
     </div>
   <% end %>
 
-  <%# "What this key cannot do yet" is what this panel used to say, and its list went false twice
-      over: the API grew delete, rename, CI-key minting, the registrable listing and member
-      management, and the MCP bridge now carries those to agents as tools. A page whose charter is
-      "wrong-by-definition wherever it disagrees with the server" cannot keep a list of absences
-      that no longer exist. The honest residual is small: two credential kinds that still cannot be
-      minted or revoked over the API, and in-place rotation, which the API surface rules out
-      deliberately rather than has not got to yet. %>
+  <%# "What this key cannot do yet" is what this panel used to say, and its list went false three
+      times over: the API grew delete, rename, CI-key minting, the registrable listing and member
+      management, and — since this branch last read main — the listing and revoking of a
+      repository's agent keys (SPGD-1004), with the MCP bridge carrying all of it to agents as
+      tools. A page whose charter is "wrong-by-definition wherever it disagrees with the server"
+      cannot keep a list of absences that no longer exist. The honest residual is small: personal
+      keys, which cannot be minted or revoked over the API; agent-key MINTING, which has no route
+      because an agent key's grant is chosen once, at /account, from the minter's own rights; and
+      in-place rotation, which the API surface rules out deliberately rather than has not got to
+      yet. %>
   <%= render UI::PanelComponent.new(title: "What only the browser can do", id: "limits") do %>
     <div class="space-y-4">
       <p class="text-sm text-app-content-secondary">
         Stated so you do not go looking. This API surface has grown since this guide was first
         drafted — deleting a repository, renaming one, minting and revoking a repository's CI
-        keys, listing what may be registered, and member management are all served over the API
-        today, and the SpecGuard MCP bridge carries them to agents as tools. What is still
-        browser-only, today:
+        keys, listing and revoking a repository's agent keys, listing what may be registered, and
+        member management are all served over the API today, and the SpecGuard MCP bridge carries
+        them to agents as tools. What is still browser-only, today:
       </p>
       <ul class="list-disc space-y-1 pl-5 text-sm text-app-content-secondary">
         <li>Minting or revoking personal <code>sgu_</code> keys.</li>
-        <li>Minting or revoking agent <code>sga_</code> keys.</li>
+        <li>Minting agent <code>sga_</code> keys — revoking one of a repository's agent keys is
+            over the API now; the mint is not, because the key's grant is chosen once, at
+            mint, on your account page.</li>
         <li>Rotating a repository's CI key <em>in place</em> — the API deliberately offers no
             rotate, because a regenerated token stops the old one working with no grace window.
             Replacing a key over the API is two calls rather than one: mint the new key, then

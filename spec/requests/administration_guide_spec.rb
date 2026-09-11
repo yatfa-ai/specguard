@@ -158,7 +158,7 @@ RSpec.describe "The public administration guide", type: :request do
       expect(response.parsed_body.fetch("repository").keys)
         .to match_array(%w[id full_name name registered_at])
       expect(response.parsed_body.fetch("api_key").keys)
-        .to match_array(%w[name token hint created_at])
+        .to match_array(%w[id name token hint created_at])
     end
 
     # The page names the minted key by its literal string ("Default CI Key" today). Pinned against
@@ -373,6 +373,16 @@ RSpec.describe "The public administration guide", type: :request do
     #   - the not_to limb: the API keeps refusing `regenerate` — the absence that makes
     #     "in place" the one browser-only CI-key gesture. Red the day someone routes it, which
     #     is the day the panel's residual goes stale.
+    #
+    # The agent-key bullet is pinned the same way, one limb per direction its truth rests on:
+    #
+    #   - include, one verb each: listing (GET the collection) and revoking (DELETE the member)
+    #     of a repository's agent keys are served — the two words the bullet's "revoking ... is
+    #     over the API now" names. Pinned per verb for the same reason the CI-key pair is.
+    #   - not_to: no POST anywhere under agent_keys — the absence that makes minting the one
+    #     browser-only agent-key gesture (an agent key's grant is chosen once, at /account).
+    #     The unanchored `.*` is deliberate: an account-level mint route would falsify the
+    #     bullet exactly as a per-repository one would.
     it "claims nothing browser-only that the API in fact routes" do
       api_v1 = Rails.application.routes.routes
                    .map { |r| "#{r.verb} #{r.path.spec}" }
@@ -381,6 +391,9 @@ RSpec.describe "The public administration guide", type: :request do
       expect(api_v1).to include(a_string_matching(%r{^POST /api/v1/repositories/:repository_id/api_keys\(}))
       expect(api_v1).to include(a_string_matching(%r{^DELETE /api/v1/repositories/:repository_id/api_keys/:id}))
       expect(api_v1).not_to include(a_string_matching(/regenerate/))
+      expect(api_v1).to include(a_string_matching(%r{^GET /api/v1/repositories/:repository_id/agent_keys\(}))
+      expect(api_v1).to include(a_string_matching(%r{^DELETE /api/v1/repositories/:repository_id/agent_keys/:id}))
+      expect(api_v1).not_to include(a_string_matching(%r{^POST .*agent_keys}))
     end
   end
 
