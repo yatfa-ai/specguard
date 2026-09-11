@@ -327,8 +327,9 @@
         <p class="mt-1">
           That value appears in this response and nowhere else, ever. Nothing stores it — SpecGuard
           keeps a digest — and no endpoint can re-serve it. An agent that registers a repository and
-          discards the response has minted a credential it cannot recover and cannot look up; the
-          only way back is to mint a replacement on the repository's page in a browser.
+          discards the response has minted a credential it cannot recover and cannot look up. The
+          way back is to replace it: mint a new key for the repository and revoke the orphan — two
+          calls over the API, or the same two gestures in a browser.
         </p>
         <p class="mt-2">
           Write it straight into wherever CI reads its secrets, in the same run that made the
