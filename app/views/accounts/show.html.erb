@@ -50,15 +50,46 @@
               <%= user_api_key.last_used_at ? "#{time_ago_in_words(user_api_key.last_used_at)} ago" : "never" %>
             </td>
             <td class="px-3 py-2 text-right">
-              <%# Revoke and nothing beside it. Its sibling on the repository page offers Regenerate
-                  first, because a repository key is usually wired into a pipeline that would have
-                  to be re-pointed; this credential has no such fixture and the honest replacement
-                  is a fresh key plus this button. %>
-              <%= button_to "Revoke", account_api_key_path(user_api_key), method: :delete,
-                            class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                            form: { data: { turbo_confirm: "Revoke #{user_api_key.name}? Anything " \
-                                                           "still using this token stops working " \
-                                                           "immediately." } } %>
+              <%# RETIRED, NOT DELETED (SPGD-943): revoked keys STAY on this list — the row is
+                  retained so a still-presenting token stays attributable (see
+                  `UserApiKey#revoke!`) — so the state has to be visible rather than the row
+                  simply vanishing beside its still-live siblings. The rendering is the agent-keys
+                  table's own, directly below: one page, one story for a revoked row. %>
+              <% if user_api_key.revoked? %>
+                <%# `:neutral` — the quietest real tone, for the reason the agent-keys badge
+                    spells out: this row is a record rather than a live hazard. And NO Revoke
+                    button in this state — there is nothing left to revoke, and `revoke!` is
+                    idempotent anyway (a replayed delete re-stamps, unobservably — the rule
+                    `ApiKey#revoke!` states). %>
+                <%= render UI::BadgeComponent.new(
+                      tone: :neutral,
+                      title: "This key was revoked, so its token no longer authenticates. The row stays " \
+                             "so a token still being presented remains identifiable."
+                    ) { "Revoked" } %>
+                <% if user_api_key.revoked_and_still_presented? %>
+                  <%# The date the badge's promise is kept by, on the sibling's honesty bound
+                      (`ApiKey#revoked_and_still_presented?`, rendered precedent the agent-keys
+                      line below): `last_refused_at` is the LAST time the platform saw this token
+                      arrive and be refused, so a client that gave up hours ago reads the same as
+                      one presenting right now — the line dates an observation rather than
+                      claiming a present tense the data does not carry. A key revoked and never
+                      presented again renders no line at all — nothing is synthesized for it. No
+                      new query: this row is already loaded, and the predicate is in-memory. %>
+                  <div class="mt-1 text-xs text-app-content-secondary">
+                    last presented <%= time_ago_in_words(user_api_key.last_refused_at) %> ago
+                  </div>
+                <% end %>
+              <% else %>
+                <%# Revoke and nothing beside it. Its sibling on the repository page offers Regenerate
+                    first, because a repository key is usually wired into a pipeline that would have
+                    to be re-pointed; this credential has no such fixture and the honest replacement
+                    is a fresh key plus this button. %>
+                <%= button_to "Revoke", account_api_key_path(user_api_key), method: :delete,
+                              class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                              form: { data: { turbo_confirm: "Revoke #{user_api_key.name}? Anything " \
+                                                             "still using this token stops working " \
+                                                             "immediately." } } %>
+              <% end %>
             </td>
           </tr>
         <% end %>

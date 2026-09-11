@@ -344,8 +344,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_07_120000) do
 
   create_table "user_api_keys", force: :cascade do |t|
     t.datetime "created_at", null: false
+    t.datetime "last_refused_at"
     t.datetime "last_used_at"
     t.string "name", null: false
+    t.datetime "revoked_at"
     t.string "token_digest", null: false
     t.datetime "updated_at", null: false
     t.bigint "user_id", null: false

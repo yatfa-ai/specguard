@@ -182,16 +182,19 @@ class Api::BaseController < ActionController::API
   #
   # `authenticate` returning nil resolves no principal, so the 401 itself writes nothing and stays
   # unattributable in general. A REVOKED RETIRED CREDENTIAL is the exception this method closes,
-  # for the two classes that have a revocation lifecycle: `ApiKey` (`sgk_`, one repository) and
-  # `AgentApiKey` (`sga_`, the bounded set). For either, the row still exists (`revoke!` retires
-  # rather than deletes), the digest still names it, and this platform stamped the instant the
-  # token was retired — so the refused presentation is a fact about a row this application owns,
-  # the same criterion `credential_health` already states for reporting a 401 it did not observe.
-  # Stamping `last_refused_at` is what lets a surface that reads it say "a key you revoked is
-  # still being presented" instead of "Not connected yet" — for a revoked `sgk_` key, the
-  # credential-health block on the repository overview (`RepositoryOverview#
-  # serialized_credential_health`); for a revoked `sga_` key, the owner's /account and the
-  # agent-key triage route (`GET repositories/:repository_id/agent_keys/presented_revoked`).
+  # for the three classes that have a revocation lifecycle: `ApiKey` (`sgk_`, one repository),
+  # `UserApiKey` (`sgu_`, the person) and `AgentApiKey` (`sga_`, the bounded set). For each, the
+  # row still exists (`revoke!` retires rather than deletes), the digest still names it, and this
+  # platform stamped the instant the token was retired — so the refused presentation is a fact
+  # about a row this application owns, the same criterion `credential_health` already states for
+  # reporting a 401 it did not observe. Stamping `last_refused_at` is what lets a surface that
+  # reads it say "a key you revoked is still being presented" instead of "Not connected yet" —
+  # for a revoked `sgk_` key, the credential-health block on the repository overview
+  # (`RepositoryOverview#serialized_credential_health`); for a revoked `sga_` key, the owner's
+  # /account and the agent-key triage route (`GET
+  # repositories/:repository_id/agent_keys/presented_revoked`); for a revoked `sgu_` key, the
+  # personal-keys table on the same /account (SPGD-943) — the surface an agent or MCP client
+  # holding that token cannot read, but the person who handed it out can.
   #
   # COST, and the shape it is held to: at most ONE indexed read — the same unique digest index
   # resolution uses, with `revoked_at` checked on the row it returns — plus, on a hit, the stamp.
@@ -200,17 +203,21 @@ class Api::BaseController < ActionController::API
   # still costs exactly the one resolving read the seam spec pins.
   #
   # The per-class lookup (`credential.revoked`, `credential.digest`) rather than an `ApiKey`-only
-  # spelling under a widened guard: both classes carry the identical contract (`scope :revoked`,
-  # SHA-256 `self.digest`, unique `token_digest` index), so ONE line answers for both and a third
-  # retired-credential class joins by adding itself to the list, not by copying a query.
+  # spelling under a widened guard: every class on the list carries the identical contract
+  # (`scope :revoked`, SHA-256 `self.digest`, unique `token_digest` index), so ONE line answers
+  # for all and a fourth retired-credential class joins by adding itself to the list, not by
+  # copying a query.
   #
-  # `UserApiKey` is EXCLUDED, by the list and by this paragraph both: a `sgu_` token is refused
-  # before resolution on a user-key endpoint, but this method's contract is about the credential
-  # CLASS — `UserApiKey` has no revocation lifecycle (`revoked_at` is not its column) and must
-  # never be probed here. Stated rather than inherited, so a future change to the prefix
-  # discipline cannot silently widen this write path to the other table.
+  # The list is the whole guard, and it is per CLASS, never per table: each credential is probed
+  # ONLY for a token already addressed to it — the class the prefix check above already decided —
+  # so an `sgu_` failure probes `user_api_keys` and never `api_keys`, and the reverse. This used
+  # to be an `ApiKey`-only guard whose comment stated `UserApiKey`'s exclusion as a fact about
+  # the schema (`revoked_at` was not its column) and asked that any widening be deliberate rather
+  # than accidental; this is that deliberate widening (SPGD-943 — the row is now kept and stamped
+  # by `revoke!` rather than destroyed). `credential_seam_spec.rb` holds the non-collapse on
+  # every credential, counted over the credential tables together.
   def attribute_refused_revocation(token, credential)
-    return unless [ApiKey, AgentApiKey].include?(credential)
+    return unless [ApiKey, UserApiKey, AgentApiKey].include?(credential)
 
     credential.revoked.find_by(token_digest: credential.digest(token))&.touch_last_refused!
   end
