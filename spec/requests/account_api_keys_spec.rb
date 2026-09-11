@@ -128,11 +128,11 @@ RSpec.describe "Account API keys", type: :request do
 
       get account_path
 
-      expect(row_for("Agent")).to have_content("Still being presented")
-      # Whitespace-tolerant on purpose: the note's ERB breaks the sentence across source lines,
+      expect(row_for("Agent")).to have_content("Revoked")
+      # Whitespace-tolerant on purpose: the line's ERB breaks the sentence across source lines,
       # and Capybara matches Regexp text against the node's UN-normalized text — `.` will not
       # cross the newlines a String match normalizes away.
-      expect(row_for("Agent")).to have_text(/last\s+seen\s+.+ago/)
+      expect(row_for("Agent")).to have_text(/last\s+presented\s+.+ago/)
     end
 
     # The honest bound: a key revoked and never presented again is NOT a finding, and nothing is
@@ -143,7 +143,7 @@ RSpec.describe "Account API keys", type: :request do
 
       get account_path
 
-      expect(row_for("Quiet")).to have_no_text("still being presented")
+      expect(row_for("Quiet")).to have_no_text("last presented")
       expect(row_for("Quiet")).to have_no_button("Revoke")
     end
   end
