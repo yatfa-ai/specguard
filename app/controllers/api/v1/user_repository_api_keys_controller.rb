@@ -34,7 +34,7 @@
 # alongside the same `name`/`hint`/`created_at` block, and `created_by_user` records who the
 # write is attributed to, exactly as `ApiKeysController#create` attributes the browser's mint.
 # For an agent credential that is the KEY'S OWNER (`Api::BaseController#attributed_user`), so
-# the row's `MembershipsController#keys_minted_by` attribution names a person rather than
+# the row's `MintedKeyCounts#keys_minted_by` attribution names a person rather than
 # reading "Unknown" — the known-degraded state a nil creator renders. No later endpoint serves
 # the token; nothing persists it but the digest.
 class Api::V1::UserRepositoryApiKeysController < Api::BaseController

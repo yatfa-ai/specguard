@@ -48,7 +48,7 @@
                     their CI authenticates with). The link goes to the panel holding the lever.
                     Members who minted nothing render nothing at all — and so does every member
                     when the viewer lacks `keys.manage`, because `@keys_minted` is then empty by
-                    construction (see MembershipsController#keys_minted_by). That is what keeps
+                    construction (see MintedKeyCounts#keys_minted_by). That is what keeps
                     this link honest as well as this count: the `#api-keys` panel it points at
                     renders under the same permission. %>
                 <% if keys_minted.positive? %>

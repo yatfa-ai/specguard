@@ -78,9 +78,10 @@ module MembershipsHelper
   # what they are told *after*. They live together because they make the same claim about the same
   # number, and a fix applied to only one of them is a contradiction the owner reads in sequence.
   #
-  # Neither is reached unless the viewer holds `keys.manage` — `MembershipsController#keys_minted_by`
-  # is the single gate, and it hands these a count of zero for anyone else, which is exactly the
-  # "say nothing" path a member who minted nothing already takes.
+  # Neither is reached unless the viewer holds `keys.manage` — `MintedKeyCounts#keys_minted_by`
+  # (the extracted reader, shared with the Leave surface below) is the single gate, and it hands
+  # these a count of zero for anyone else, which is exactly the "say nothing" path a member who
+  # minted nothing already takes.
 
   # The copy in the revoke confirm dialog.
   #
@@ -106,6 +107,52 @@ module MembershipsHelper
     keys, verb, object = minted_keys_agreement(keys_minted)
     "Revoked #{handle}'s access. #{keys} they minted #{verb} still live — " \
       "review #{object} in the API keys panel."
+  end
+
+  # The leaver's own halves of the same disclosure — the Leave dialog on repositories#show, and
+  # the flash after it. They exist because leaving is `#destroy`'s self-revoke arm made
+  # self-served: the act is the same (a membership row destroyed, API keys untouched), so the
+  # warnings have to be the same act's warnings, revoiced in the second person for the one person
+  # whose access it is.
+  #
+  # Unlike the revoke pair, whose callers pre-gate on `keys.manage`, `leave_confirmation` is
+  # reached by every member of a repository — the control is not gated, because ending your own
+  # access is not a permission — but `keys_minted_by` remains the single gate and hands a count of
+  # zero to anyone without `keys.manage`, so a `view`-only leaver's dialog and notice mention keys
+  # not at all. That is not merely tolerated but required: a member who minted nothing is being
+  # warned about keys that do not exist, and the viewer who may not know the number is the one the
+  # gate exists to keep ignorant.
+  #
+  # Both go through `minted_keys_agreement` — "two surfaces quoting the same count" is now four,
+  # and they cannot drift about it.
+
+  # The copy in the Leave confirm dialog. Two differences from the revoke question, both
+  # substantive rather than phrasing: the consequence is immediate and unilateral (no owner is
+  # asked), and the lever changes hands — "until an owner revokes them", not "until you revoke
+  # them", because the moment the row is gone the leaver can no longer open the panel the revoke
+  # pair points at. Telling them to review a panel they just 404'd themselves out of would be the
+  # affordance-that-lands-nowhere shape `keys_minted_by`'s gate exists to prevent.
+  def leave_confirmation(repository, keys_minted)
+    question = "Leave #{repository.github_full_name}? You will lose access immediately, and only " \
+               "an owner can add you back."
+    return question if keys_minted.zero?
+
+    keys, _verb, object = minted_keys_agreement(keys_minted)
+    "#{question} The #{keys} you minted will keep authenticating until an owner revokes #{object}."
+  end
+
+  # The counterpart after the click, called from `MembershipsController#leave`. It keeps, verbatim,
+  # the sentence `#destroy`'s self-revoke arm has always shown — leaving and being revoked are the
+  # same end state and must read as one sentence — and adds the same keys-are-still-live line the
+  # owner's revoke notice carries, rerouted at the person who now holds the only lever there is:
+  # asking an owner to revoke them, from outside a repository they can no longer open.
+  def leave_notice(repository, keys_minted)
+    base = "You no longer have access to #{repository.github_full_name}."
+    return base if keys_minted.zero?
+
+    keys, verb, object = minted_keys_agreement(keys_minted)
+    "#{base} The #{keys} you minted #{verb} still live — ask an owner to revoke #{object} in the " \
+      "repository's API keys panel."
   end
 
   private
