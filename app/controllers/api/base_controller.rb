@@ -170,8 +170,27 @@ class Api::BaseController < ActionController::API
 
     @current_api_key = credential.authenticate(token)
     if @current_api_key.nil?
-      attribute_refused_revocation(token, credential)
-      return render_unauthorized
+      # The probe's return value is the one bit this 401 is allowed to disclose, and the caller
+      # has already paid for it: the digest resolved a REVOKED row, and only someone presenting
+      # the exact token can land on that hit (the lookup runs on the digest they carried). So
+      # tell the holder what the platform already knows and what to do about it — "revoked"
+      # forks to mint-a-replacement, the opposite remedy from "fix the token value" a generic
+      # 401 leaves them guessing at. `specguard-rspec` renders this `message` into the CI
+      # failure line with zero client changes; the MCP bridge and direct consumers read the
+      # body raw.
+      #
+      # The miss — a token that was never a key, or a live key refused for ACCOUNT state (an
+      # archived owner) — falls through to the generic body, byte-identical to every other 401
+      # this class issues: an unknown token must keep reading as an unknown token, and account
+      # state must not be disclosed to whoever is presenting. `error:` stays "unauthorized" on
+      # both branches (machine consumers branch on it); the revoked body carries no row
+      # metadata — no name, no owner, no timestamp.
+      if attribute_refused_revocation(token, credential)
+        render_unauthorized(reason: "revoked", message: REVOKED_CREDENTIAL_MESSAGE)
+      else
+        render_unauthorized
+      end
+      return
     end
 
     bind_principal
@@ -216,10 +235,17 @@ class Api::BaseController < ActionController::API
   # than accidental; this is that deliberate widening (SPGD-943 — the row is now kept and stamped
   # by `revoke!` rather than destroyed). `credential_seam_spec.rb` holds the non-collapse on
   # every credential, counted over the credential tables together.
+  #
+  # Returns the row it resolved — the distinguishing datum the 401 fork renders on — and `nil`
+  # on a miss, so the caller tells a revoked credential from every other 401 cause WITHOUT a
+  # second lookup: the same read that stamps the refusal is the read that decides the body. The
+  # cost contract is unchanged: one indexed read plus, on a hit, the stamp.
   def attribute_refused_revocation(token, credential)
     return unless [ApiKey, UserApiKey, AgentApiKey].include?(credential)
 
-    credential.revoked.find_by(token_digest: credential.digest(token))&.touch_last_refused!
+    refused = credential.revoked.find_by(token_digest: credential.digest(token))
+    refused&.touch_last_refused!
+    refused
   end
 
   # The one place the credentials diverge after resolution. A `case` rather than a polymorphic
@@ -326,9 +352,31 @@ class Api::BaseController < ActionController::API
     match && match[:token].strip
   end
 
-  def render_unauthorized
-    render json: { error: "unauthorized", message: "A valid Bearer API key is required." },
-           status: :unauthorized
+  # The revoked branch's sentence — the remedy, not the history. It names the revocation and the
+  # one action that fixes it, and deliberately nothing else: no name, no owner, no
+  # `revoked_at`/`last_refused_at`, because the holder of a dead token is entitled to the fact of
+  # the revocation, not to a read of the row.
+  REVOKED_CREDENTIAL_MESSAGE =
+    "This API key has been revoked. Mint a replacement key and update whatever presents this one."
+
+  # The 401 body's generic shape, and the ONE branch allowed to differ from it. The defaults are
+  # today's generic body byte-for-byte — every non-revoked 401 (fail-closed empty declaration,
+  # prefix miss, authenticate-nil miss) renders exactly what it always rendered, and the generic
+  # message is pinned by `credential_seam_spec.rb` so a future widening cannot silently narrow
+  # the disclosure.
+  #
+  # The revoked branch (the only caller passing `reason:`) adds the one bit the probe's resolved
+  # row licenses and nothing more. `error:` stays `"unauthorized"` on every branch — machine
+  # consumers branch on it — and `reason: "revoked"` is the machine-readable half of the same
+  # fact `message` states for a human. The body carries no row metadata in either shape: the
+  # caller is unauthenticated by definition, and the revoked caller has learned all they get to
+  # learn — that this digest names a revoked credential (the industry-standard disclosure; RFC
+  # 6750's `invalid_token` is the same shape).
+  def render_unauthorized(message: "A valid Bearer API key is required.", reason: nil)
+    body = { error: "unauthorized" }
+    body[:reason] = reason if reason
+    body[:message] = message
+    render json: body, status: :unauthorized
   end
 
   # ⭐ THE ANSWER FOR "YOU MAY NOT SEE THIS", AND FOR "THIS DOES NOT EXIST", DELIBERATELY THE SAME
