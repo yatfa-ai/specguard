@@ -29,6 +29,9 @@
       one repository. They start <code class="font-mono text-xs">sgu_</code>, and a repository's own
       <code class="font-mono text-xs">sgk_</code> key will not work in their place, or the reverse.
       Hold as many as you need and revoke them one at a time: revoking one leaves the rest working.
+      The <%= link_to "administration guide", administration_guide_path,
+                      class: "text-app-cta hover:underline" %>
+      covers what one can do — including the browser step registering over the API depends on.
     </p>
 
     <% if @user_api_keys.any? %>
@@ -95,11 +98,21 @@
         <% end %>
       <% end %>
     <% else %>
+      <%# "read" alone was true when this was written and is an undercount now: an `sgu_` key also
+          REGISTERS repositories, and receives that repository's first `sgk_` CI key back in the
+          same response. A description that still called the credential read-only would understate
+          the one thing about it a person most needs to know before minting one.
+
+          This sentence has been rewritten twice, and both rewrites are preserved rather than
+          resolved: SPGD-762 added the registering, then SPGD-952 added the pointer at the agent
+          key below. Dropping either in favour of the other would reintroduce the defect the
+          dropped half fixed — registration-only wording hides the credential that fits an agent
+          better, and agent-key-only wording reads as read-only again. %>
       <%= render UI::EmptyStateComponent.new(
             title: "No personal API keys",
-            description: "Mint one to read SpecGuard from a machine or script you control. " \
-                         "For an automated agent that needs only some repositories, mint an " \
-                         "agent key below instead."
+            description: "Mint one to read SpecGuard — and to register repositories — from a " \
+                         "machine or script you control. For an automated agent that needs only " \
+                         "some repositories, mint an agent key below instead."
           ) %>
     <% end %>
   <% end %>
