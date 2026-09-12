@@ -19,6 +19,25 @@ RSpec.describe "API v1 — the credential seam", type: :request do
 
   def bearer(token) = { "Authorization" => "Bearer #{token}" }
 
+  # SPGD-1056: the two bodies the failure path can render, stated once so every example below
+  # asserts against the SAME strings. The whole-body `eq` each pin uses doubles as the
+  # no-extra-keys assertion — a body that grew a name, an owner, or a timestamp fails these
+  # exactly as a body that lost its message does. The generic body is what every non-revoked
+  # cause has always rendered; the revoked body is the one fork, carrying exactly
+  # `error`/`reason`/`message`.
+  def generic_unauthorized_body
+    { "error" => "unauthorized", "message" => "A valid Bearer API key is required." }
+  end
+
+  def revoked_unauthorized_body
+    {
+      "error" => "unauthorized",
+      "reason" => "revoked",
+      "message" =>
+        "This API key has been revoked. Mint a replacement key and update whatever presents this one."
+    }
+  end
+
   # The SECOND decision the ticket makes, and the one the 401s above cannot see: the seam is held by
   # discriminating on the PREFIX, so a cross-presented token is refused without reading anything.
   #
@@ -92,6 +111,18 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       expect(statements).to be_empty
     end
 
+    # SPGD-1056's pin on the cause with no token at all: the same prefix-miss door (there is no
+    # token to match any prefix), so the same zero reads — and the generic body, because "no
+    # token" is neither account state nor a revoked row.
+    # @intent: { entity: "credential seam", action: "refuse a headerless request", behavior: "a request with no Authorization header is refused 401 with the generic body and zero credential reads", layer: "request" }
+    it "answers a missing Authorization header with the generic body and no credential read" do
+      statements = credential_reads { get "/api/v1/repositories" }
+
+      expect(response).to have_http_status(:unauthorized)
+      expect(response.parsed_body).to eq(generic_unauthorized_body)
+      expect(statements).to be_empty
+    end
+
     # The positive control for the zeroes above: without it they would also pass against an
     # endpoint that had stopped authenticating anything. Measured over `authentication_reads`, so
     # the SAME example is also the guard on the cost claim — it sees every table a valid
@@ -129,7 +160,9 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       get "/api/v1/repositories", headers: bearer(repository_key.raw_token)
 
       expect(response).to have_http_status(:unauthorized)
-      expect(response.parsed_body["error"]).to eq("unauthorized")
+      # The prefix miss keeps the generic body (SPGD-1056): the door knows the key only by its
+      # prefix, and says nothing more — the whole-body pin subsumes the old `error` check.
+      expect(response.parsed_body).to eq(generic_unauthorized_body)
     end
 
     # The refusal is at the door, before any lookup — so it must not look like a use of the key on
@@ -168,6 +201,9 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       end
 
       expect(response).to have_http_status(:unauthorized)
+      # SPGD-1056: the 401 says what the probe just resolved — this was a real key, and it is
+      # revoked. Asserted as the whole body, so an extra key fails exactly as a lost message.
+      expect(response.parsed_body).to eq(revoked_unauthorized_body)
       # Two: the resolution SELECT, then the failure path's revoked-row lookup. A THIRD would be
       # the failure path wandering.
       expect(statements.grep(/FROM "api_keys"/).size).to eq(2)
@@ -187,6 +223,9 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       end
 
       expect(response).to have_http_status(:unauthorized)
+      # The miss keeps the generic body: an unknown token reads as an unknown token, the fence
+      # SPGD-1056 states on the branch it does NOT fork.
+      expect(response.parsed_body).to eq(generic_unauthorized_body)
       expect(statements.grep(/FROM "api_keys"/).size).to eq(2)
       expect(statements.grep(/UPDATE "api_keys"/)).to be_empty
       expect(ApiKey.where.not(last_refused_at: nil)).to be_empty
@@ -265,6 +304,8 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       end
 
       expect(response).to have_http_status(:unauthorized)
+      # The sgu_ twin of the fork above: the probe resolved a revoked row, and the body says so.
+      expect(response.parsed_body).to eq(revoked_unauthorized_body)
       # Two: the resolution SELECT, then the failure path's revoked-row lookup. A THIRD would be
       # the failure path wandering.
       expect(statements.grep(/FROM "user_api_keys"/).size).to eq(2)
@@ -285,6 +326,8 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       end
 
       expect(response).to have_http_status(:unauthorized)
+      # The miss keeps the generic body — same fence as its sgk_ twin above.
+      expect(response.parsed_body).to eq(generic_unauthorized_body)
       expect(statements.grep(/FROM "user_api_keys"/).size).to eq(2)
       expect(statements.grep(/UPDATE/)).to be_empty
       expect(UserApiKey.where.not(last_refused_at: nil)).to be_empty
@@ -319,12 +362,52 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       expect(statements.grep(/UPDATE.*last_refused_at/)).to be_empty
     end
   end
+  describe "a revoked agent key arriving at an endpoint that accepts the agent credential" do
+    def credential_reads(&)
+      queries_against("api_keys", &)
+    end
+
+    # The sga_ member of the fork, at an endpoint that accepts the agent credential
+    # (`GET /api/v1/repositories` declares `accepts_user_credential` AND
+    # `accepts_agent_credential`). Same body, same cost shape, and the same non-collapse: an
+    # `sga_` failure resolves `agent_api_keys` and probes no sibling table.
+    # @intent: { entity: "credential seam", action: "attribute a revoked agent-key presentation", behavior: "a revoked sga_ token is refused 401 with the revoked body and stamps last_refused_at on its retained row, costing resolution plus one failure-path lookup plus the write, and no sibling table", layer: "request" }
+    it "answers the revoked body and stamps the refused presentation on its row" do
+      # Built OUTSIDE the measured block, and on its OWN repository — the file's `repository` let
+      # is lazily evaluated, and a mint that lands inside the block counts as the request's
+      # statement (the trap the SPGD-952 example at the foot of this file documents).
+      agent_key = create_agent_api_key(user: person, repositories: [repository], permissions: [])
+      revoked_token = agent_key.raw_token
+      agent_key.revoke!
+
+      statements = credential_reads do
+        get "/api/v1/repositories", headers: bearer(revoked_token)
+      end
+
+      expect(response).to have_http_status(:unauthorized)
+      # The same self-identifying body its sgk_ and sgu_ siblings get — the fork is per credential
+      # CLASS, not per table.
+      expect(response.parsed_body).to eq(revoked_unauthorized_body)
+      # The sga_ twin of the cost shape above: the resolution SELECT (the `live` filter empties
+      # it), the failure path's one revoked-row lookup, and the stamp. `FROM "api_keys"` is
+      # quoted, so it cannot match `agent_api_keys` or `user_api_keys` — the sibling tables must
+      # show nothing at all.
+      expect(statements.grep(/FROM "agent_api_keys"/).size).to eq(2)
+      expect(statements.grep(/UPDATE "agent_api_keys"/).size).to eq(1)
+      expect(statements.grep(/FROM "api_keys"/)).to be_empty
+      expect(statements.grep(/FROM "user_api_keys"/)).to be_empty
+      expect(agent_key.reload.revoked_at).to be_present
+      expect(agent_key.reload.last_refused_at).to be_present
+    end
+  end
   describe "a user key (`sgu_`) at a repository-key endpoint" do
     # @intent: { entity: "credential seam", action: "refuse a user key at show", behavior: "a user key at the repository endpoint answers 401", layer: "request" }
     it "is refused by GET /api/v1/repository with 401" do
       get "/api/v1/repository", headers: bearer(user_key.raw_token)
 
       expect(response).to have_http_status(:unauthorized)
+      # The other direction of the same door, pinned for the same reason (SPGD-1056).
+      expect(response.parsed_body).to eq(generic_unauthorized_body)
     end
 
     # @intent: { entity: "credential seam", action: "refuse a user key at ingest", behavior: "a user key at the ingest endpoint answers 401 before the payload is read", layer: "request" }
@@ -366,6 +449,9 @@ RSpec.describe "API v1 — the credential seam", type: :request do
 
       get "/api/v1/repositories", headers: bearer(user_key.raw_token)
       expect(response).to have_http_status(:unauthorized)
+      # SPGD-1056's fence on the miss branch: the row is NOT revoked, so the probe misses and the
+      # body stays generic — account state is not disclosed to whoever is presenting.
+      expect(response.parsed_body).to eq(generic_unauthorized_body)
     end
   end
 
