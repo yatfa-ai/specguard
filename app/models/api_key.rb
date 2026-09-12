@@ -133,15 +133,17 @@ class ApiKey < ApplicationRecord
   end
 
   # Whether THIS row has been retired. Consumers that load ONE side only read it at the SQL layer
-  # through the `live`/`revoked` scopes — the repositories grid's `api_key_rows` and the "minted N
-  # keys" badge — while every surface that needs BOTH halves loads the rows and reads the split
-  # through `ApiKeyPartition`, the seam that owns the live/revoked/stranded/presented-revoked
-  # partition built from this predicate. `RepositoriesController#show` and
-  # `RepositoryOverview#serialized_credential_health` load ALL of a repository's rows precisely so
-  # that partition can serve the presented-revoked half — a `WHERE revoked_at IS NULL` here would
-  # have filtered those rows out before they could be seen — and reach the split through the seam
-  # rather than spelling it at their own site; the grid's per-card counts and rotation ages read it
-  # too. `spec/models/api_key_partition_spec.rb` holds the repo-wide property that they still do.
+  # through the `live`/`revoked` scopes — the "minted N keys" badge is the standing example —
+  # while every surface that needs BOTH halves loads the rows and reads the split through
+  # `ApiKeyPartition`, the seam that owns the live/revoked/stranded/presented-revoked partition
+  # built from this predicate. `RepositoriesController#show` and
+  # `RepositoryOverview#serialized_credential_health` load ALL of a repository's rows, and the
+  # repositories grid loads both halves for its page's repositories through `api_key_rows`,
+  # grouped per repository by `ApiKeyPartition.grouped_by_repository` — all precisely so that
+  # partition can serve the presented-revoked half, which a `WHERE revoked_at IS NULL` here would
+  # have filtered out before it could be seen — and each reaches the split through the seam
+  # rather than spelling it at its own site. `spec/models/api_key_partition_spec.rb` holds the
+  # repo-wide property that they still do.
   def revoked?
     revoked_at.present?
   end

@@ -14,12 +14,15 @@
 # * `RepositoryOverview#serialized_credential_health` split them again for the agent-facing
 #   credential-health block, in a second spelling,
 # * and the repositories grid (`RepositoriesController#index`) excluded the revoked rows in SQL —
-#   `ApiKey.live` — and derived the rotation state per card in a third.
+#   `ApiKey.live` — and derived the rotation state per card in a third. That third spelling has
+#   since converged onto this seam: `api_key_rows` loads both halves for the whole page and
+#   `grouped_by_repository` builds one partition per repository's slice, so every per-card answer
+#   is a read off this object rather than a spelling of the split at the grid's own site.
 #
 # Three spellings of one rule is three chances to change two of them and have nothing in the suite
 # see the third drift, and they were not hypothetical: the same rule was typed into the overview
 # and the controller in lockstep twice in the partition's first six days (SPGD-804, SPGD-814), and
-# the grid's SQL spelling is precisely the hazard `RepositoryOverview#serialized_credential_health`'s
+# the grid's SQL spelling was precisely the hazard `RepositoryOverview#serialized_credential_health`'s
 # own comment names — "a WHERE clause here would be a second expression of `rotated_and_unused?`'s
 # rule, free to drift from the one the two web surfaces read". The exclusion itself was not wrong
 # (the `live` scope filters on `revoked_at IS NULL` only, and nothing here re-expresses a
@@ -37,8 +40,9 @@
 # It assumes nothing about WHICH rows those are: the live/revoked split is over the collection
 # given. `show` and the API hand in ALL of one repository's rows — the presented-revoked half
 # reads the retained rows a `WHERE revoked_at IS NULL` would have filtered out before they could
-# be seen — while the grid hands in its live-only load, for which the live side is then the whole
-# of it. Both are correct hands; neither is assumed.
+# be seen — while the grid hands in the whole-table load for its page's repositories and lets
+# `grouped_by_repository` hand each repository's rows to a per-repository partition. Both are
+# correct hands; neither is assumed.
 #
 # == The answers
 #
