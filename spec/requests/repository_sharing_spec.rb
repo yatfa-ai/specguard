@@ -11,7 +11,7 @@ require "rails_helper"
 # *switches* the signed-in identity — that is what makes these member-perspective specs, rather
 # than the owner-perspective ones the existing suite already has.
 RSpec.describe "Repository sharing", type: :request do
-  let(:owner) { create_user(github_uid: "1001", github_handle: "octocat") }
+  let(:owner) { create_user(github_handle: "octocat") }
   let(:repository) { create_repository(user: owner, github_full_name: "acme/billing-service") }
 
   # Signs in a second GitHub identity and shares `repository` with them.
@@ -892,8 +892,10 @@ RSpec.describe "Repository sharing", type: :request do
   end
 
   describe "the owner" do
-    # `repository` first: it creates the owner with uid 1001, which is the identity
-    # `sign_in_via_github` then resolves to (User.from_github_omniauth upserts on the uid).
+    # `repository` first: it mints the owner on the factory default, which is the identity
+    # `sign_in_via_github` then resolves to — both defaults read the one per-process constant
+    # (`Builders::DEFAULT_GITHUB_UID`, see spec/lib/builders_fixture_identity_spec.rb) and
+    # `User.from_github_omniauth` upserts on the uid.
     before do
       repository
       sign_in_via_github

@@ -8,9 +8,15 @@ module OmniAuthHelpers
   # the scope: sign-in asks GitHub for a handle, an avatar and an email address, and repository
   # access is a GitHub App installation (`GithubInstallation`). A token in this hash would be
   # describing a thing the app no longer reads.
+  #
+  # The uid is not a literal: it reads `Builders::DEFAULT_GITHUB_UID`, so this default and the
+  # factory's default are one identity per suite process by construction. A spec that signs in and
+  # a spec that builds a user describe the same connected user, and two suites running
+  # concurrently against the shared-lane test database do not — same-value uncommitted inserts
+  # into the users unique index are what deadlock concurrent runs.
   DEFAULT_AUTH = {
     "provider" => "github",
-    "uid" => "1001",
+    "uid" => Builders::DEFAULT_GITHUB_UID,
     "info" => {
       "nickname" => "octocat",
       "name" => "The Octocat",
@@ -19,9 +25,11 @@ module OmniAuthHelpers
     }
   }.freeze
 
-  # The installation `sign_in_via_github` records by default. Matches `Builders#create_user`, so a
-  # spec that signs in and a spec that builds a user describe the same connected user rather than
-  # two subtly different ones.
+  # The installation `sign_in_via_github` records by default. The uid half of the pairing with
+  # `Builders#create_user` is the one per-process constant (`DEFAULT_GITHUB_UID`); this
+  # installation id can stay a shared literal because `github_installations` uniqueness is scoped
+  # to a user, and each suite process mints users from the shared serial sequence — two concurrent
+  # runs cannot collide on the (user_id, installation_id) pair.
   DEFAULT_INSTALLATION_ID = 5001
 
   # The credential the App flow hands back. A request spec's session can only be written by a

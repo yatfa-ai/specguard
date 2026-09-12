@@ -14,8 +14,9 @@ require "rails_helper"
 # `UserApiKey.authenticate` stack over HTTP, a sign-in refused by the real callback — rather than
 # at the column value alone.
 RSpec.describe "Account closure", type: :request do
-  # The colleague whose rows and access must survive the person's closure untouched — passed a
-  # distinct uid, since the signed-in person IS uid 1001 and uid is unique.
+  # The colleague whose rows and access must survive the person's closure untouched — passed an
+  # explicit uid, which only has to differ from the person's: one identity per suite process
+  # (`Builders::DEFAULT_GITHUB_UID`), and a literal like "2002" will not be it.
   def colleague = @colleague ||= create_user(github_uid: "2002", github_handle: "hubot",
                                              installation_id: nil)
 

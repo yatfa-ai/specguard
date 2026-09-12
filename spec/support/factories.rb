@@ -1,8 +1,21 @@
 # frozen_string_literal: true
 
+require "securerandom"
+
 # Deliberately plain builders rather than a factory gem — the domain models are few and simple
 # enough that a fixture DSL would be more machinery than they justify.
 module Builders
+  # The default GitHub uid: one identity per suite process. Evaluated once, when this file is
+  # loaded, so every default mint within a run describes the same person — and two suites running
+  # concurrently (the shared-lane test database is normal fleet operation, not an exotic harness)
+  # describe different ones. A shared literal would have both suites inserting the same
+  # unique-index value inside their uncommitted transactions, where each insert waits on the
+  # other's entry until PostgreSQL declares a deadlock mid-file. `OmniAuthHelpers::DEFAULT_AUTH`
+  # reads this same constant, so the pairing a signed-in spec and a built-user spec rely on holds
+  # by construction — within a process, which is the only scope a run has. The pairing itself is
+  # asserted, not trusted to two copies of a literal: spec/lib/builders_fixture_identity_spec.rb.
+  DEFAULT_GITHUB_UID = "1#{SecureRandom.hex(4)}".freeze
+
   # Connected to GitHub by default — the same default, for the same reason, as the permissive
   # `FakeGithubApi`: a spec about sharing or API keys needs a user who can register a repository,
   # and should not have to describe a GitHub App installation to get one.
@@ -16,7 +29,7 @@ module Builders
   # the viewer's own, held in their session for the length of it (`GithubUserSession`), so a user
   # row holds no credential at all any more. A non-request spec passes one to
   # `InstallationRepositories` directly.
-  def create_user(github_uid: "1001", github_handle: "octocat", installation_id: 5001)
+  def create_user(github_uid: DEFAULT_GITHUB_UID, github_handle: "octocat", installation_id: 5001)
     User.create!(github_uid: github_uid, github_handle: github_handle).tap do |user|
       GithubInstallation.record(user: user, installation_id: installation_id, account_login: "acme") if installation_id
     end
