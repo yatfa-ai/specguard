@@ -3675,6 +3675,16 @@ RSpec.describe "Repository registration and API keys", type: :request do
   # every figure it prints. A revoked-and-presented repository therefore rendered byte-identically,
   # in neutral tone, to one nobody ever wired CI to.
   describe "the revoked-key marker on the repositories index" do
+    # `travel_to`, for the one example that discriminates the recency leg ("dates the sentence's
+    # recency from the newest refusal"): the two real-path refusal stamps must land in DIFFERENT
+    # time_ago buckets for the newest/oldest choice on `last_refused_at` to render differently,
+    # and only a moved clock puts real-path stamps six days apart. Included on this group rather
+    # than configured globally in `rails_helper` — the same scoping `repository_latest_run_spec.rb`
+    # states for its settling-axis example: no other spec in this file travels time, and a
+    # project-wide include for one example would put `travel_to` in reach of every spec that has
+    # done without it.
+    include ActiveSupport::Testing::TimeHelpers
+
     # The wording, READ FROM THE SEAM both surfaces render rather than typed out here — the rule
     # `rotated_label` in the block above is held to, for the same reason: a literal copied into a
     # spec is agreement that merely HOLDS TODAY.
@@ -3736,8 +3746,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # `:error`, on the refusing state's own rule — work is being destroyed, not merely absent.
       expect(card_for(repository)).to have_css(".text-app-error", text: revoked_label)
       # Against the seam's own figure rather than a literal date, so this pins the SOURCE: the
-      # oldest revocation (not the minute-old one beside it) and the real failure path's refusal
-      # stamp — the freshest presentation, since the card's sentence dates the NEWEST of those.
+      # oldest revocation (not the minute-old one beside it). The refusal stamp rides in the same
+      # seam call but is NOT discriminated here — both presentations happen milliseconds apart,
+      # so either stamp renders "less than a minute" and the assertion passes whichever leg the
+      # card reads. The recency half is held by the example below, which separates the two
+      # refusal stamps in time.
       expect(page_text).to include(
         ApplicationController.helpers.revoked_key_note(
           nightly.revoked_at, nightly.last_refused_at
@@ -3909,6 +3922,46 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(text).not_to include(revoked_label)
       expect(text).not_to include("still being presented")
       expect(text).to include("0 keys")
+    end
+
+    # Criterion 1's recency half, which its matcher cannot see: two refusal stamps minted by the
+    # real failure path inside one test process land milliseconds apart, so both render "less
+    # than a minute" and the newest/oldest choice on `last_refused_at` is invisible to every
+    # assertion the block already carries — flipping the seam's `.max` to `.min` reads the other
+    # stamp and changes nothing those matchers name. This example separates the two stamps the
+    # honest way: the FIRST presentation happens six days ago, so its refusal stamp is written
+    # by `touch_last_refused!` on the real failure path at a real (travelled) clock — no stamp is
+    # hand-written, the discipline the block's fixture helper states — and the second is
+    # presented now. The contrast case is the show indicator's plural example above, which pins
+    # this same aggregation by hand-placing its stamps; here the fixture walks the real path and
+    # the clock does the backdating.
+    # @intent: {"entity": "ApiKey", "action": "date recency from newest refusal", "behavior": "a repository whose newest refusal is seconds old but whose oldest refusal is six days old dates the card sentence's last-seen clause from the NEWEST refusal, reading less than a minute and never the six-day stamp", "layer": "request"}
+    it "dates the sentence's recency from the newest refusal, not the oldest" do
+      repository = create_repository(user: @user, github_full_name: "acme/recency-split")
+      nightly = travel_to(6.days.ago) { present_revoked_key(repository, "Nightly") }
+      main = present_revoked_key(repository, "Main")
+
+      get repositories_path
+
+      expect(page_text).to include(revoked_label)
+      # Both rows read from the seam, the block's own idiom: the OLDEST revocation (nightly's —
+      # six days ago, against main's minute-old one) beside the NEWEST refusal (main's, stamped
+      # seconds before the render).
+      expect(page_text).to include(
+        ApplicationController.helpers.revoked_key_note(
+          nightly.revoked_at, main.last_refused_at
+        )
+      )
+      # The sentence the `.max` → `.min` flip on the recency leg would render — the exact
+      # misreading the seam's comment forbids ("a last-seen age, never a claim of a present
+      # tense"): a pipeline refused seconds ago reported as six days silent.
+      expect(page_text).not_to include(
+        ApplicationController.helpers.revoked_key_note(
+          nightly.revoked_at, nightly.last_refused_at
+        )
+      )
+      # The flipped clause by name, the way criterion 1 names its own wrong reading.
+      expect(page_text).not_to include("last seen 6 days ago")
     end
   end
 
