@@ -394,6 +394,70 @@ RSpec.describe "GitHub App installation", type: :request do
       expect(response.body).to include("Reconnect to GitHub")
     end
 
+    # The notice's name lists ride the SESSION cookie — the same one this callback has just
+    # written the GitHub credential into — and the walk behind them can report up to five hundred
+    # installations (`GithubAppUserAuthorization::PER_PAGE * MAX_PAGES`), which uncapped overflows
+    # Rails' 4KB cookie ceiling into a 500 AFTER the rows are already committed.
+    # `MAX_NAMES_IN_NOTICE`'s comment carries the derivation and the measured numbers. These
+    # examples pin the cap itself: at it the sentence is the plain list it has always been, above
+    # it the sentence counts the accounts it does not name.
+    describe "the notice's capped name lists" do
+      def installation_rows(logins, first_id: 7000)
+        logins.each_with_index.map do |login, i|
+          { installation_id: first_id + i, account_login: login }
+        end
+      end
+
+      # @intent: {"entity": "GET /github/installation/callback", "action": "name every account at the cap", "behavior": "a reading reporting exactly MAX_NAMES_IN_NOTICE installations flashes the full to_sentence list with no and-K-more tail", "layer": "request"}
+      it "names every account in full at the cap" do
+        user = sign_in_via_github(installation: false)
+        logins = (1..GithubInstallationsController::MAX_NAMES_IN_NOTICE).map { |i| format("org-%02d", i) }
+        stub_user_authorization(*installation_rows(logins))
+
+        get github_installation_callback_path, params: { code: "abc" }
+
+        expect(flash[:notice]).to eq("Connected #{logins.to_sentence}.")
+      end
+
+      # @intent: {"entity": "GET /github/installation/callback", "action": "count accounts above the cap", "behavior": "a reading reporting the walk's 500-installation ceiling records all 500 rows and flashes the first MAX_NAMES_IN_NOTICE names plus an and-K-more tail, with the credential this callback stored still readable in the session", "layer": "request"}
+      it "counts the accounts it does not name above the cap, and stays inside the cookie ceiling" do
+        user = sign_in_via_github(installation: false)
+        logins = (1..500).map { |i| format("org-%03d", i) } # the walk's ceiling: PER_PAGE * MAX_PAGES
+        stub_user_authorization(*installation_rows(logins))
+
+        expect { get github_installation_callback_path, params: { code: "abc" } }
+          .to change { user.github_installations.count }.from(0).to(500)
+
+        expect(flash[:notice]).to eq(
+          "Connected #{logins.first(GithubInstallationsController::MAX_NAMES_IN_NOTICE).join(', ')}, " \
+          "and #{logins.size - GithubInstallationsController::MAX_NAMES_IN_NOTICE} more."
+        )
+        # The credential this callback just stored is still readable: an overflowed cookie would
+        # have raised CookieOverflow before here — AFTER the 500 rows above were already
+        # committed — and a near miss could have silently evicted the token instead.
+        expect(session[GithubUserSession::TOKEN_KEY]).to eq("ghu_from_callback")
+      end
+
+      # @intent: {"entity": "GET /github/installation/callback", "action": "cap the disconnected list too", "behavior": "a complete empty reading removing cap+5 standing rows flashes the first MAX_NAMES_IN_NOTICE names plus an and-K-more tail inside the disconnected sentence", "layer": "request"}
+      it "caps the disconnected list the same way" do
+        user = sign_in_via_github(installation: false)
+        extra = 5
+        logins = (1..(GithubInstallationsController::MAX_NAMES_IN_NOTICE + extra))
+                 .map { |i| format("org-%02d", i) }
+        logins.each_with_index do |login, i|
+          add_github_installation(user, installation_id: 7000 + i, account_login: login)
+        end
+        stub_user_authorization # a complete empty reading: GitHub reports none of them
+
+        get github_installation_callback_path, params: { code: "abc" }
+
+        expect(flash[:notice]).to eq(
+          "Disconnected #{logins.first(GithubInstallationsController::MAX_NAMES_IN_NOTICE).join(', ')}, " \
+          "and #{extra} more, which GitHub no longer reports for your account."
+        )
+      end
+    end
+
     # GitHub's list is its COMPLETE answer to what this user holds — the same walk that records
     # presence also states absence, and a row GitHub no longer names is a connection the user no
     # longer has. These examples pin the removal half: what gets removed, what can never be
