@@ -423,7 +423,7 @@ RSpec.describe "GitHub App installation", type: :request do
       # The ceiling applied mid-walk: the answer is a PARTIAL one, and its absences say nothing
       # about what exists. What it did read is still recorded — recording stays additive — but
       # nothing standing is removed on it.
-      # @intent: {"entity": "GET /github/installation/callback", "action": "never delete on incomplete reading", "behavior": "an incomplete reading records what it read and removes no existing row", "layer": "request"}
+      # @intent: {"entity": "GET /github/installation/callback", "action": "never delete on incomplete reading", "behavior": "an incomplete reading records what it read, removes no existing row, and says the answer could not be read in full", "layer": "request"}
       it "records what an incomplete reading reports but removes nothing on it" do
         user = sign_in_via_github
         add_github_installation(user, installation_id: 888, account_login: "beta")
@@ -433,6 +433,10 @@ RSpec.describe "GitHub App installation", type: :request do
           .to change { user.github_installations.count }.from(2).to(3)
 
         expect(user.reload.github_installations.pluck(:installation_id)).to contain_exactly(5001, 888, 777)
+        expect(flash[:notice]).to eq(
+          "Connected acme. GitHub's answer could not be read in full, so your connected accounts " \
+          "were left unchanged. Try connecting again."
+        )
       end
 
       # The one deletion that would be worse than the drift this slice fixes: a garbled 200 read
@@ -440,7 +444,7 @@ RSpec.describe "GitHub App installation", type: :request do
       # the REAL service — a stubbed `authorize` cannot produce a malformed body, because the
       # unreadable-body half of Trap 1 is decided inside the walk — with the walk stopping at the
       # page it cannot read. Nothing is removed, and the rows stand.
-      # @intent: {"entity": "GET /github/installation/callback", "action": "never delete on unreadable answer", "behavior": "a 200 installations body that is not the promised object removes nothing, answers the no-installations notice, and stops the walk at one page request", "layer": "request"}
+      # @intent: {"entity": "GET /github/installation/callback", "action": "never delete on unreadable answer", "behavior": "a 200 installations body that is not the promised object removes nothing, answers an unreadable-answer notice, and stops the walk at one page request", "layer": "request"}
       it "removes nothing when GitHub's answer cannot be read" do
         user = sign_in_via_github
         add_github_installation(user, installation_id: 888, account_login: "beta")
@@ -458,8 +462,32 @@ RSpec.describe "GitHub App installation", type: :request do
         get github_installation_callback_path, params: { code: "abc" }
 
         expect(user.reload.github_installations.pluck(:installation_id)).to contain_exactly(5001, 888)
-        expect(flash[:notice]).to eq("GitHub reported no SpecGuard installations for your account yet.")
+        expect(flash[:notice]).to eq(
+          "GitHub's answer could not be read in full, so your connected accounts were left " \
+          "unchanged. Try connecting again."
+        )
         expect(http).to have_received(:request).exactly(3).times
+      end
+
+      # The sentence half of the same fence, on the surface that makes the sentence matter: this
+      # flash lands on /account directly above the Connected-accounts list, so an incomplete
+      # reading answering "no SpecGuard installations" would deny accounts the user can see
+      # standing below it. The walk declares the reading incomplete; nothing is recorded and
+      # nothing removed, and the notice says the answer could not be read instead of calling it
+      # empty — with the exception alert's own remedy, because the state is that alert's.
+      # @intent: {"entity": "GET /github/installation/callback", "action": "answer an incomplete reading honestly", "behavior": "an incomplete reading on a user holding connected accounts flashes the unreadable-answer notice and leaves their rows standing", "layer": "request"}
+      it "flashes the unreadable-answer notice, not the no-installations one, on an incomplete reading" do
+        user = sign_in_via_github
+        add_github_installation(user, installation_id: 888, account_login: "beta")
+        stub_user_authorization(complete: false)
+
+        get github_installation_callback_path, params: { code: "abc" }
+
+        expect(user.reload.github_installations.pluck(:installation_id)).to contain_exactly(5001, 888)
+        expect(flash[:notice]).to eq(
+          "GitHub's answer could not be read in full, so your connected accounts were left " \
+          "unchanged. Try connecting again."
+        )
       end
 
       # Fail-closed covers removal too: a user whose exchange failed is exactly as connected as
