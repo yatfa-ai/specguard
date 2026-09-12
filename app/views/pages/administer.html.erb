@@ -358,6 +358,60 @@
         <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= administration_guide_list_curl_snippet(endpoint) %><% end %>
       </div>
 
+      <%# The request side, stated in advance — the same move the grant section makes for
+          registration. Transcribed from RepositoryNarrowing, the module this endpoint shares
+          with the card grid, so these are the server's semantics rather than the page's
+          paraphrase of them. Each ask is named by parameter and never counted, so the table
+          survives the module growing a next ask. %>
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">Asking for less than everything</p>
+        <p class="text-sm text-app-content-secondary">
+          The call above lists everything the credential can open. Query parameters narrow,
+          partition or reorder that answer. None of them adds a field, and none of them can reach
+          past the credential: a repository the key cannot open is unreachable with or without
+          them.
+        </p>
+        <%= render UI::TableComponent.new(columns: ["Ask", "What it does"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">?q=</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              A case-insensitive substring of <code>full_name</code>, with the wildcard
+              characters <code>%</code> and <code>_</code> matched as text:
+              <code>org/my_repo</code> finds that name and not <code>org/my-repo</code>.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">
+              ?role=owned<br>
+              ?role=shared
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <code>owned</code> keeps what the key's person owns; <code>shared</code> keeps what
+              was shared with them through a membership. They partition the answer exactly —
+              every repository served lands on one side, nothing on both, nothing dropped.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">?sort=stale</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Reorders by last ingestion: repositories CI has never reached come first, then the
+              least-recently-ingested, newest last. Ties break on <code>full_name</code>, so the
+              same URL answers the same order — two readings still diff.
+            </td>
+          </tr>
+        <% end %>
+        <p class="text-sm text-app-content-secondary">
+          Under an <code>sga_</code> agent key these asks answer with a difference:
+          <code>?q=</code> and <code>?sort=stale</code> narrow and reorder the granted set
+          normally, while <code>?role=</code> draws an owner/member line that a credential
+          speaking for nobody does not have. An agent key asking for <code>owned</code> or
+          <code>shared</code> is answered with its whole granted set, exactly as if it had asked
+          nothing. The drop is silent — no error, and nothing in the response marks it — so a
+          caller behind an agent key cannot learn from the response alone that its
+          <code>?role=</code> ask was set aside.
+        </p>
+      </div>
+
       <div class="space-y-2">
         <p class="section-label text-app-content-secondary">What each entry carries</p>
         <%= render UI::TableComponent.new(columns: ["Field", "What it is"]) do %>
@@ -401,9 +455,35 @@
       </div>
 
       <p class="text-sm text-app-content-secondary">
-        Ordered by <code>full_name</code>, which is stable enough to diff two readings against each
-        other. Nothing here promises an ordering by id.
+        By default the list is ordered by <code>full_name</code>, which is stable enough to diff
+        two readings against each other. Nothing here promises an ordering by id.
       </p>
+
+      <%# The response's credential-shaped top level (SPGD-977). This page's founding defect was
+          a precondition stated nowhere in advance, and an agent key's grant is the same shape of
+          discovery: the 403 sentence names no capability, so the block that ends the
+          trial-and-error is published here rather than left for the response to prove. %>
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">Under an agent key: the credential block</p>
+        <p class="text-sm text-app-content-secondary">
+          An agent-key response also carries <code>credential.capabilities</code> at the top
+          level, beside <code>repositories</code>: the key's own grant, read through the same
+          policy the endpoints enforce, so it cannot disagree with a <code>403</code> the same key
+          would get. A key granted nothing beyond reading finds <code>view: true</code> there;
+          every capability in the policy's vocabulary answers with a boolean, so a verb the key
+          lacks reads <code>false</code> rather than going missing.
+        </p>
+        <p class="text-sm text-app-content-secondary">
+          Under an <code>sgu_</code> personal key the <code>credential</code> key is absent rather
+          than <code>null</code>: a person's key has no mint-time permission set, and a null would
+          claim one exists and is empty.
+        </p>
+        <p class="text-sm text-app-content-secondary">
+          This is the move this page was written for, applied to the agent key: what the
+          credential may do is stated in advance, rather than discovered by trying verbs against
+          a <code>403</code> that names no capability.
+        </p>
+      </div>
     </div>
   <% end %>
 
