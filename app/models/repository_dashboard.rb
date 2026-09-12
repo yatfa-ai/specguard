@@ -216,6 +216,42 @@ class RepositoryDashboard
         if @agent_api_keys.any?
           Repository.where(id: @agent_api_keys.flat_map(&:repository_ids).uniq).index_by(&:id)
         end
+      # THE VERIFY HALF OF THE OFFBOARDING ARC, ON THE PAGE THAT HOLDS THE REVOKE LEVER
+      # (SPGD-1054) — the still-presented triage `Api::V1::UserRepositoryAgentKeysController#
+      # presented_revoked` (SPGD-1023) serves over the API, carried to the web panel that hosts
+      # the Revoke button for these very keys. Until now a revoked agent key whose dead token
+      # kept arriving was visible only to its MINTER (/account is self-scoped,
+      # `AccountsController`'s `current_user.agent_api_keys`) and to a `keys.manage` TOKEN
+      # holder — the web revoker who is not the minter, the common case, had to curl for the
+      # fact this page already declares the worst state a repository can be in (the indicator's
+      # state 1 ranks it above everything, and the `sgk_` half of it renders beside this panel
+      # off the whole-table partition above).
+      #
+      # THE CONSTRUCTION IS THE API'S, verbatim, for the reason that controller's comment
+      # states in full: a revoked-only load (`revoked.covering`) keeps `ApiKeyPartition.for`
+      # safe on agent rows — its constructor reads `rotated_and_unused?` off the live side
+      # (`api_key_partition.rb`), and `AgentApiKey` has no such predicate because agent keys
+      # have no rotation — while an empty live side never asks for it. The presented side reads
+      # through the partition, the one place the collection split is spelled
+      # (`spec/models/api_key_partition_spec.rb` holds that repo-wide property), so this page
+      # and the API cannot disagree about a key. Filtering these rows by hand here would be a
+      # second spelling of the split.
+      #
+      # ONE further SELECT against `agent_api_keys`, beside the listing's — the page's pinned
+      # agent-SELECT count and the owner's absolute budget both move by it, deliberately and
+      # with their why commented at the pins. The alternative that keeps both pins green —
+      # widening the listing to the whole table and partitioning it like the `sgk_` side —
+      # needs an honest `rotated_and_unused?` on `AgentApiKey`, a model-contract widening this
+      # platform has twice deferred (SPGD-1023's review lane chose revoked-only scoping at the
+      # same fork); the pins travel with that widening, and the section code is identical.
+      #
+      # A key revoked and never presented again produces no row — nothing is synthesized, on
+      # the honest-bound rule the indicator's state 1 and the API endpoint share — so the
+      # section's emptiness is the honest answer, not an absence of the read.
+      @presented_revoked_agent_keys =
+        ApiKeyPartition.for(AgentApiKey.revoked.covering(@repository)
+                                          .eager_load(:user).order(:id))
+                       .presented_revoked_rows
     end
     # THE RETIREMENT SPLIT, one object off the ONE SELECT above. `ApiKeyPartition` owns the
     # live / revoked / stranded / presented-revoked split and every figure derived from it — the
