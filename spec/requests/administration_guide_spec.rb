@@ -438,4 +438,151 @@ RSpec.describe "The public administration guide", type: :request do
       expect(empty_state).not_to match(/read the repositories/i)
     end
   end
+
+  # SPGD-1069 — the list section's REQUEST side, under the standard the registration block above
+  # set: a sentence the page publishes about an endpoint is asserted against the endpoint that
+  # serves it, never against the page's own prose. The asks' server-side behavior already has its
+  # landed pins (spec/requests/api/v1/user_repositories_spec.rb, "narrowing the list — ?q=,
+  # ?role=, ?sort=stale"; the agent-key clamp in spec/requests/api/v1/agent_credential_spec.rb) —
+  # neither is weakened here. This block asks the narrower question those files cannot: does the
+  # page say what the server does, and does the server do what the page says.
+  describe "the list section's asks and credential block, against the server" do
+    let(:person) { create_user(github_uid: "3001", github_handle: "list-owner") }
+    let(:stranger) { create_user(github_uid: "3002", github_handle: "list-sharer") }
+
+    # One of each population, so the ?role= partition below proves the LINE and not a presence:
+    # owned, shared-through-a-membership, and a second owned repository that was never ingested —
+    # which the ?sort=stale example needs so its stale order and the default name order disagree.
+    let!(:owned) { create_repository(user: person, github_full_name: "acme/billing-service") }
+    let!(:shared) do
+      create_repository(user: stranger, github_full_name: "acme/my_ledger").tap do |repository|
+        create_membership(repository: repository, user: person)
+      end
+    end
+    let!(:never_ingested) { create_repository(user: person, github_full_name: "acme/zeta-tools") }
+
+    let(:user_api_key) { create_user_api_key(user: person) }
+    # The minimal read-only grant, over both halves of the person's own set — the credential the
+    # page's agent-key sentences are written about.
+    let!(:agent_api_key) do
+      create_agent_api_key(user: person, repositories: [owned, never_ingested], permissions: [])
+    end
+
+    def get_repositories(token, params: {})
+      get "/api/v1/repositories", params: params, headers: bearer(token)
+    end
+
+    def full_names
+      response.parsed_body["repositories"].map { |row| row["full_name"] }
+    end
+
+    # Captured ONCE, here, while the guide is still the response — the same discipline
+    # #published_request_body documents above, because the examples go on to GET the endpoint and
+    # `page_text` reads whatever the last response was.
+    before do
+      get administration_guide_path
+      @published_page = page_text
+    end
+
+    attr_reader :published_page
+
+    # Presence, in the file's own register: the asks are named by parameter — never counted — and
+    # the behavioural examples below are what keep these pins from being text-against-itself.
+    it "names each ask the endpoint reads, by parameter" do
+      expect(published_page).to include("?q=")
+      expect(published_page).to include("?role=owned")
+      expect(published_page).to include("?role=shared")
+      expect(published_page).to include("?sort=stale")
+    end
+
+    it "names the credential block by its path" do
+      expect(published_page).to include("credential.capabilities")
+    end
+
+    # The page's example claim, verbatim on the server: an underscore is text, so the twin names
+    # with `-` and `_` do not collapse into one answer.
+    it "documents ?q= the way the server answers it — wildcards literal" do
+      create_repository(user: person, github_full_name: "acme/my_repo")
+      create_repository(user: person, github_full_name: "acme/my-repo")
+
+      get_repositories(user_api_key.raw_token, params: { q: "my_repo" })
+
+      expect(response).to have_http_status(:ok)
+      expect(full_names).to eq(["acme/my_repo"])
+    end
+
+    # The partition claim the page makes: everything served lands on one side, nothing on both,
+    # nothing dropped.
+    it "documents ?role= the way the server answers it — a partition with no overlap" do
+      get_repositories(user_api_key.raw_token, params: { role: "owned" })
+      owned_side = full_names
+
+      get_repositories(user_api_key.raw_token, params: { role: "shared" })
+      shared_side = full_names
+
+      get_repositories(user_api_key.raw_token)
+      whole_list = full_names
+
+      expect(owned_side).to eq(["acme/billing-service", "acme/zeta-tools"])
+      expect((shared_side + owned_side).sort).to eq(whole_list.sort)
+      expect(shared_side & owned_side).to be_empty
+    end
+
+    # The ordering claim: never-ingested first, then least-recently-ingested first. The fixture is
+    # arranged so the stale sequence is the exact REVERSE of the default name order the section
+    # also states, so an implementation that ignored the ask answers a different sequence and this
+    # goes red. The second read pins the determinism the page promises — the same URL answers the
+    # same order.
+    it "documents ?sort=stale the way the server answers it" do
+      create_test_run(repository: owned, commit_sha: "gide1069a", total_specs_count: 10,
+                      created_at: 1.hour.ago)
+      create_test_run(repository: shared, commit_sha: "gide1069b", total_specs_count: 10,
+                      created_at: 3.months.ago)
+
+      get_repositories(user_api_key.raw_token, params: { sort: "stale" })
+
+      expect(full_names).to eq(["acme/zeta-tools", "acme/my_ledger", "acme/billing-service"])
+
+      get_repositories(user_api_key.raw_token, params: { sort: "stale" })
+
+      expect(full_names).to eq(["acme/zeta-tools", "acme/my_ledger", "acme/billing-service"])
+    end
+
+    # The clamp, from the reader's side: both role asks answer the whole granted set with a 200 —
+    # never a partition, never an error — which is exactly the silent drop the page describes.
+    it "documents the agent-key clamp the way the server answers it" do
+      get_repositories(agent_api_key.raw_token, params: { role: "owned" })
+
+      expect(response).to have_http_status(:ok)
+      expect(full_names).to eq(["acme/billing-service", "acme/zeta-tools"])
+
+      get_repositories(agent_api_key.raw_token, params: { role: "shared" })
+
+      expect(response).to have_http_status(:ok)
+      expect(full_names).to eq(["acme/billing-service", "acme/zeta-tools"])
+    end
+
+    # The other half of the credential-conditional sentence: the asks that ARE viewer-independent
+    # answer normally under an agent key, narrowed to the granted set.
+    it "documents that ?q= still narrows under an agent key" do
+      get_repositories(agent_api_key.raw_token, params: { q: "zeta" })
+
+      expect(response).to have_http_status(:ok)
+      expect(full_names).to eq(["acme/zeta-tools"])
+    end
+
+    # The grant block, from the reader's side: served under the agent key with the empty-set
+    # reading the page names, and absent — not nulled — under a person key.
+    it "documents the credential block the way the server serves it" do
+      get_repositories(agent_api_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.dig("credential", "capabilities", "view")).to eq(true)
+
+      get_repositories(user_api_key.raw_token)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body).not_to have_key("credential")
+    end
+  end
 end
