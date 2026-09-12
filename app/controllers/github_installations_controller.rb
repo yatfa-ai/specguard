@@ -107,7 +107,7 @@ class GithubInstallationsController < ApplicationController
     recorded = record(authorization.installations)
     disconnected = reconcile(authorization)
 
-    redirect_to destination, notice: connected_notice(recorded, disconnected)
+    redirect_to destination, notice: connected_notice(recorded, disconnected, complete: authorization.complete?)
   rescue GithubApi::Error => e
     # Failing closed: nothing is recorded and no credential is kept, so a user whose exchange failed
     # is exactly as connected as they were before — which is the only safe reading of "GitHub would
@@ -250,9 +250,19 @@ class GithubInstallationsController < ApplicationController
   # silence would leave a vanished account unexplained on the very page that just reconciled it
   # away. "Disconnected" is the Disconnect button's own verb, so one sentence carries the same
   # meaning from whichever door the row went.
-  def connected_notice(recorded, disconnected)
+  #
+  # The walk's completeness flag is spoken here as well as acted on in `reconcile`. The
+  # no-installations sentence belongs to a COMPLETE reading only: an unreadable or truncated
+  # answer is not GitHub reporting none, and on the page this flash lands on the connected
+  # accounts are listed right below it, so the empty sentence there would deny accounts the
+  # user can see standing. An incomplete reading says what happened instead — the answer could
+  # not be read in full, nothing was removed on it (`reconcile`'s fence, now announced), and
+  # the remedy is the exception alert's own: try connecting again.
+  def connected_notice(recorded, disconnected, complete:)
     if recorded.empty? && disconnected.empty?
-      return "GitHub reported no SpecGuard installations for your account yet."
+      return "GitHub reported no SpecGuard installations for your account yet." if complete
+
+      return incomplete_reading_notice
     end
 
     sentences = []
@@ -261,7 +271,17 @@ class GithubInstallationsController < ApplicationController
       sentences << "Disconnected #{disconnected.map(&:display_name).to_sentence}, " \
                    "which GitHub no longer reports for your account."
     end
+    sentences << incomplete_reading_notice unless complete
     sentences.join(" ")
+  end
+
+  # The unreadable-answer arm of the notice. GitHub's answer was never successfully read — the
+  # same epistemic state as the failed exchange below — so the sentence names that, the
+  # consequence (nothing was removed on it, per `reconcile`'s fence), and the way out, in that
+  # alert's register.
+  def incomplete_reading_notice
+    "GitHub's answer could not be read in full, so your connected accounts were left unchanged. " \
+      "Try connecting again."
   end
 
   def connection_failed_alert
