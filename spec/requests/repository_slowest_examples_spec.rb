@@ -268,7 +268,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(rows.first[:location]).to eq("#{order_spec}:1")
       expect(panel.first("tbody tr").all("td").first.all("a").size).to eq(2)
       expect(panel.first("tbody tr").all("td").first.all("a").last[:href]).to eq(
-        "https://github.com/acme/billing-service/blob/feedfacecafe0001/#{order_spec}#L1"
+        "https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/feedfacecafe0001/#{order_spec}#L1"
       )
     end
 
@@ -355,9 +355,9 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     def definition_hrefs = panel.all("tbody tr").map { |row| definition_link(row)[:href] }
 
-    def blob(sha, path, line) = "https://github.com/acme/billing-service/blob/#{sha}/#{path}#L#{line}"
+    def blob(sha, path, line) = "https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/#{sha}/#{path}#L#{line}"
 
-    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinate to github", "behavior": "each ranked row links its coordinate to github.com/acme/billing-service/blob/feedfacecafe0001 with #L30 and #L12 anchors, the printed coordinate as the link text", "layer": "request"}
+    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinate to github", "behavior": "each ranked row links its coordinate to that line on the repository's GitHub blob URL at the run's commit, with #L30 and #L12 anchors, the printed coordinate as the link text", "layer": "request"}
     it "links each ranked row's coordinate to that line on GitHub" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
@@ -644,7 +644,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       # The definition site and the run-in drill-in, and no third link: no history ask was added.
       expect(links.size).to eq(2)
       expect(links.first[:href])
-        .to eq("https://github.com/acme/billing-service/blob/feedfacecafe0001/spec/models/ledger_spec.rb#L88")
+        .to eq("https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/feedfacecafe0001/spec/models/ledger_spec.rb#L88")
       expect(links.first[:target]).to eq("_blank")
       expect(links.map { |link| link[:href] }).to all(satisfy { |href| !href.include?("unstable_test=") })
     end

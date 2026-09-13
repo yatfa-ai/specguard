@@ -55,7 +55,7 @@ RSpec.describe "Repository spec file examples", type: :request do
 
   def definition_hrefs = definition_links.map { |link| link[:href] }
 
-  def blob(sha, path, line) = "https://github.com/acme/billing-service/blob/#{sha}/#{path}#L#{line}"
+  def blob(sha, path, line) = "https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/#{sha}/#{path}#L#{line}"
 
   # The example's NAME, without the definition-site line rendered under it. The two share one cell,
   # so a whole-cell read would turn every ordering assertion in this file into an assertion about

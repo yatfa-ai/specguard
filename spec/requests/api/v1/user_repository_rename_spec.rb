@@ -70,7 +70,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
       rename("acme/ledger", id: stranger_repository.id)
 
       expect(response).to have_http_status(:not_found)
-      expect(stranger_repository.reload.github_full_name).to eq("acme/billing-service")
+      expect(stranger_repository.reload.github_full_name).to eq(Builders::DEFAULT_GITHUB_FULL_NAME)
     end
 
     # @intent: { entity: "repository", action: "refuse a non-owner", behavior: "a non-owner member is refused with 403 even when granted repo.delete, and the name is left alone", layer: "request" }

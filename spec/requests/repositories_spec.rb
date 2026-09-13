@@ -13,7 +13,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
   # @intent: {"entity": "Repository", "action": "register repository", "behavior": "a signed-in user posting a valid org/repo name creates exactly one Repository owned by that user and redirects to its show page", "layer": "request"}
   it "registers a GitHub repository for the signed-in user" do
     expect {
-      post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
+      post repositories_path,
+           params: { repository: { github_full_name: Builders::DEFAULT_GITHUB_FULL_NAME } }
     }.to change(Repository, :count).by(1)
 
     repository = Repository.last
@@ -4947,6 +4948,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   describe "renaming a repository" do
     # @intent: {"entity": "Repository", "action": "rename preserving data", "behavior": "patching a corrected org/repo name redirects to the show page, updates github_full_name, and leaves the key, run and spec-intent rows all intact", "layer": "request"}
     it "updates the name without touching keys, runs or intents" do
+      stub_github(repos: [github_repo("acme/billing-service")])
       repository = create_repository(user: @user, github_full_name: "acme/billing-servce")
       repository.api_keys.create!(name: "CI")
       repository.test_runs.create!(commit_sha: "a" * 40, branch: "main")
@@ -4985,11 +4987,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       expect(response).to have_http_status(:unprocessable_content)
       expect(response.body).to include("must look like org/repo")
-      expect(repository.reload.github_full_name).to eq("acme/billing-service")
+      expect(repository.reload.github_full_name).to eq(Builders::DEFAULT_GITHUB_FULL_NAME)
 
       # The rejected input belongs in the form field only. The breadcrumb and title identify
       # the record, so they must still name the repository as it is actually stored.
-      expect(response.body).to include("acme/billing-service")
+      expect(response.body).to include(Builders::DEFAULT_GITHUB_FULL_NAME)
     end
 
     # @intent: {"entity": "Repository", "action": "reject taken name", "behavior": "patching a name another user already owns answers 422 rather than raising, and leaves the stored name unchanged", "layer": "request"}
@@ -5001,14 +5003,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
       patch repository_path(repository), params: { repository: { github_full_name: "other/repo" } }
 
       expect(response).to have_http_status(:unprocessable_content)
-      expect(repository.reload.github_full_name).to eq("acme/billing-service")
+      expect(repository.reload.github_full_name).to eq(Builders::DEFAULT_GITHUB_FULL_NAME)
     end
 
     # @intent: {"entity": "Repository", "action": "accept no-op rename", "behavior": "patching the unchanged name redirects to the show page with no Renamed flash", "layer": "request"}
     it "accepts a save that leaves the name unchanged" do
       repository = create_repository(user: @user)
 
-      patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }
+      patch repository_path(repository),
+            params: { repository: { github_full_name: Builders::DEFAULT_GITHUB_FULL_NAME } }
 
       expect(response).to redirect_to(repository_path(repository))
       expect(flash[:notice]).not_to include("Renamed")
@@ -5016,6 +5019,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
     # @intent: {"entity": "Repository", "action": "confirm rename in flash", "behavior": "an actual rename sets the notice to exactly Renamed to acme/billing-service.", "layer": "request"}
     it "confirms the rename in the flash when the name actually changed" do
+      stub_github(repos: [github_repo("acme/billing-service")])
       repository = create_repository(user: @user, github_full_name: "acme/billing-servce")
 
       patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }

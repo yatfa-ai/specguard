@@ -84,7 +84,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
   def row_hrefs = row_links.map { |link| link[:href] }
 
-  def blob(sha, path, line) = "https://github.com/acme/billing-service/blob/#{sha}/#{path}#L#{line}"
+  def blob(sha, path, line) = "https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/#{sha}/#{path}#L#{line}"
 
   def ingest(repository, specs, commit_sha: "feedfacecafe0001", **attrs)
     Ingest::RunRecorder.record(
@@ -479,7 +479,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # a narrower question; this one hands them a task, and the task is singular and known — open that
   # file at that line and write an `@intent`. Until now the column printed where to go and stopped.
   describe "the definition site as a link" do
-    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinates to github", "behavior": "the three definition links point at github.com/acme/billing-service/blob/feedfacecafe0001 anchors #L7, #L30 and #L9 in list order", "layer": "request"}
+    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinates to github", "behavior": "the three definition links point at the repository's GitHub blob URL at the run's commit, anchors #L7, #L30 and #L9 in list order", "layer": "request"}
     it "links each row's coordinate to that line on GitHub" do
       get repository_path(debt_run, spec_directory: area)
 

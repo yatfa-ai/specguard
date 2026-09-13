@@ -16,6 +16,20 @@ module Builders
   # asserted, not trusted to two copies of a literal: spec/lib/builders_fixture_identity_spec.rb.
   DEFAULT_GITHUB_UID = "1#{SecureRandom.hex(4)}".freeze
 
+  # The default `github_full_name`: one per suite process, for the same reason and by the same
+  # mechanism as the uid above. It keeps the `org/repo` shape on purpose — `normalize_full_name`,
+  # `derive_name` and every failure message a mangled default would produce all assume it — so the
+  # only thing that varies between processes is the suffix. Within one process the value is
+  # constant, which is the documented contract a repeat-or-conflict flow relies on: an example that
+  # mints two default repositories, or registers a name and then registers it again, still meets
+  # itself on the unique index exactly as before. What no two processes do any more is both insert
+  # the same value into `index_repositories_on_github_full_name` inside their uncommitted
+  # transactions — the interleaving that deadlocks two concurrent suites mid-file. Both minting
+  # seams (`create_repository`, `register_repository`) read this one constant, so the model-level
+  # and HTTP-level fixtures share an identity the way the uid's two seams do. The property is
+  # asserted, not trusted: spec/lib/builders_fixture_identity_spec.rb.
+  DEFAULT_GITHUB_FULL_NAME = "acme/billing-service-#{SecureRandom.hex(4)}".freeze
+
   # Connected to GitHub by default — the same default, for the same reason, as the permissive
   # `FakeGithubApi`: a spec about sharing or API keys needs a user who can register a repository,
   # and should not have to describe a GitHub App installation to get one.
@@ -35,7 +49,7 @@ module Builders
     end
   end
 
-  def create_repository(user: create_user, github_full_name: "acme/billing-service")
+  def create_repository(user: create_user, github_full_name: DEFAULT_GITHUB_FULL_NAME)
     user.repositories.create!(github_full_name: github_full_name)
   end
 
@@ -205,7 +219,14 @@ module RequestBuilders
   # 404s in `current_repository` and passes a `:not_found` example for the wrong reason. Reading
   # the redirect also survives `Repository#normalize_full_name` rewriting the posted value, and
   # turns a POST that never registered into an error here rather than a puzzle further down.
-  def register_repository(full_name = "acme/billing-service")
+  #
+  # The default is `Builders::DEFAULT_GITHUB_FULL_NAME` — the same per-process identity
+  # `create_repository` mints with — so the model-level and HTTP-level seams cannot hand two
+  # concurrent suite processes the same value to insert into the repositories unique index. Within
+  # one process the default is constant, which is what every repeat-or-conflict registration flow
+  # relies on: registering the default twice in one example still meets the same name, and the
+  # 422 it meets on the second POST is the same refusal it has always produced.
+  def register_repository(full_name = Builders::DEFAULT_GITHUB_FULL_NAME)
     post repositories_path, params: { repository: { github_full_name: full_name } }
 
     unless response.redirect?

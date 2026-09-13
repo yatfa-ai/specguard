@@ -42,7 +42,8 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
       expect(GithubRegistrationGrant.where(user_id: @user.id)).to be_empty
 
       expect {
-        post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
+        post repositories_path,
+             params: { repository: { github_full_name: Builders::DEFAULT_GITHUB_FULL_NAME } }
       }.to change(Repository, :count).by(1)
     end
 
@@ -52,7 +53,8 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
                                 captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.day)
 
       expect {
-        post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
+        post repositories_path,
+             params: { repository: { github_full_name: Builders::DEFAULT_GITHUB_FULL_NAME } }
       }.to change(Repository, :count).by(1)
     end
 
@@ -65,7 +67,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
       patch repository_path(repository), params: { repository: { github_full_name: "acme/renamed" } }
 
       expect(response).to have_http_status(:unprocessable_content)
-      expect(repository.reload.github_full_name).to eq("acme/billing-service")
+      expect(repository.reload.github_full_name).to eq(Builders::DEFAULT_GITHUB_FULL_NAME)
     end
   end
 
@@ -97,7 +99,8 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
       repository = create_repository(user: @user)
       fake = stub_github(repos: [github_repo("acme/billing-service")])
 
-      patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }
+      patch repository_path(repository),
+            params: { repository: { github_full_name: Builders::DEFAULT_GITHUB_FULL_NAME } }
 
       expect(response).to redirect_to(repository_path(repository))
       expect(fake.calls_to(:repositories)).to eq(0)
