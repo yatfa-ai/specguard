@@ -253,26 +253,36 @@ class GithubInstallationsController < ApplicationController
   # very callback came to fix. So the list is capped here, in the data, rather than by moving the
   # session somewhere else.
   #
-  # The names are GitHub logins, which GitHub limits to 39 characters; the walk that feeds the
-  # list stops at `PER_PAGE * MAX_PAGES` = 500 installations (`GithubAppUserAuthorization`), so
-  # the uncapped sentences run to five hundred 39-character names each. Measured end to end
-  # through the real callback on a stubbed GitHub — the `_specguard_session` Set-Cookie bytesize,
-  # worst case: BOTH lists above the cap, 39-character logins, and the incomplete-reading
-  # sentence also present:
+  # The names are GitHub logins, which GitHub limits to 39 characters (and the
+  # `account_login`-less fallback, "Installation <id>", renders well under that for any realistic
+  # id); the walk feeding the lists stops at `PER_PAGE * MAX_PAGES` = 500 installations
+  # (`GithubAppUserAuthorization`), so an uncapped sentence runs to five hundred such names.
+  # Above the cap a list's rendered size stops depending on its count — cap names plus an
+  # and-K-more tail is all either sentence can grow to — so the worst case to budget is any
+  # reading that puts BOTH lists over the cap at once. That is a COMPLETE reading: on an
+  # incomplete one `reconcile` removes nothing (its fence), the Disconnected sentence has
+  # nothing to name, and the incomplete-reading sentence can only ride a recorded-over-cap list,
+  # which measures strictly smaller.
   #
-  #   cap | notice |  cookie
-  #   ----|--------|---------
-  #    20 |    956 |   2,364
-  #    25 |  1,161 |   2,718   <- this constant: ~1.3KB of headroom left
-  #    30 |  1,366 |   3,128
-  #    40 |  1,776 |   3,882   <- last size that fits, with almost none to spare
-  #    50 |  1,981 |   4,414   <- ActionDispatch::Cookies::CookieOverflow
+  # Measured end to end through the real callback on the stub seam the specs drive, at GitHub's
+  # 39-character login ceiling, both lists over the cap, complete reading — the cookie sized the
+  # way the ceiling check itself sizes it (`_specguard_session` name + serialized value; "notice"
+  # is the flash string's own bytesize):
   #
-  # 25 keeps over a kilobyte of headroom for everything else the session may one day carry,
-  # while still naming twenty-five accounts — a list long past the point where the reader wants
-  # names rather than a count. Every size over it reads "…, and K more." — honest about the
-  # count where the count is the news.
-  MAX_NAMES_IN_NOTICE = 25
+  #   cap | notice | cookie
+  #   ----|--------|-------
+  #    10 |    917 |  2,158
+  #    15 |  1,327 |  2,882   <- this constant: ~1.2KB of headroom
+  #    20 |  1,737 |  3,614
+  #    23 |  1,983 |  4,050   <- last size the ceiling tolerates, with almost none to spare
+  #    24 |    —   |  4,194   <- ActionDispatch::Cookies::CookieOverflow
+  #
+  # 15 leaves over a kilobyte of that measured worst case unspent — margin for everything else
+  # the session carries today and may carry tomorrow, spent deliberately rather than traded for
+  # a few more names in a list long past the point where the reader wants names rather than a
+  # count. Every size over it reads "…, and K more." — honest about the count where the count is
+  # the news.
+  MAX_NAMES_IN_NOTICE = 15
 
   # Names the accounts, because "connected" is not the same sentence when a user expected two
   # organizations and GitHub reported one. An empty result is its own case: GitHub confirmed the

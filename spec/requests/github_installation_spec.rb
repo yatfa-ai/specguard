@@ -400,7 +400,10 @@ RSpec.describe "GitHub App installation", type: :request do
     # Rails' 4KB cookie ceiling into a 500 AFTER the rows are already committed.
     # `MAX_NAMES_IN_NOTICE`'s comment carries the derivation and the measured numbers. These
     # examples pin the cap itself: at it the sentence is the plain list it has always been, above
-    # it the sentence counts the accounts it does not name.
+    # it the sentence counts the accounts it does not name. The over-cap examples drive
+    # 39-character logins — GitHub's login ceiling — and the budget example puts BOTH lists over
+    # the cap at once, the derivation's own worst case, so a constant that only fits against
+    # short names fails here rather than in production.
     describe "the notice's capped name lists" do
       def installation_rows(logins, first_id: 7000)
         logins.each_with_index.map do |login, i|
@@ -419,31 +422,51 @@ RSpec.describe "GitHub App installation", type: :request do
         expect(flash[:notice]).to eq("Connected #{logins.to_sentence}.")
       end
 
-      # @intent: {"entity": "GET /github/installation/callback", "action": "count accounts above the cap", "behavior": "a reading reporting the walk's 500-installation ceiling records all 500 rows and flashes the first MAX_NAMES_IN_NOTICE names plus an and-K-more tail, with the credential this callback stored still readable in the session", "layer": "request"}
+      # @intent: {"entity": "GET /github/installation/callback", "action": "pin the cookie budget at the derivation's worst case", "behavior": "a complete reading reporting the walk's 500-installation ceiling at 39-character logins while removing cap+5 standing rows records all 500 rows, flashes the capped Connected and Disconnected sentences, and leaves the credential this callback stored readable in the session", "layer": "request"}
       it "counts the accounts it does not name above the cap, and stays inside the cookie ceiling" do
         user = sign_in_via_github(installation: false)
-        logins = (1..500).map { |i| format("org-%03d", i) } # the walk's ceiling: PER_PAGE * MAX_PAGES
-        stub_user_authorization(*installation_rows(logins))
+        # The derivation's worst case, end to end: BOTH lists over the cap at GitHub's
+        # 39-character login ceiling — the shape `MAX_NAMES_IN_NOTICE`'s table is measured at, so
+        # this example goes red on any constant the real cookie cannot carry. The login length is
+        # the point: the same shape at short names stays green under a constant that overflows.
+        reported = (1..500).map { |i| format("o%038d", i) } # 39 chars; the walk's ceiling
+        removed = (1..(GithubInstallationsController::MAX_NAMES_IN_NOTICE + 5))
+                  .map { |i| format("o%038d", i) }
+        removed.each_with_index do |login, i|
+          add_github_installation(user, installation_id: 8000 + i, account_login: login)
+        end
+        stub_user_authorization(*installation_rows(reported)) # a complete reading reporting only `reported`
 
         expect { get github_installation_callback_path, params: { code: "abc" } }
-          .to change { user.github_installations.count }.from(0).to(500)
+          .to change { user.github_installations.count }.from(removed.size).to(500)
 
-        expect(flash[:notice]).to eq(
-          "Connected #{logins.first(GithubInstallationsController::MAX_NAMES_IN_NOTICE).join(', ')}, " \
-          "and #{logins.size - GithubInstallationsController::MAX_NAMES_IN_NOTICE} more."
+        # The Connected list is the callback's own in-memory return, so it renders in the stub's
+        # order and pins the sentence form exactly. The disconnected names arrive in whatever
+        # order the removal query returns (`forget_unreported` is an unordered `destroy_all` —
+        # and the 500-row insert storm above perturbs the heap order this query scans), so that
+        # half is pinned as SET plus capped form, not sequence.
+        connected_sentence, disconnected_segment =
+          flash[:notice].split(". Disconnected ")
+        expect(connected_sentence).to eq(
+          "Connected #{reported.first(GithubInstallationsController::MAX_NAMES_IN_NOTICE).join(', ')}, " \
+          "and #{reported.size - GithubInstallationsController::MAX_NAMES_IN_NOTICE} more"
         )
+        removed_names, removed_tail = disconnected_segment.split(", and ")
+        expect(removed_tail).to eq("5 more, which GitHub no longer reports for your account.")
+        expect(removed_names.split(", "))
+          .to contain_exactly(*removed.first(GithubInstallationsController::MAX_NAMES_IN_NOTICE))
         # The credential this callback just stored is still readable: an overflowed cookie would
-        # have raised CookieOverflow before here — AFTER the 500 rows above were already
-        # committed — and a near miss could have silently evicted the token instead.
+        # have raised CookieOverflow before here — AFTER the rows above were already committed —
+        # and a near miss could have silently evicted the token instead.
         expect(session[GithubUserSession::TOKEN_KEY]).to eq("ghu_from_callback")
       end
 
-      # @intent: {"entity": "GET /github/installation/callback", "action": "cap the disconnected list too", "behavior": "a complete empty reading removing cap+5 standing rows flashes the first MAX_NAMES_IN_NOTICE names plus an and-K-more tail inside the disconnected sentence", "layer": "request"}
+      # @intent: {"entity": "GET /github/installation/callback", "action": "cap the disconnected list too", "behavior": "a complete empty reading removing cap+5 standing rows at 39-character logins flashes the first MAX_NAMES_IN_NOTICE names plus an and-K-more tail inside the disconnected sentence", "layer": "request"}
       it "caps the disconnected list the same way" do
         user = sign_in_via_github(installation: false)
         extra = 5
         logins = (1..(GithubInstallationsController::MAX_NAMES_IN_NOTICE + extra))
-                 .map { |i| format("org-%02d", i) }
+                 .map { |i| format("o%038d", i) }
         logins.each_with_index do |login, i|
           add_github_installation(user, installation_id: 7000 + i, account_login: login)
         end
