@@ -23,9 +23,10 @@ require "rails_helper"
 # publishes about the wire format, this file is where you find out whether the server agrees. Where
 # the two disagree, the guide is wrong — the server is not adjusted to match a document.
 RSpec.describe "The public integration guide", type: :request do
-  # So this file names the endpoint the same single way the three view surfaces do. Asserting on a
-  # locally re-spelled `root_url.sub(...)` would keep passing if the helper's own stripping broke,
-  # which is exactly the drift the helper was extracted to prevent.
+  # So this file names the endpoint the same single way the view surfaces do — through the helper,
+  # whose own comment in `integration_guide_helper.rb` names the surfaces that share it. Asserting
+  # on a locally re-spelled `root_url.sub(...)` would keep passing if the helper's own stripping
+  # broke, which is exactly the drift the helper was extracted to prevent.
   include IntegrationGuideHelper
 
   # The `<code>` payload inside the wrapper div the template stamps the shared id onto. Scoped to
