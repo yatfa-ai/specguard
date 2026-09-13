@@ -55,8 +55,6 @@ RSpec.describe "Repository spec file examples", type: :request do
 
   def definition_hrefs = definition_links.map { |link| link[:href] }
 
-  def blob(sha, path, line) = "https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/#{sha}/#{path}#L#{line}"
-
   # The example's NAME, without the definition-site line rendered under it. The two share one cell,
   # so a whole-cell read would turn every ordering assertion in this file into an assertion about
   # paths as well — and the fallback row, where the name IS the location, has no span at all.
