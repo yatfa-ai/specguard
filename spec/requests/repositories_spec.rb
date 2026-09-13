@@ -729,6 +729,16 @@ RSpec.describe "Repository registration and API keys", type: :request do
   # different grants a reader must not have to disambiguate: a repository-scoped key and a
   # multi-repository set with a permission set are listed the same way nowhere else.
   describe "the agent keys panel" do
+    # `travel_to`, for the one example that discriminates the section's two age cells ("dates
+    # the still-presented row's ages from their own stamps"): its three real-writer stamps must
+    # land in DIFFERENT time_ago buckets for either cell to render differently, and only a moved
+    # clock puts real-writer stamps 90 days and 6 days apart. Included on this group rather than
+    # configured globally in `rails_helper` — the same scoping the revoked-key marker describe
+    # below states in full: no other spec in this describe travels time, and a project-wide
+    # include for one example would put `travel_to` in reach of every spec that has done
+    # without it.
+    include ActiveSupport::Testing::TimeHelpers
+
     # Scoped finders, for the reason the sgk_ table's finders above state in full: the page is
     # full of names and prose, and a bare whole-document `include` passes with the panel empty.
     # `#agent-keys` is the panel's own id, not something added for these finders.
@@ -853,6 +863,34 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The honesty clause travels with the section, so the age reads as a recency and not a
       # claim about the present tense.
       expect(revoked_still_presented_section).to have_text("recency, never a claim")
+    end
+
+    # SPGD-1088 — the two ages ARE the section's payload, and the example above cannot tell
+    # which stamp each cell renders: its age assertions ("revoked" / "last presented" / "ago")
+    # are satisfied by the caption and by any timestamp's rendering, and its same-second fixture
+    # renders every candidate (created_at, revoked_at, last_refused_at) as "less than a minute",
+    # so swapping either cell's source leaves all three landed examples green — measured on both
+    # swaps. This fixture puts each stamp in its own time_ago bucket through the model's real
+    # writers — minted at 90 days, revoked at 6 days, the dead token's presentation stamped
+    # NOW — and holds each cell to its own value, the discrimination the API surface already
+    # carries by asserting its iso8601 equality: the presented age can only read "less than a
+    # minute" from `last_refused_at`, and the revoked age only "6 days" from `revoked_at`, so
+    # either swap fails here. That is the web panel's half of the pair the ERB comment calls
+    # "the same column, so one fact reads the same on both surfaces".
+    # @intent: {"entity": "AgentApiKey", "action": "date still-presented ages", "behavior": "a still-presented row whose mint, revocation and last refusal fall in three different time_ago buckets reads last presented less than a minute and revoked 6 days beside the key's name, each age held to its own stamp", "layer": "request"}
+    it "dates the still-presented row's ages from their own stamps" do
+      repository = create_repository(user: @user)
+      key = travel_to(90.days.ago) do
+        create_agent_api_key(user: @user, repositories: [repository], name: "Six-day leak")
+      end
+      travel_to(6.days.ago) { key.revoke! }
+      key.touch_last_refused!
+
+      get repository_path(repository)
+
+      expect(revoked_still_presented_section.find("li", text: "Six-day leak"))
+        .to have_text("last presented less than a minute")
+        .and have_text("revoked 6 days")
     end
 
     # The honest bound, stated the way /account's own example states it: a key revoked and never
