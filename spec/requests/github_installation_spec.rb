@@ -444,7 +444,10 @@ RSpec.describe "GitHub App installation", type: :request do
         # order and pins the sentence form exactly. The disconnected names arrive in whatever
         # order the removal query returns (`forget_unreported` is an unordered `destroy_all` —
         # and the 500-row insert storm above perturbs the heap order this query scans), so that
-        # half is pinned as SET plus capped form, not sequence.
+        # half is pinned as capped size plus membership, not sequence — and WHICH accounts the
+        # window names is heap-order too, deliberately unpinned: no order clause exists in the
+        # product, so the example pins the window's size and that every named name was among
+        # the removed set, the facts the cap and the count tail actually assert.
         connected_sentence, disconnected_segment =
           flash[:notice].split(". Disconnected ")
         expect(connected_sentence).to eq(
@@ -453,15 +456,16 @@ RSpec.describe "GitHub App installation", type: :request do
         )
         removed_names, removed_tail = disconnected_segment.split(", and ")
         expect(removed_tail).to eq("5 more, which GitHub no longer reports for your account.")
-        expect(removed_names.split(", "))
-          .to contain_exactly(*removed.first(GithubInstallationsController::MAX_NAMES_IN_NOTICE))
+        named = removed_names.split(", ")
+        expect(named.size).to eq(GithubInstallationsController::MAX_NAMES_IN_NOTICE)
+        expect(named).to all(be_in(removed))
         # The credential this callback just stored is still readable: an overflowed cookie would
         # have raised CookieOverflow before here — AFTER the rows above were already committed —
         # and a near miss could have silently evicted the token instead.
         expect(session[GithubUserSession::TOKEN_KEY]).to eq("ghu_from_callback")
       end
 
-      # @intent: {"entity": "GET /github/installation/callback", "action": "cap the disconnected list too", "behavior": "a complete empty reading removing cap+5 standing rows at 39-character logins flashes the first MAX_NAMES_IN_NOTICE names plus an and-K-more tail inside the disconnected sentence", "layer": "request"}
+      # @intent: {"entity": "GET /github/installation/callback", "action": "cap the disconnected list too", "behavior": "a complete empty reading removing cap+5 standing rows at 39-character logins flashes a heap-ordered window of MAX_NAMES_IN_NOTICE names plus an and-K-more tail inside the disconnected sentence", "layer": "request"}
       it "caps the disconnected list the same way" do
         user = sign_in_via_github(installation: false)
         extra = 5
@@ -474,10 +478,15 @@ RSpec.describe "GitHub App installation", type: :request do
 
         get github_installation_callback_path, params: { code: "abc" }
 
-        expect(flash[:notice]).to eq(
-          "Disconnected #{logins.first(GithubInstallationsController::MAX_NAMES_IN_NOTICE).join(', ')}, " \
-          "and #{extra} more, which GitHub no longer reports for your account."
-        )
+        # As in the over-cap example above: which accounts the unordered removal query puts in
+        # the named window is heap-order, deliberately unpinned — the pins are the sentence
+        # form, the window's size, membership drawn from the removed set, and the exact tail.
+        expect(flash[:notice]).to start_with("Disconnected ")
+        named, removed_tail = flash[:notice].split(", and ")
+        names_listed = named.delete_prefix("Disconnected ").split(", ")
+        expect(names_listed.size).to eq(GithubInstallationsController::MAX_NAMES_IN_NOTICE)
+        expect(names_listed).to all(be_in(logins))
+        expect(removed_tail).to eq("#{extra} more, which GitHub no longer reports for your account.")
       end
     end
 
