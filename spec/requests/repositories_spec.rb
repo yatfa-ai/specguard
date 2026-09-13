@@ -893,6 +893,34 @@ RSpec.describe "Repository registration and API keys", type: :request do
         .and have_text("revoked 6 days")
     end
 
+    # SPGD-1108 — the decision half of the offboarding arc, repository-side: the still-presented
+    # section answers "is the dead token still arriving?"; the live table's "Last used" column
+    # answers the BEFORE-cut question — "is this LIVE key still being used?" — for the
+    # keys.manage holder who is precisely NOT the key's owner and so cannot read /account, the
+    # same asymmetry the API row and the presented_revoked surfaces already honor. Same-source
+    # discipline as SPGD-1088's example above, for the same reason: a same-second fixture renders
+    # created_at and last_used_at in the SAME time_ago bucket, so a cell swapped to the mint
+    # would stay green. This fixture splits them through the model's real writer — minted 90
+    # days ago, presented NOW — and holds both ages: "less than a minute" can only come from
+    # last_used_at (the mint reads "3 months"), so the SPGD-1088 swap fails here, and the
+    # ordered header pin keeps the new column AFTER Created, the sgk_ table's own ordering.
+    # @intent: {"entity": "AgentApiKey", "action": "date the Last used cell", "behavior": "a row whose mint and last presentation fall in different time_ago buckets reads the Last used cell from the presentation stamp and not the mint, in a Last used column ordered after Created", "layer": "request"}
+    it "dates the Last used cell from last_used_at, not the mint" do
+      repository = create_repository(user: @user)
+      key = travel_to(90.days.ago) do
+        create_agent_api_key(user: @user, repositories: [repository], name: "Daily driver")
+      end
+      key.touch_last_used!
+
+      get repository_path(repository)
+
+      expect(agent_keys_table.all("thead th").map(&:text))
+        .to eq(["Name", "Owner", "Key", "Repositories", "Permissions", "Created", "Last used", ""])
+      row = agent_key_row("Daily driver")
+      expect(row).to have_text("less than a minute")
+      expect(row).to have_text("3 months")
+    end
+
     # The honest bound, stated the way /account's own example states it: a key revoked and never
     # presented again is not a finding, and synthesizing one is what the indicator's state-1 rule
     # forbids. Nothing renders — not an empty section, not a "never" row.

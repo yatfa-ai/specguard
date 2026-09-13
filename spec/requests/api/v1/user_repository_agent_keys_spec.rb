@@ -44,6 +44,12 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
   end
 
   describe "GET /api/v1/repositories/:repository_id/agent_keys" do
+    # Scoped here rather than configured in `rails_helper`, the same scoping and the same
+    # reasoning repositories_spec states in full for its panel group: exactly one example
+    # travels time (seasoning a mint so a served stamp cannot share its iso8601 second), and a
+    # global include would put `travel_to` in reach of every spec that has done without it.
+    include ActiveSupport::Testing::TimeHelpers
+
     # @intent: { entity: "AgentApiKey", action: "list the inventory", behavior: "an sga_ key holding keys.manage lists the repository's live covering agent keys with the web panel's row as JSON, and never a token", layer: "request" }
     it "serves the web panel's row as JSON to an sga_ key holding keys.manage" do
       get index_path, headers: bearer(agent_key.raw_token)
@@ -54,7 +60,8 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
 
       row = rows.first
       expect(row.keys).to contain_exactly("id", "name", "owner", "token_hint",
-                                          "repository_count", "permissions", "created_at")
+                                          "repository_count", "permissions", "created_at",
+                                          "last_used_at")
       expect(row["name"]).to eq(agent_key.name)
       expect(row["owner"]).to eq("hubot")
       expect(row["token_hint"]).to eq(agent_key.reload.token_hint)
@@ -66,6 +73,48 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
       # existed for exactly one response at mint time and nothing persisted it.
       expect(row.keys).not_to include("token")
       expect(JSON.parse(response.body)).not_to include("token")
+    end
+
+    # THE VALUE, negative reading (SPGD-1108): the decision half of the offboarding arc needs
+    # "is this live key still being used" to answer BOTH ways, so the never-presented case is
+    # a SERVED null — the key present on the row with "last_used_at": null — distinguishable
+    # from a field the API does not track. Read through an `sgu_` credential so the read
+    # stamps nothing on this table: the presenting credential is the only row that gets
+    # stamped, and the person key is not one of these rows.
+    # @intent: { entity: "AgentApiKey", action: "serve never-presented as null", behavior: "a live key minted but never presented serves last_used_at as a present-but-null field", layer: "request" }
+    it "serves last_used_at null for a live key never presented" do
+      never_presented = create_agent_api_key(user: owner, repositories: [repository],
+                                             permissions: [RepositoryMembership::KEYS_MANAGE])
+
+      get index_path, headers: bearer(owner_key.raw_token)
+
+      row = response.parsed_body["agent_keys"].find { |r| r["id"] == never_presented.id }
+      expect(row.keys).to include("last_used_at")
+      expect(row["last_used_at"]).to be_nil
+    end
+
+    # THE VALUE, positive reading, through the REAL writer on the real request path: the key
+    # presenting this listing is itself one of the rows listed (it covers the repository and is
+    # live), and `Api::BaseController` stamps it right after `bind_principal` — before the
+    # action loads and serializes — so the response can only read the stamp this very request
+    # wrote. The mint is seasoned to 90 days ago so the served stamp and the mint CANNOT share
+    # an iso8601 second (they can when mint and read are millisecond-neighbours — the same
+    # second-truncation that lets a `last_used_at` → `created_at` swap read green in a
+    # same-second fixture, SPGD-1088's measured lesson): the equality then holds only against
+    # the column the writer itself set, and the explicit `not_to` makes the discrimination a
+    # claim of the test rather than an accident of timing.
+    # @intent: { entity: "AgentApiKey", action: "serve the presented stamp", behavior: "a seasoned key presenting the inventory serves its own fresh last_used_at — the stamp its own request just wrote, distinct from the mint", layer: "request" }
+    it "serves a presented key its own stamp, written by its own request" do
+      seasoned = travel_to(90.days.ago) do
+        create_agent_api_key(user: member, repositories: [repository],
+                             permissions: [RepositoryMembership::KEYS_MANAGE])
+      end
+
+      get index_path, headers: bearer(seasoned.raw_token)
+
+      row = response.parsed_body["agent_keys"].find { |r| r["id"] == seasoned.id }
+      expect(row["last_used_at"]).to eq(seasoned.reload.last_used_at.iso8601)
+      expect(row["last_used_at"]).not_to eq(seasoned.reload.created_at.iso8601)
     end
 
     # The minimal grant the model explicitly allows renders the panel's honest phrase, not an

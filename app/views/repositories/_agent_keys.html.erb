@@ -19,7 +19,7 @@
         </p>
 
         <% if @agent_api_keys.any? %>
-          <%= render UI::TableComponent.new(columns: ["Name", "Owner", "Key", "Repositories", "Permissions", "Created", ""],
+          <%= render UI::TableComponent.new(columns: ["Name", "Owner", "Key", "Repositories", "Permissions", "Created", "Last used", ""],
                                             describedby: "agent-keys-caption") do %>
             <% @agent_api_keys.each do |agent_api_key| %>
               <tr>
@@ -78,6 +78,16 @@
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary tabular-nums">
                   <%= time_ago_in_words(agent_api_key.created_at) %> ago
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# SPGD-1108 — the offboarding arc's DECISION half, repository-side: the
+                      still-presented section below answers the AFTER-cut question ("is the dead
+                      token still arriving?"); this cell answers the BEFORE-cut one — "is this
+                      LIVE key still being used?" — for the keys.manage holder who is precisely
+                      NOT the key's owner and so cannot read /account. The same value, rendered
+                      the same way, as the sgk_ table above and /account give the same column:
+                      "N ago" or "never". %>
+                  <%= agent_api_key.last_used_at ? "#{time_ago_in_words(agent_api_key.last_used_at)} ago" : "never" %>
                 </td>
                 <td class="px-3 py-2 text-right">
                   <%# No Regenerate here, deliberately: the model has no `regenerate!` — a lost
