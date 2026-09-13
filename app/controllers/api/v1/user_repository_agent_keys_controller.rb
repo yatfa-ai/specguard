@@ -134,13 +134,25 @@ class Api::V1::UserRepositoryAgentKeysController < Api::BaseController
   # One inventory row — the web panel's row, served as JSON: name, owner, hint, the stored
   # set's size (the glanceable half of the blast-radius fact the panel shows as a number), the
   # permission set rendered the way the panel renders it ("read only" for the minimal grant the
-  # model explicitly allows), and the creation timestamp. `token_hint` — never the token: the
-  # plaintext existed for exactly one response at mint time and nothing persisted it.
+  # model explicitly allows), the creation timestamp, and the usage recency. `token_hint` —
+  # never the token: the plaintext existed for exactly one response at mint time and nothing
+  # persisted it.
   #
   # `owner` is null-safe the way the panel's cell is (`user&.display_name || "Unknown"`);
   # `user_id` is NOT NULL, so the fork exists for a dangling id — a defensive rendering, not a
   # state the application writes. With `#index`'s `eager_load(:user)` every read here is off
   # the one loaded join: no query per row.
+  #
+  # `last_used_at` (SPGD-1108) — the offboarding arc's DECISION half. The still-presented
+  # triage answers the AFTER-cut question ("is the dead token still arriving?"); this answers
+  # the BEFORE-cut one — "is this live key still being used?" — for the `keys.manage` holder
+  # who is precisely NOT the key's owner and so cannot read /account, and who decides WHICH
+  # live key to cut from this very listing. The stamp is written unconditionally by
+  # `Api::BaseController` right after `bind_principal` on every successful authentication and
+  # the column predates this surface, so the field rides the already-loaded rows — no new
+  # query, no schema change. The negative is SERVED, not omitted (the sibling block's standing
+  # rule): the key is always present and null means "never presented", the same nil-safe
+  # iso8601 spelling the `sgk_` sibling's serializer serves one controller over.
   def serialize(agent_api_key)
     {
       id: agent_api_key.id,
@@ -149,7 +161,8 @@ class Api::V1::UserRepositoryAgentKeysController < Api::BaseController
       token_hint: agent_api_key.token_hint,
       repository_count: agent_api_key.repository_ids.size,
       permissions: agent_api_key.permissions.any? ? agent_api_key.permissions.join(", ") : "read only",
-      created_at: agent_api_key.created_at.iso8601
+      created_at: agent_api_key.created_at.iso8601,
+      last_used_at: agent_api_key.last_used_at&.iso8601
     }
   end
 
