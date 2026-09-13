@@ -61,8 +61,6 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
   def definition_hrefs = definition_links.map { |link| link[:href] }
 
-  def blob(sha, path, line) = "https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/#{sha}/#{path}#L#{line}"
-
   def ingest(repository, specs, commit_sha: "feedfacecafe0001", **attrs)
     Ingest::RunRecorder.record(
       repository,

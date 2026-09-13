@@ -355,8 +355,6 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     def definition_hrefs = panel.all("tbody tr").map { |row| definition_link(row)[:href] }
 
-    def blob(sha, path, line) = "https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/#{sha}/#{path}#L#{line}"
-
     # @intent: {"entity": "GET /repositories/:id", "action": "link coordinate to github", "behavior": "each ranked row links its coordinate to that line on the repository's GitHub blob URL at the run's commit, with #L30 and #L12 anchors, the printed coordinate as the link text", "layer": "request"}
     it "links each ranked row's coordinate to that line on GitHub" do
       repository = create_repository(user: @user)
