@@ -451,8 +451,13 @@ RSpec.describe "GitHub App installation", type: :request do
 
         token_endpoint = Net::HTTPOK.new("1.1", "200", "OK")
         allow(token_endpoint).to receive(:body).and_return({ "access_token" => "ghu_unreadable" }.to_json)
+        # The service refuses a token minted for anybody but the signed-in person
+        # (`GithubAppUserAuthorization#bind_to_identity`), so GitHub's identity answer reads the same
+        # per-process constant the default sign-in mints with — `Builders::DEFAULT_GITHUB_UID` —
+        # rather than a literal that used to equal it.
         identity = Net::HTTPOK.new("1.1", "200", "OK")
-        allow(identity).to receive(:body).and_return({ "id" => 1001, "login" => "octocat" }.to_json)
+        allow(identity).to receive(:body)
+          .and_return({ "id" => Builders::DEFAULT_GITHUB_UID, "login" => "octocat" }.to_json)
         unreadable = Net::HTTPOK.new("1.1", "200", "OK")
         allow(unreadable).to receive(:body).and_return({ "total_count" => 0 }.to_json)
         http = instance_double(Net::HTTP)

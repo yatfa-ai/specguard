@@ -9,7 +9,7 @@ require "rails_helper"
 # `sign_in_via_github(uid: ...)` drives the real OAuth callback, so calling it a second time
 # *switches* the signed-in identity.
 RSpec.describe "Repository members", type: :request do
-  let(:owner) { create_user(github_uid: "1001", github_handle: "octocat") }
+  let(:owner) { create_user(github_handle: "octocat") }
   let(:repository) { create_repository(user: owner, github_full_name: "acme/billing-service") }
   let(:colleague) { create_user(github_uid: "9999", github_handle: "hubot") }
 
