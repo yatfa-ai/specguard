@@ -240,6 +240,50 @@ class GithubInstallationsController < ApplicationController
   # parameter and a form parameter is a form parameter.
   def return_path_param = safe_return_path(params[:return_to], fallback: repositories_path)
 
+  # The cap on the connected/disconnected name lists the notice renders (`connected_notice`).
+  #
+  # ## The derivation, and the budget it comes from
+  #
+  # This app has no `config/initializers/session_store.rb`, so the session — the flash included —
+  # is Rails' default cookie store, whose ceiling is `ActionDispatch::Cookies::MAX_COOKIE_SIZE`
+  # (4,096 bytes of cookie name + value). The notice rides the SAME cookie as the credential this
+  # action has just written into it (`GithubUserSession::TOKEN_KEY` / `EXPIRES_KEY`), and a NEAR
+  # miss is the documented hazard (`pending_bulk_selection` states it in full): an oversize
+  # session does not only raise — it can quietly evict the token instead, un-fixing what this
+  # very callback came to fix. So the list is capped here, in the data, rather than by moving the
+  # session somewhere else.
+  #
+  # The names are GitHub logins, which GitHub limits to 39 characters (and the
+  # `account_login`-less fallback, "Installation <id>", renders well under that for any realistic
+  # id); the walk feeding the lists stops at `PER_PAGE * MAX_PAGES` = 500 installations
+  # (`GithubAppUserAuthorization`), so an uncapped sentence runs to five hundred such names.
+  # Above the cap a list's rendered size stops depending on its count — cap names plus an
+  # and-K-more tail is all either sentence can grow to — so the worst case to budget is any
+  # reading that puts BOTH lists over the cap at once. That is a COMPLETE reading: on an
+  # incomplete one `reconcile` removes nothing (its fence), the Disconnected sentence has
+  # nothing to name, and the incomplete-reading sentence can only ride a recorded-over-cap list,
+  # which measures strictly smaller.
+  #
+  # Measured end to end through the real callback on the stub seam the specs drive, at GitHub's
+  # 39-character login ceiling, both lists over the cap, complete reading — the cookie sized the
+  # way the ceiling check itself sizes it (`_specguard_session` name + serialized value; "notice"
+  # is the flash string's own bytesize):
+  #
+  #   cap | notice | cookie
+  #   ----|--------|-------
+  #    10 |    917 |  2,158
+  #    15 |  1,327 |  2,882   <- this constant: ~1.2KB of headroom
+  #    20 |  1,737 |  3,614
+  #    23 |  1,983 |  4,050   <- last size the ceiling tolerates, with almost none to spare
+  #    24 |    —   |  4,194   <- ActionDispatch::Cookies::CookieOverflow
+  #
+  # 15 leaves over a kilobyte of that measured worst case unspent — margin for everything else
+  # the session carries today and may carry tomorrow, spent deliberately rather than traded for
+  # a few more names in a list long past the point where the reader wants names rather than a
+  # count. Every size over it reads "…, and K more." — honest about the count where the count is
+  # the news.
+  MAX_NAMES_IN_NOTICE = 15
+
   # Names the accounts, because "connected" is not the same sentence when a user expected two
   # organizations and GitHub reported one. An empty result is its own case: GitHub confirmed the
   # authorization and reported no installations, which is what cancelling out of the picker looks
@@ -258,6 +302,13 @@ class GithubInstallationsController < ApplicationController
   # user can see standing. An incomplete reading says what happened instead — the answer could
   # not be read in full, nothing was removed on it (`reconcile`'s fence, now announced), and
   # the remedy is the exception alert's own: try connecting again.
+  #
+  # The name lists themselves are capped — `MAX_NAMES_IN_NOTICE` below, and its own comment for
+  # the why. In short: the flash rides the same session cookie as the credential this action has
+  # just stored, the rows are already committed by the time the cookie is written, and an
+  # overflow would land the user on a 500 AFTER their accounts were connected. Above the cap the
+  # sentences say "…, and K more." rather than naming every account, so the notice stays honest
+  # about the count and inside the cookie.
   def connected_notice(recorded, disconnected, complete:)
     if recorded.empty? && disconnected.empty?
       return "GitHub reported no SpecGuard installations for your account yet." if complete
@@ -266,13 +317,25 @@ class GithubInstallationsController < ApplicationController
     end
 
     sentences = []
-    sentences << "Connected #{recorded.map(&:display_name).to_sentence}." if recorded.any?
+    sentences << "Connected #{capped_name_list(recorded)}." if recorded.any?
     if disconnected.any?
-      sentences << "Disconnected #{disconnected.map(&:display_name).to_sentence}, " \
+      sentences << "Disconnected #{capped_name_list(disconnected)}, " \
                    "which GitHub no longer reports for your account."
     end
     sentences << incomplete_reading_notice unless complete
     sentences.join(" ")
+  end
+
+  # The names half of a notice sentence, capped at `MAX_NAMES_IN_NOTICE` (whose derivation is
+  # above). At or below the cap this is the plain list, exactly as it has always read; above it,
+  # the first `MAX_NAMES_IN_NOTICE` names plus an honest count of the rest — a list that named
+  # five hundred accounts would claim a completeness the reader cannot use and the cookie cannot
+  # carry.
+  def capped_name_list(installations)
+    names = installations.map(&:display_name)
+    return names.to_sentence if names.size <= MAX_NAMES_IN_NOTICE
+
+    "#{names.first(MAX_NAMES_IN_NOTICE).join(', ')}, and #{names.size - MAX_NAMES_IN_NOTICE} more"
   end
 
   # The unreadable-answer arm of the notice. GitHub's answer was never successfully read — the
