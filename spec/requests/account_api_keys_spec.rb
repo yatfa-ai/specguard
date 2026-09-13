@@ -106,6 +106,13 @@ RSpec.describe "Account API keys", type: :request do
       Capybara.string(response.body).find("tr", text: name)
     end
 
+    # `travel_to`, for the one example below that discriminates the presented age's source:
+    # its three real-writer stamps must land in DIFFERENT time_ago buckets for the cell to be
+    # held to a value, and only a moved clock puts real-writer stamps 90 days and 6 days apart.
+    # Included on this describe rather than configured globally in `rails_helper` — the same
+    # scoping `repositories_spec` states in full for its panel's twin of this pin.
+    include ActiveSupport::Testing::TimeHelpers
+
     # @intent: {"entity": "UserApiKey", "action": "render a retired key", "behavior": "the account page lists a revoked key visibly retired with no Revoke button on its row, while a live sibling keeps its button", "layer": "request"}
     it "renders the retired row visibly retired, with no Revoke button on it" do
       create_user_api_key(user: person, name: "Retired").tap(&:revoke!)
@@ -133,6 +140,29 @@ RSpec.describe "Account API keys", type: :request do
       # and Capybara matches Regexp text against the node's UN-normalized text — `.` will not
       # cross the newlines a String match normalizes away.
       expect(row_for("Agent")).to have_text(/last\s+presented\s+.+ago/)
+    end
+
+    # SPGD-1104 — the presented age IS this cell's payload, and the example above cannot tell
+    # which stamp feeds it: its regex is satisfied by any timestamp's rendering, and its
+    # same-second fixture renders every candidate (created_at, revoked_at, last_refused_at) as
+    # "less than a minute", so swapping the cell's source (show.html.erb:82) leaves that example
+    # green — measured. This fixture puts each stamp in its own time_ago bucket through the
+    # model's real writers — minted at 90 days, revoked at 6 days, the refused presentation
+    # stamped NOW — and holds the cell to its own value: the age can only read "less than a
+    # minute" from `last_refused_at`, so a swap to `revoked_at` ("6 days") or `created_at`
+    # ("3 months") fails here. The /account twin of the repository panel's pin (SPGD-1088).
+    # @intent: {"entity": "UserApiKey", "action": "date the presented age", "behavior": "a still-presented key whose mint, revocation and last refusal fall in three different time_ago buckets reads last presented less than a minute on its own row, the age held to its own stamp", "layer": "request"}
+    it "dates the presented age from its own stamp" do
+      presented = travel_to(90.days.ago) do
+        create_user_api_key(user: person, name: "Six-day leak")
+      end
+      travel_to(6.days.ago) { presented.revoke! }
+      presented.touch_last_refused!
+
+      get account_path
+
+      expect(row_for("Six-day leak"))
+        .to have_text(/last\s+presented\s+less than a minute\s+ago/)
     end
 
     # The honest bound: a key revoked and never presented again is NOT a finding, and nothing is

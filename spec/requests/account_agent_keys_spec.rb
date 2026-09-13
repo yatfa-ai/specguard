@@ -130,6 +130,41 @@ RSpec.describe "Account agent keys", type: :request do
     expect(response.body).to match(/last presented .+ ago/i)
   end
 
+  # SPGD-1104 — the value-level pin of the line the example above dates. That example's
+  # /last presented .+ ago/i holds the LINE, never the stamp feeding it, and its same-second
+  # fixture renders every candidate (created_at, revoked_at, last_refused_at) as "less than a
+  # minute", so swapping the cell's source (show.html.erb:269) leaves it green — measured. The
+  # example below puts each stamp in its own time_ago bucket through the model's real writers —
+  # minted at 90 days, revoked at 6 days, the refused presentation stamped NOW — and holds the
+  # cell to its own value: the age can only read "less than a minute" from `last_refused_at`, so
+  # a swap to `revoked_at` ("6 days") or `created_at` ("3 months") fails here. The /account twin
+  # of the repository panel's pin (SPGD-1088).
+  describe "the still-presented age's source" do
+    # `travel_to` — the same scoping `repositories_spec` states in full for its panel's twin:
+    # no other example in this file moves the clock, and the include stays off every spec that
+    # has done without it.
+    include ActiveSupport::Testing::TimeHelpers
+
+    def row_for(name)
+      Capybara.string(response.body).find("tr", text: name)
+    end
+
+    # @intent: {"entity": "AgentApiKey", "action": "date the presented age", "behavior": "a still-presented agent key whose mint, revocation and last refusal fall in three different time_ago buckets reads last presented less than a minute on its own row, the age held to its own stamp", "layer": "request"}
+    it "dates the presented age from its own stamp" do
+      repository = mint_grant
+      key = travel_to(90.days.ago) do
+        create_agent_api_key(user: person, repositories: [repository], name: "Six-day leak")
+      end
+      travel_to(6.days.ago) { key.revoke! }
+      key.touch_last_refused!
+
+      get account_path
+
+      expect(row_for("Six-day leak"))
+        .to have_text(/last\s+presented\s+less than a minute\s+ago/)
+    end
+  end
+
   # The honest half: a revoked key the platform never saw again carries no refusal datum, and the
   # row renders exactly as it did before this column existed — the state was never OBSERVED, so it
   # is absent rather than rendered as "never".
