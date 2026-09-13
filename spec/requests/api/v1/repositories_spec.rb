@@ -11,7 +11,7 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
     get "/api/v1/repository", headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
 
     expect(response).to have_http_status(:ok)
-    expect(response.parsed_body.dig("repository", "full_name")).to eq("acme/billing-service")
+    expect(response.parsed_body.dig("repository", "full_name")).to eq(Builders::DEFAULT_GITHUB_FULL_NAME)
   end
 
   # @intent: { entity: "ApiKey", action: "stamp last use", behavior: "authenticating with the Bearer key writes last_used_at, which is nil before the request and present after it", layer: "request" }

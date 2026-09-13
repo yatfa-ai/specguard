@@ -11,10 +11,13 @@
 #
 # ## The default is permissive, on purpose — but the LIST is the gate
 #
-# The suite's default is "the signed-in user has installed the App on `acme/billing-service` and
-# `acme/checkout`, and administers both". That keeps every pre-existing spec — which is about API
-# keys, sharing, ingestion or a dashboard panel, and merely needs *a* registered repository —
-# saying what it always said.
+# The suite's default is "the signed-in user has installed the App on the factory's default
+# repository and `acme/checkout`, and administers both" — the factory's default repository being
+# the same per-process identity (`Builders::DEFAULT_GITHUB_FULL_NAME`) `register_repository`
+# default-POSTs, so a helper-driven registration round-trip is authorized by construction and by
+# ONE value, not by two copies of a literal staying in step. That keeps every pre-existing spec —
+# which is about API keys, sharing, ingestion or a dashboard panel, and merely needs *a* registered
+# repository — saying what it always said.
 #
 # What is NOT permissive is a name outside that list, or one in it the user does not administer.
 # Registration takes both — the repository is in an installation AND GitHub reports this user as an
@@ -100,7 +103,11 @@ class FakeGithubApi
 end
 
 module GithubApiHelpers
-  DEFAULT_REPOS = %w[acme/billing-service acme/checkout].freeze
+  # The billing-service entry is `Builders::DEFAULT_GITHUB_FULL_NAME` — the fake's default answer
+  # and the builder's default POST are one per-process identity, so the agreement that lets a bare
+  # `register_repository` round-trip succeed holds by construction. Requires factories.rb to have
+  # loaded first, which rails_helper's sorted support glob guarantees.
+  DEFAULT_REPOS = [Builders::DEFAULT_GITHUB_FULL_NAME, "acme/checkout"].freeze
 
   # Installs a fake for the rest of the example and returns it, so a spec can assert on `calls`.
   #

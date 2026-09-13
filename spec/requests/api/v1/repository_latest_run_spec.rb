@@ -229,7 +229,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     it "leaves the existing repository and api_key blocks in place" do
       body = get_repository
 
-      expect(body.dig("repository", "full_name")).to eq("acme/billing-service")
+      expect(body.dig("repository", "full_name")).to eq(Builders::DEFAULT_GITHUB_FULL_NAME)
       expect(body["api_key"]).to have_key("last_used_at")
     end
 
