@@ -162,12 +162,17 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
     # table (`repositories/_api_keys`) answers to a session, so this list is the only inventory a
     # key-holder has.
     #
+    # SPGD-1110 adds the rotation axis to the row: `rotated_at` and the live-scoped
+    # `rotated_and_unused` verdict — the fields that make the mint-and-replace rotation the class
+    # header documents verifiable from this list alone, instead of a `last_used_at` that
+    # `regenerate!` leaves standing on a token that no longer exists.
+    #
     # `minted_response` above has already minted "Second pipeline" into `repository` — the
     # inventory must account for it, and its `id` in the mint response is the same id this list
     # serves back.
     let!(:legacy_key) { repository.api_keys.create!(name: "Legacy") }
 
-    # @intent: { entity: "api key", action: "list the inventory", behavior: "a keys.manage holder reads the repository's own keys in insertion order with id, hint, creator, last use, and live/revoked status per row", layer: "request" }
+    # @intent: { entity: "api key", action: "list the inventory", behavior: "a keys.manage holder reads the repository's own keys in insertion order with id, hint, creator, last use, rotation date, rotated-and-unused verdict, and live/revoked status per row", layer: "request" }
     it "lists the repository's keys with the fields a rotation needs" do
       get mint_path, headers: bearer(owner_key.raw_token)
 
@@ -177,7 +182,8 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
       # fixture second.
       expect(rows.map { |r| r["id"] }).to eq([minted_response.dig("api_key", "id"), legacy_key.id])
       expect(rows.first.keys).to contain_exactly("id", "name", "token_hint", "created_at",
-                                                 "created_by", "last_used_at", "status")
+                                                 "created_by", "last_used_at", "status",
+                                                 "rotated_at", "rotated_and_unused")
     end
 
     # @intent: { entity: "api key", action: "attribute a row", behavior: "an attributed key names its creator and its hint, a creator-less key renders the degraded Unknown, and no row ever carries a token", layer: "request" }
@@ -210,6 +216,89 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
 
       live_row = response.parsed_body["api_keys"].find { |r| r["status"] == "live" }
       expect(live_row.keys).not_to include("revoked_at")
+    end
+
+    # SPGD-1110 — the state the whole field exists for: `regenerate!` retired the token and left
+    # `last_used_at` standing, so the stamp a naive reader takes for liveness was written by a
+    # credential that no longer exists. The verdict is read off the model's own predicate, and
+    # the stale stamp is SERVED beside it rather than hidden — the key's history, and exactly the
+    # figure a client must stop reading as a reachability signal (the `credential_health` row's
+    # own convention).
+    # @intent: { entity: "api key", action: "flag a stranded rotation", behavior: "a used key regenerated whose replacement never authenticated reads rotated_and_unused true with the stale last_used_at served and ordered before the rotation date", layer: "request" }
+    it "marks a regenerated key whose replacement never authenticated as rotated-and-unused" do
+      stranded = repository.api_keys.create!(name: "CI — main").tap do |key|
+        # The use is placed two hours back rather than stamped at `Time.current`: the rotation
+        # that follows is a real `regenerate!`, and without the separation both events land in
+        # the same second and `iso8601` renders them identical — which would hide the very
+        # ordering these examples are about. The stamp itself is the one `touch_last_used!`
+        # writes.
+        key.touch_last_used!
+        key.update_columns(last_used_at: 2.hours.ago)
+        key.regenerate!
+      end
+
+      get mint_path, headers: bearer(owner_key.raw_token)
+
+      row = response.parsed_body["api_keys"].find { |r| r["id"] == stranded.id }
+      expect(row["rotated_and_unused"]).to be(true)
+      expect(row["rotated_at"]).to eq(stranded.reload.rotated_at.iso8601)
+      # The stamp the rotation stranded is preserved and served — what changed is that the row
+      # now carries the verdict beside it, so it can no longer be read as live reachability.
+      expect(row["last_used_at"]).to eq(stranded.reload.last_used_at.iso8601)
+      expect(row["last_used_at"]).to be < row["rotated_at"]
+    end
+
+    # The recovery half: one authenticated use on the replacement and the key reads normally
+    # again — no window to expire, no threshold to cross (`rotated_and_unused?`'s own rule).
+    # @intent: { entity: "api key", action: "clear a stranded rotation", behavior: "a regenerated key whose replacement has authenticated reads rotated_and_unused false immediately, with the rotation date still served", layer: "request" }
+    it "clears the verdict as soon as the replacement authenticates" do
+      recovered = repository.api_keys.create!(name: "CI — recovered").tap do |key|
+        key.regenerate!
+        # A use stamped after the rotation — the stamp `touch_last_used!` writes.
+        key.touch_last_used!
+      end
+
+      get mint_path, headers: bearer(owner_key.raw_token)
+
+      row = response.parsed_body["api_keys"].find { |r| r["id"] == recovered.id }
+      expect(row["rotated_and_unused"]).to be(false)
+      # The rotation happened and is still history on the row; only the verdict moved.
+      expect(row["rotated_at"]).to eq(recovered.reload.rotated_at.iso8601)
+    end
+
+    # The negative, SERVED rather than omitted: every key that has never been regenerated reads
+    # `rotated_at: null` with the verdict `false` — distinguishable from a field the API does not
+    # track, and the same nil-served spelling the singular `sgk_` block uses.
+    # @intent: { entity: "api key", action: "serve the never-rotated negative", behavior: "a key never regenerated serves rotated_at null with rotated_and_unused false", layer: "request" }
+    it "serves rotated_at null and the verdict false for a key never regenerated" do
+      never_rotated = repository.api_keys.create!(name: "Legacy — never rotated")
+
+      get mint_path, headers: bearer(owner_key.raw_token)
+
+      row = response.parsed_body["api_keys"].find { |r| r["id"] == never_rotated.id }
+      expect(row["rotated_at"]).to be_nil
+      expect(row["rotated_and_unused"]).to be(false)
+    end
+
+    # THE CROSS-SURFACE-AGREEMENT PIN (SPGD-1110): the verdict is scoped to LIVE rows, matching
+    # `ApiKeyPartition`'s stranded verdict, the web panel's Last used cell, and
+    # `credential_health` for the same row — a key rotated and THEN revoked is revoked, the
+    # newer fact, and reporting the rotation would manufacture a disagreement between this list
+    # and every sibling surface. Pinned the same way the credential-health spec pins its own
+    # side of the rule.
+    # @intent: { entity: "api key", action: "rank revocation over rotation", behavior: "a key rotated then revoked reads status revoked with the verdict false on the same row", layer: "request" }
+    it "reads a rotated-then-revoked row as revoked, not as rotated-and-unused" do
+      both = repository.api_keys.create!(name: "Both").tap do |key|
+        key.touch_last_used!
+        key.regenerate!
+        key.revoke!
+      end
+
+      get mint_path, headers: bearer(owner_key.raw_token)
+
+      row = response.parsed_body["api_keys"].find { |r| r["id"] == both.id }
+      expect(row["status"]).to eq("revoked")
+      expect(row["rotated_and_unused"]).to be(false)
     end
 
     # @intent: { entity: "api key", action: "scope the inventory", behavior: "the list serves only the named repository's keys — another repository's key ids never appear, even for their shared owner", layer: "request" }

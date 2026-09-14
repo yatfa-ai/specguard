@@ -405,8 +405,12 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
       # The degraded creator is rendered, not dropped: this row was minted through the model
       # directly, so its creator is nil — the "Unknown" state the api-keys controller documents.
       expect(row).to include("name" => "CI", "status" => "live", "created_by" => "Unknown")
+      # The SAME `UserRepositoryApiKeysController#serialize` serves this row as the `sgu_` path,
+      # so its key set moves when the serializer's does (SPGD-1110: `rotated_at` +
+      # `rotated_and_unused` arrived there) — one serializer, one row shape, both credentials.
       expect(row.keys).to contain_exactly("id", "name", "token_hint", "created_at",
-                                          "created_by", "last_used_at", "status")
+                                          "created_by", "last_used_at", "status",
+                                          "rotated_at", "rotated_and_unused")
       # The token is never served — only the mint response carries it, once.
       expect(row.keys).not_to include("token")
     end
