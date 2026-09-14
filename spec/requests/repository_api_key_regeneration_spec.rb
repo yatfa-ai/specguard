@@ -244,6 +244,15 @@ RSpec.describe "Regenerating an API key", type: :request do
   end
 
   describe "the key list" do
+    # `travel_to`, for the example that splits the Last used cell's value branch from the mint:
+    # every landed example here is a same-second fixture, and a same-second fixture renders
+    # created_at and last_used_at in the SAME time_ago bucket — the reason the SPGD-1108 twin
+    # states in full — so only a moved clock puts the mint and the use stamp in different
+    # buckets. Included on this group rather than configured globally in `rails_helper` — no
+    # other spec in this describe travels time, and a project-wide include for one example
+    # would put `travel_to` in reach of every spec that has done without it.
+    include ActiveSupport::Testing::TimeHelpers
+
     def last_used_cell(name)
       Capybara.string(response.body).find("#api-keys table tbody tr", text: name).all("td")[4].text.squish
     end
@@ -306,6 +315,29 @@ RSpec.describe "Regenerating an API key", type: :request do
       # destroyed, and the cell goes back to reporting it.
       expect(api_key.reload).not_to be_rotated_and_unused
       expect(last_used_cell("CI")).to eq("less than a minute ago")
+    end
+
+    # The unrotated value branch, both limbs — the SPGD-1108 twin's shape applied to this panel.
+    # One fixture exercises both: the first GET pins the nil limb ("never" — under a nil-limb
+    # swap to the mint this row reads "3 months ago" instead), the second pins the value source
+    # through the model's real writer, `touch_last_used!` — the one Api::BaseController invokes
+    # on every successful authentication (under a last_used_at→created_at swap the aged mint
+    # reads "3 months", so "less than a minute ago" can only come from last_used_at). The cell
+    # is read through the td-scoped exact-eq helper above, not a row-level have_text: the row's
+    # Created cell also renders "3 months" and would satisfy the wrong axis.
+    # @intent: {"entity": "ApiKey", "action": "date the Last used cell", "behavior": "an unrotated key whose mint and last use fall in different time_ago buckets reads the Last used cell from the use stamp and not the mint, and a never-used key still reads never", "layer": "request"}
+    it "dates the Last used cell from last_used_at, not the mint" do
+      key = travel_to(90.days.ago) do
+        repository.api_keys.create!(name: "Aged")
+      end
+
+      get repository_path(repository)
+      expect(last_used_cell("Aged")).to eq("never")
+
+      key.touch_last_used!
+      get repository_path(repository)
+
+      expect(last_used_cell("Aged")).to eq("less than a minute ago")
     end
   end
 
