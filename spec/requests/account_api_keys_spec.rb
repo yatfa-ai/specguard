@@ -165,6 +165,34 @@ RSpec.describe "Account API keys", type: :request do
         .to have_text(/last\s+presented\s+less than a minute\s+ago/)
     end
 
+    # SPGD-1112 — the Last used CELL's value branch, the twin the example above cannot
+    # express: that fixture pins the presented line (a different cell) while "shows when each
+    # key was last used" up top holds only this cell's nil branch and a stamp-write whose
+    # same-second fixture renders created_at and last_used_at in the SAME time_ago bucket,
+    # so a value-branch swap to the mint (show.html.erb:53) leaves every landed example here
+    # green — measured. This example holds BOTH halves the same way the agent table's sibling
+    # example (SPGD-1108's /account twin) does: the fresh key's "never" pins the nil branch,
+    # then `touch_last_used!` — the model's real writer, the one Api::BaseController invokes
+    # on every successful presentation — splits the candidates, minted at 90 days and
+    # presented NOW, so "less than a minute" can only come from `last_used_at` (the mint
+    # reads "3 months" in the Created cell beside it), and the swap fails here.
+    # @intent: {"entity": "UserApiKey", "action": "date the Last used cell", "behavior": "an /account user-key row whose mint and last presentation fall in different time_ago buckets reads the Last used cell from the presentation stamp and not the mint, with the untouched key's never holding the nil branch", "layer": "request"}
+    it "dates the Last used cell from last_used_at, not the mint" do
+      key = travel_to(90.days.ago) do
+        create_user_api_key(user: person, name: "Laptop")
+      end
+
+      get account_path
+      expect(row_for("Laptop")).to have_text("never")
+
+      key.touch_last_used!
+      get account_path
+
+      row = row_for("Laptop")
+      expect(row).to have_text("less than a minute")
+      expect(row).to have_text("3 months")
+    end
+
     # The honest bound: a key revoked and never presented again is NOT a finding, and nothing is
     # synthesized for it — the note exists only when the failure path stamped a refusal.
     # @intent: {"entity": "UserApiKey", "action": "synthesize no presentation", "behavior": "a key revoked and never presented again carries no still-presented claim on the page", "layer": "request"}

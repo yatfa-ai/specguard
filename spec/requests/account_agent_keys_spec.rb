@@ -165,6 +165,45 @@ RSpec.describe "Account agent keys", type: :request do
     end
   end
 
+  # SPGD-1112 — the /account twin of the Last used CELL's own pin (repositories_spec.rb:912,
+  # landed SPGD-1108), which that example could not cover: this table's cell at
+  # show.html.erb:242 renders on every landed example here and nothing asserted it — zero
+  # assertions on the axis, and `touch_last_used!` (the writer Api::BaseController invokes on
+  # every successful presentation) never once referenced. A value-branch swap to the mint
+  # would leave the whole file green: the condition's nil branch and the interpolation are
+  # two independently pinnable halves, and only the nil branch is pinned anywhere on /account
+  # today. This example holds BOTH: the fresh key's "never" pins the nil branch, then
+  # `touch_last_used!` splits the candidates through the model's real writer — minted at
+  # 90 days, presented NOW — so "less than a minute" can only come from `last_used_at`
+  # (the mint reads "3 months" in the Created cell beside it), and the swap fails here.
+  describe "the Last used cell's source" do
+    # `travel_to` — the same scoping the sibling describe above states: no other example in
+    # this file moves the clock, and the include stays off every spec that has done without it.
+    include ActiveSupport::Testing::TimeHelpers
+
+    def row_for(name)
+      Capybara.string(response.body).find("tr", text: name)
+    end
+
+    # @intent: {"entity": "AgentApiKey", "action": "date the Last used cell", "behavior": "an /account agent-key row whose mint and last presentation fall in different time_ago buckets reads the Last used cell from the presentation stamp and not the mint, with the untouched key's never holding the nil branch", "layer": "request"}
+    it "dates the Last used cell from last_used_at, not the mint" do
+      repository = mint_grant
+      key = travel_to(90.days.ago) do
+        create_agent_api_key(user: person, repositories: [repository], name: "Daily driver")
+      end
+
+      get account_path
+      expect(row_for("Daily driver")).to have_text("never")
+
+      key.touch_last_used!
+      get account_path
+
+      row = row_for("Daily driver")
+      expect(row).to have_text("less than a minute")
+      expect(row).to have_text("3 months")
+    end
+  end
+
   # The honest half: a revoked key the platform never saw again carries no refusal datum, and the
   # row renders exactly as it did before this column existed — the state was never OBSERVED, so it
   # is absent rather than rendered as "never".
