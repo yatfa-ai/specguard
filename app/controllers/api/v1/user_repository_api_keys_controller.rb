@@ -146,6 +146,19 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
   # repo-wide single-source guard exists to refuse). `revoked_at` itself is served only when the
   # predicate says the row carries one — a live key's "revoked_at: null" would restate the
   # status field, and the two-writings-one-fact shape is what lets them drift.
+  # `rotated_at` serves the same figure the singular `sgk_` block serves (`repositories#show`):
+  # the instant `regenerate!` retired the token, `null` when the key has never been regenerated.
+  # It has to sit beside `last_used_at` because that stamp alone can mislead here — `regenerate!`
+  # retires the token and deliberately leaves the stamp standing (it is the key's history), so a
+  # LIVE key whose replacement never reached its pipeline serves a fresh-looking timestamp
+  # written by the credential that no longer exists. `rotated_and_unused` names that state, read
+  # off the model's own predicate (`ApiKey#rotated_and_unused?`, the one spelling the web panel's
+  # Last used cell renders) and scoped to LIVE rows — the same scoping `ApiKeyPartition` reads
+  # its stranded verdict off (`@live_rows ∧ predicate`): a key rotated and THEN revoked is
+  # revoked, the newer fact, and reporting the rotation would contradict `credential_health`
+  # and the panel for the very same row. The trio this row serves — `rotated_at`,
+  # `last_used_at`, `rotated_and_unused` — is the same vocabulary `credential_health`'s
+  # stranded-keys list already serves this viewer.
   def serialize(api_key)
     row = {
       id: api_key.id,
@@ -154,6 +167,8 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
       created_at: api_key.created_at.iso8601,
       created_by: api_key.created_by_user&.display_name || "Unknown",
       last_used_at: api_key.last_used_at&.iso8601,
+      rotated_at: api_key.rotated_at&.iso8601,
+      rotated_and_unused: !api_key.revoked? && api_key.rotated_and_unused?,
       status: api_key.revoked? ? "revoked" : "live"
     }
     row[:revoked_at] = api_key.revoked_at.iso8601 if api_key.revoked?
