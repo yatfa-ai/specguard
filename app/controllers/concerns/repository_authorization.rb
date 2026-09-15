@@ -65,7 +65,8 @@ module RepositoryAuthorization
   def authorize_repository!(repository, capability)
     policy = repository_policy(repository)
 
-    raise ActiveRecord::RecordNotFound if repository.nil? || !policy.member?
+    raise ActiveRecord::RecordNotFound,
+          "No repository with that id is available to this key." if repository.nil? || !policy.member?
     raise SpecGuard::NotAuthorized unless policy.can?(capability)
 
     repository

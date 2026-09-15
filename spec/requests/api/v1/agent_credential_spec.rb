@@ -310,6 +310,26 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
 
       expect(response).to have_http_status(:not_found)
     end
+
+    # SPGD-1155 — the message half of that same body, pinned whole-body byte-eq (SPGD-1056's
+    # form): the shared concern's Face-1 raise now carries the show endpoint's own sentence, so
+    # a member route on an out-of-set repository answers the SAME crafted clause the singular
+    # repository read serves — byte-eq to this spec's show pin above, one voice across the
+    # whole 404 arm. This is the clause specguard-mcp's `notFoundMessage` (SPGD-1146) parses
+    # verbatim; the bare class name this raise used to leak is gone from the wire.
+    # @intent: { entity: "AgentApiKey", action: "pin the member-route boundary 404 message", behavior: "the out-of-set members 404 body carries the crafted Face-1 sentence byte-eq in message, byte-eq to the show endpoint's sentence", layer: "request" }
+    it "serves the crafted boundary sentence in the out-of-set members 404 message" do
+      key = create_agent_api_key(user: person, repositories: [repository],
+                                 permissions: ["members.manage"])
+
+      get "/api/v1/repositories/#{other_repository.id}/members", headers: bearer(key.raw_token)
+
+      expect(response).to have_http_status(:not_found)
+      expect(response.parsed_body).to eq(
+        "error" => "not_found",
+        "message" => "No repository with that id is available to this key."
+      )
+    end
   end
 
   # ---------------------------------------------------------------- SPGD-973

@@ -100,7 +100,13 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
   def destroy
     repository = current_repository(:keys_manage)
 
-    repository.api_keys.find(params[:id]).revoke!
+    api_key = repository.api_keys.find_by(id: params[:id])
+    if api_key.nil?
+      raise ActiveRecord::RecordNotFound,
+            "No API key with that id belongs to this repository."
+    end
+
+    api_key.revoke!
 
     head :no_content
   end

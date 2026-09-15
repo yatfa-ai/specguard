@@ -62,12 +62,15 @@ class Api::V1::UserRepositoryAgentKeysController < Api::BaseController
   end
 
   # REVOKE ONE — `RepositoryAgentKeysController#destroy` carried over a Bearer token, line for
-  # line where it matters: `current_repository(:keys_manage)` authorizes, `AgentApiKey.live.find`
+  # line where it matters: `current_repository(:keys_manage)` authorizes, `AgentApiKey.live.find_by`
   # refuses a replayed revoke on the usual 404 (a revoked row is retained but is not a
   # credential), and the `covers?` guard binds the KEY to THIS repository — a `keys.manage`
   # holder of repo A cannot revoke a key whose stored set excludes A. Out-of-boundary answers
   # 404, the same nil-is-404 fork every repository read takes: the refusal says nothing about a
-  # key the caller has no business knowing exists.
+  # key the caller has no business knowing exists. Both arms of that 404 — the absent id and the
+  # out-of-boundary id — answer the SAME crafted sentence (SPGD-1155), so the wire's `message`
+  # names the boundary rather than leaking the scoped find's WHERE clause, and out of boundary
+  # still reads as out of existence (one sentence, no oracle).
   #
   # THE BODY IS THE POINT. On the web, the confirm dialog names the key's FULL stored set
   # (count + names) BEFORE the cut, and `agent_key_revoke_notice` renders the same disclosure
@@ -79,8 +82,11 @@ class Api::V1::UserRepositoryAgentKeysController < Api::BaseController
   # because the body is the point: a 204 carries none.
   def destroy
     repository = current_repository(:keys_manage)
-    agent_api_key = AgentApiKey.live.find(params[:id])
-    raise ActiveRecord::RecordNotFound unless agent_api_key.covers?(repository)
+    agent_api_key = AgentApiKey.live.find_by(id: params[:id])
+    if agent_api_key.nil? || !agent_api_key.covers?(repository)
+      raise ActiveRecord::RecordNotFound,
+            "No agent key with that id is available to this repository."
+    end
 
     agent_api_key.revoke!
     render json: revoked_body(agent_api_key)

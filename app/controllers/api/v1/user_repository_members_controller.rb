@@ -196,9 +196,17 @@ class Api::V1::UserRepositoryMembersController < Api::BaseController
   # Scoped through `repository.repository_memberships`, exactly as the web `find_membership!` is
   # and for the same reason — this is the only thing standing between the nested route and a
   # cross-repository write. The `RecordNotFound` it raises on a foreign id is caught by
-  # `Api::BaseController` and rendered as this API's own JSON 404.
+  # `Api::BaseController` and rendered as this API's own JSON 404, with the crafted sentence
+  # below (SPGD-1155) as its `message`: the clause names the boundary instead of the exception's
+  # own textbook sentence reaching the operator verbatim (SPGD-1146's passthrough).
   def find_membership!(repository)
-    repository.repository_memberships.find(params[:id])
+    membership = repository.repository_memberships.find_by(id: params[:id])
+    if membership.nil?
+      raise ActiveRecord::RecordNotFound,
+            "No member with that id belongs to this repository."
+    end
+
+    membership
   end
 
   # Top-level `{handle:, permissions: []}` rather than a nested block, matching
