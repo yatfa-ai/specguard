@@ -350,6 +350,30 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
       expect(agent_key.reload.revoked_at).to eq(stamped_at)
     end
 
+    # SPGD-1149 — the rescue half of the same 404 body: the replayed DELETE finds nothing on
+    # `live.find`, the `ActiveRecord::RecordNotFound` raise passes through the base controller's
+    # `rescue_from ... with: :render_not_found`, and the served `message` is the EXCEPTION'S OWN
+    # sentence — id and the `revoked_at IS NULL` scope clause included. Pinned whole-body
+    # byte-eq (SPGD-1056's form) because this is the clause specguard-mcp's `notFoundMessage`
+    # (SPGD-1146) parses verbatim: a render that drops the key — or swaps the exception for a
+    # canned sentence — fails here instead of keeping every status+error pin green while the
+    # consumer's arm goes dead in production. The id rides `agent_key.id` (the value the raise
+    # embeds), so the pin holds regardless of the fixture sequence while every byte of the
+    # sentence around it stays literal.
+    # @intent: { entity: "AgentApiKey", action: "pin the rescue 404 message", behavior: "the replayed revoke's 404 body carries the exception's own sentence in message, the clause specguard-mcp's notFoundMessage parses", layer: "request" }
+    it "serves the rescue path's exception sentence in the replayed revoke's 404 message" do
+      agent_key.revoke!
+
+      delete revoke_path(agent_key), headers: bearer(owner_key.raw_token)
+
+      expect(response).to have_http_status(:not_found)
+      expect(response.parsed_body).to eq(
+        "error" => "not_found",
+        "message" =>
+          "Couldn't find AgentApiKey with 'id'=\"#{agent_key.id}\" [WHERE \"agent_api_keys\".\"revoked_at\" IS NULL]"
+      )
+    end
+
     # @intent: { entity: "credential seam", action: "refuse a repository key at the revoke", behavior: "an sgk_ repository key at the agent-key revoke answers 401 and leaves the key live", layer: "request" }
     it "answers 401 to a repository's own sgk_ key" do
       sgk_token = repository.api_keys.create!.raw_token

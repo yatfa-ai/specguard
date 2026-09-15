@@ -251,6 +251,23 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
       expect(response.parsed_body["error"]).to eq("not_found")
     end
 
+    # The `message` half of the same body, pinned byte-eq (SPGD-1056's whole-body form) at the
+    # arc the direct call renders: the enumeration-fence sentence
+    # `user_repositories_controller#show` passes `render_not_found`. Status and `error` are
+    # pinned above; this is the clause specguard-mcp's `notFoundMessage` (SPGD-1146) reads
+    # verbatim, so a producer-side render that drops or blanks it fails here instead of
+    # keeping every status+error pin green while the consumer's arm goes dead in production.
+    # @intent: { entity: "AgentApiKey", action: "pin the boundary 404 message", behavior: "the out-of-set 404 body carries the direct render_not_found sentence byte-eq in message, the clause specguard-mcp's notFoundMessage parses", layer: "request" }
+    it "serves the boundary sentence in the out-of-set 404 message" do
+      get "/api/v1/repositories/#{other_repository.id}", headers: bearer(agent_key.raw_token)
+
+      expect(response).to have_http_status(:not_found)
+      expect(response.parsed_body).to eq(
+        "error" => "not_found",
+        "message" => "No repository with that id is available to this key."
+      )
+    end
+
     # @intent: { entity: "AgentApiKey", action: "answer a bogus id", behavior: "a malformed id lands on the same 404 with no raise", layer: "request" }
     it "answers 404 for an id that is no integer" do
       get "/api/v1/repositories/not-an-id", headers: bearer(agent_key.raw_token)
