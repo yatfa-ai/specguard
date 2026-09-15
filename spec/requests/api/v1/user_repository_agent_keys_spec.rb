@@ -338,7 +338,7 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
     end
 
     # A revoked row is retained but is not a credential, so the replayed DELETE finds nothing
-    # on the usual `live.find` 404.
+    # on the usual `live`-scoped 404.
     # @intent: { entity: "AgentApiKey", action: "refuse a replayed revoke", behavior: "deleting an already-revoked key answers 404 and re-stamps nothing", layer: "request" }
     it "does not find an already-revoked key" do
       agent_key.revoke!
@@ -350,18 +350,16 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
       expect(agent_key.reload.revoked_at).to eq(stamped_at)
     end
 
-    # SPGD-1149 — the rescue half of the same 404 body: the replayed DELETE finds nothing on
-    # `live.find`, the `ActiveRecord::RecordNotFound` raise passes through the base controller's
-    # `rescue_from ... with: :render_not_found`, and the served `message` is the EXCEPTION'S OWN
-    # sentence — id and the `revoked_at IS NULL` scope clause included. Pinned whole-body
-    # byte-eq (SPGD-1056's form) because this is the clause specguard-mcp's `notFoundMessage`
-    # (SPGD-1146) parses verbatim: a render that drops the key — or swaps the exception for a
-    # canned sentence — fails here instead of keeping every status+error pin green while the
-    # consumer's arm goes dead in production. The id rides `agent_key.id` (the value the raise
-    # embeds), so the pin holds regardless of the fixture sequence while every byte of the
-    # sentence around it stays literal.
-    # @intent: { entity: "AgentApiKey", action: "pin the rescue 404 message", behavior: "the replayed revoke's 404 body carries the exception's own sentence in message, the clause specguard-mcp's notFoundMessage parses", layer: "request" }
-    it "serves the rescue path's exception sentence in the replayed revoke's 404 message" do
+    # SPGD-1149 pinned this arm's message whole-body byte-eq (SPGD-1056's form) because it is
+    # the clause specguard-mcp's `notFoundMessage` (SPGD-1146) parses verbatim. SPGD-1155 moves
+    # the pin deliberately (the SPGD-1108/1128 pattern): the producer's message was the scoped
+    # find's own exception sentence — id plus the `revoked_at IS NULL` WHERE clause leaked to
+    # the operator — and now the raise carries the crafted sentence instead. Whole-body byte-eq
+    # is kept, so a render that drops the key — or regresses the sentence to the exception's
+    # own — fails here instead of keeping every status+error pin green while the consumer's arm
+    # serves a raw ActiveRecord sentence.
+    # @intent: { entity: "AgentApiKey", action: "pin the replayed revoke's 404 message", behavior: "the replayed revoke's 404 body carries the crafted sentence byte-eq in message, the clause specguard-mcp's notFoundMessage parses", layer: "request" }
+    it "serves the crafted sentence in the replayed revoke's 404 message" do
       agent_key.revoke!
 
       delete revoke_path(agent_key), headers: bearer(owner_key.raw_token)
@@ -369,8 +367,34 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
       expect(response).to have_http_status(:not_found)
       expect(response.parsed_body).to eq(
         "error" => "not_found",
-        "message" =>
-          "Couldn't find AgentApiKey with 'id'=\"#{agent_key.id}\" [WHERE \"agent_api_keys\".\"revoked_at\" IS NULL]"
+        "message" => "No agent key with that id is available to this repository."
+      )
+    end
+
+    # SPGD-1155 — the no-oracle property, now asserted at the byte level: the replayed revoke
+    # (absent id — the row left the `live` scope) and the out-of-set revoke (present id whose
+    # stored set excludes this repository) are DIFFERENT raise arms, and both answer the SAME
+    # whole body. Out of boundary reads as out of existence: one sentence covers both, so a
+    # caller cannot distinguish "revoked" from "not mine" from the body — and a regression that
+    # lets either arm answer the exception's own sentence again breaks the equality.
+    # @intent: { entity: "AgentApiKey", action: "equalize both revoke 404 arms", behavior: "a replayed revoke and an out-of-set revoke answer byte-identical 404 bodies", layer: "request" }
+    it "answers the same 404 body for a replayed revoke and an out-of-set revoke" do
+      other = create_repository(user: owner, github_full_name: "acme/other-service")
+      elsewhere = create_agent_api_key(user: owner, repositories: [other],
+                                       permissions: [RepositoryMembership::KEYS_MANAGE])
+      agent_key.revoke!
+
+      delete revoke_path(agent_key), headers: bearer(owner_key.raw_token)
+      expect(response).to have_http_status(:not_found)
+      replayed = response.parsed_body
+
+      delete revoke_path(elsewhere), headers: bearer(owner_key.raw_token)
+      expect(response).to have_http_status(:not_found)
+
+      expect(response.parsed_body).to eq(replayed)
+      expect(replayed).to eq(
+        "error" => "not_found",
+        "message" => "No agent key with that id is available to this repository."
       )
     end
 

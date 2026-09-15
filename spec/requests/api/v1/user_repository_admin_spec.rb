@@ -424,6 +424,43 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
       expect(response.parsed_body).to include("error" => "not_found")
     end
 
+    # SPGD-1155 — the message half of that same body, pinned whole-body byte-eq (SPGD-1056's
+    # form): the destroy's `find_by` raise now carries the crafted sentence, so the clause the
+    # operator sees through specguard-mcp's `notFoundMessage` (SPGD-1146) names the boundary —
+    # "belongs to this repository" — instead of the scoped association's textbook exception
+    # sentence. A replayed revoke never reaches this 404 (the association carries revoked rows
+    # and `revoke!` re-stamps idempotently), so this arm's meaning is "never existed or foreign".
+    # @intent: { entity: "api key", action: "pin the foreign-key revoke 404 message", behavior: "a foreign key id's revoke 404 body carries the crafted sentence byte-eq in message", layer: "request" }
+    it "serves the crafted sentence in the foreign-key revoke's 404 message" do
+      other = create_repository(user: owner, github_full_name: "acme/other-service")
+      other_key = other.api_keys.create!(name: "Not yours")
+
+      delete revoke_path(other_key), headers: bearer(owner_key.raw_token)
+
+      expect(response).to have_http_status(:not_found)
+      expect(response.parsed_body).to eq(
+        "error" => "not_found",
+        "message" => "No API key with that id belongs to this repository."
+      )
+    end
+
+    # SPGD-1155's guard on its own edit: the destroy reads through the association (no `live`
+    # scope), so a replayed revoke still FINDS the retained row and `revoke!` re-stamps it
+    # idempotently — 204 unchanged, never the crafted 404. Pinned because the find moved from
+    # `find` to `find_by` in the same slice; a scope accidentally introduced here would flip
+    # every replay into a 404 and nothing else on this page would notice.
+    # @intent: { entity: "api key", action: "keep the replayed revoke a 204", behavior: "a replayed revoke finds the retained row, answers 204 and re-stamps revoked_at idempotently", layer: "request" }
+    it "answers 204 to a replayed revoke, re-stamping the retained row" do
+      ci_key.revoke!
+      stamped_at = ci_key.reload.revoked_at
+
+      delete revoke_path(ci_key), headers: bearer(owner_key.raw_token)
+
+      expect(response).to have_http_status(:no_content)
+      expect(ci_key.reload.revoked_at).to be_present
+      expect(ci_key.reload.revoked_at).not_to be < stamped_at
+    end
+
     # @intent: { entity: "api key", action: "refuse a view member", behavior: "a view-only member cannot revoke and the key count is unchanged", layer: "request" }
     it "answers 403 JSON for a member with only view" do
       create_membership(repository: repository, user: member, permissions: %w[view])

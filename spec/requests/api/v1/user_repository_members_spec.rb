@@ -106,6 +106,23 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
       expect(response).to have_http_status(:not_found)
       expect(response.parsed_body).to include("error" => "not_found")
     end
+
+    # SPGD-1155 — the message half of the same body, pinned whole-body byte-eq (SPGD-1056's
+    # form), the sgu_ half of the Face-1 pair: a non-member's member-route 404 answers the show
+    # endpoint's own crafted sentence, byte-eq across both credential classes (the sga_
+    # out-of-set pin lives in agent_credential_spec). This is the clause specguard-mcp's
+    # `notFoundMessage` (SPGD-1146) parses verbatim; the bare class name the shared concern's
+    # raise used to leak is gone from the wire.
+    # @intent: { entity: "repository members index", action: "pin the boundary 404 message", behavior: "a non-member's members 404 body carries the crafted Face-1 sentence byte-eq in message, byte-eq to the show endpoint's sentence", layer: "request" }
+    it "serves the crafted boundary sentence in the non-member 404 message" do
+      get members_path, headers: bearer(stranger_key.raw_token)
+
+      expect(response).to have_http_status(:not_found)
+      expect(response.parsed_body).to eq(
+        "error" => "not_found",
+        "message" => "No repository with that id is available to this key."
+      )
+    end
   end
 
   describe "POST /api/v1/repositories/:repository_id/members" do
@@ -430,6 +447,24 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
 
       expect(response).to have_http_status(:not_found)
       expect(RepositoryMembership.exists?(other_row.id)).to be(true)
+    end
+
+    # SPGD-1155 — the message half of that same body, pinned whole-body byte-eq (SPGD-1056's
+    # form): `find_membership!`'s raise now carries the crafted sentence, so the clause the
+    # operator sees through specguard-mcp's `notFoundMessage` (SPGD-1146) names the boundary —
+    # "belongs to this repository" — instead of the scoped find's textbook exception sentence.
+    # @intent: { entity: "repository members destroy", action: "pin the foreign-membership 404 message", behavior: "a foreign membership id's revoke 404 body carries the crafted sentence byte-eq in message", layer: "request" }
+    it "serves the crafted sentence in the foreign-membership revoke's 404 message" do
+      other = create_repository(user: owner, github_full_name: "acme/other-service")
+      other_row = create_membership(repository: other, user: stranger, permissions: %w[view])
+
+      delete member_path(other_row.id), headers: bearer(owner_key.raw_token)
+
+      expect(response).to have_http_status(:not_found)
+      expect(response.parsed_body).to eq(
+        "error" => "not_found",
+        "message" => "No member with that id belongs to this repository."
+      )
     end
 
     # @intent: { entity: "repository members destroy", action: "require manage permission", behavior: "a member without members.manage receives 403 when attempting to revoke, and a repository key at PATCH is refused with 401 before any change lands", layer: "request" }
