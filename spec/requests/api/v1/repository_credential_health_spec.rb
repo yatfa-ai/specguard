@@ -161,6 +161,22 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
       expect(row["last_refused_at"]).to eq(dead_key.reload.last_refused_at.iso8601)
     end
 
+    # @intent: { entity: "credential_health", action: "date the presented row's stamps", behavior: "a key revoked 30 days ago whose dead token was refused just now serves revoked_at and last_refused_at from their own columns, 30 days apart", layer: "request" }
+    it "dates the presented row's revocation and refusal from their own columns" do
+      probe_key = repository.api_keys.create!(name: "Probe")
+      probe_token = probe_key.raw_token
+      probe_key.revoke!
+      probe_key.update_columns(revoked_at: 30.days.ago)
+      get "/api/v1/repository", headers: { "Authorization" => "Bearer #{probe_token}" }
+      expect(response).to have_http_status(:unauthorized)
+
+      row = credential_health["presented_revoked_keys"].find { |r| r["name"] == "Probe" }
+      expect(row).to be_present
+      expect(row["revoked_at"]).to eq(probe_key.reload.revoked_at.iso8601)
+      expect(row["last_refused_at"]).to eq(probe_key.reload.last_refused_at.iso8601)
+      expect(row["revoked_at"]).not_to eq(row["last_refused_at"])
+    end
+
     # The honesty bound, served as data: a revoked key that was never presented again is not a
     # finding, and nothing may be synthesized for it. The block closes the REVOKED case of the
     # 401s — a token that was never a key for this repository stays unattributable everywhere.

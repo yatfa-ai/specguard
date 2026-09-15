@@ -474,6 +474,24 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
       expect(response.body).not_to include(dead_token)
     end
 
+    # @intent: { entity: "AgentApiKey", action: "date the triage row's stamps", behavior: "a triage row for a key revoked 30 days ago and refused just now serves revoked_at and last_refused_at from their own columns, 30 days apart", layer: "request" }
+    it "dates the triage row's revocation and refusal from their own columns" do
+      probe = create_agent_api_key(user: member, repositories: [repository],
+                                   permissions: [RepositoryMembership::KEYS_MANAGE], name: "Probe")
+      probe_token = probe.raw_token
+      probe.revoke!
+      probe.update_columns(revoked_at: 30.days.ago)
+      get triage_path, headers: bearer(probe_token)
+      expect(response).to have_http_status(:unauthorized)
+
+      get triage_path, headers: bearer(agent_key.raw_token)
+      row = response.parsed_body["agent_keys"].find { |r| r["name"] == "Probe" }
+      expect(row).to be_present
+      expect(row["revoked_at"]).to eq(probe.reload.revoked_at.iso8601)
+      expect(row["last_refused_at"]).to eq(probe.reload.last_refused_at.iso8601)
+      expect(row["revoked_at"]).not_to eq(row["last_refused_at"])
+    end
+
     # AC2 — the whole chain through the landed write half, on a key the `before` block has not
     # touched: revoke over the API, the dead token arrives and is refused (stamped), and the
     # triage now names it with both stamps.
