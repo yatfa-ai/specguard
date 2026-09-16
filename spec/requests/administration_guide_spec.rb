@@ -370,6 +370,13 @@ RSpec.describe "The public administration guide", type: :request do
     #     gone, green with revoke gone) — while this surface most plausibly moves one verb at a
     #     time. Either call going missing is what turns the "two calls" half false, so each verb
     #     is pinned separately.
+    #     SPGD-1179 adds the id source under the same doctrine — the recipe's completeness rests
+    #     on the id source and the verify half as well, pinned per the same
+    #     one-route-at-a-time reasoning. A revoke names a row by id, and a mint reveals its
+    #     token exactly once, so the collection GET (SPGD-993) is the only read that serves the
+    #     id for a standing key whose mint response is gone. The two write verbs above cannot
+    #     stand in for it — a GET is neither — and the DELETE member pin anchors on `:id`, a
+    #     segment the collection route does not carry, so this is a third limb, not a restatement.
     #   - the not_to limb: the API keeps refusing `regenerate` — the absence that makes
     #     "in place" the one browser-only CI-key gesture. Red the day someone routes it, which
     #     is the day the panel's residual goes stale.
@@ -379,6 +386,11 @@ RSpec.describe "The public administration guide", type: :request do
     #   - include, one verb each: listing (GET the collection) and revoking (DELETE the member)
     #     of a repository's agent keys are served — the two words the bullet's "revoking ... is
     #     over the API now" names. Pinned per verb for the same reason the CI-key pair is.
+    #     SPGD-1179 adds the verify half the same way: `presented_revoked` (SPGD-1023), the
+    #     still-presented check the bullet now names — how a revoker confirms offboarding
+    #     actually took. The collection pin above cannot stand in for it: that regex anchors on
+    #     the paren where the collection path ENDS, so a missing `presented_revoked` leaves it
+    #     green, and the recipe's step two would lose its answer without a red anywhere.
     #   - not_to: no POST anywhere under agent_keys — the absence that makes minting the one
     #     browser-only agent-key gesture (an agent key's grant is chosen once, at /account).
     #     The unanchored `.*` is deliberate: an account-level mint route would falsify the
@@ -390,9 +402,11 @@ RSpec.describe "The public administration guide", type: :request do
 
       expect(api_v1).to include(a_string_matching(%r{^POST /api/v1/repositories/:repository_id/api_keys\(}))
       expect(api_v1).to include(a_string_matching(%r{^DELETE /api/v1/repositories/:repository_id/api_keys/:id}))
+      expect(api_v1).to include(a_string_matching(%r{^GET /api/v1/repositories/:repository_id/api_keys\(}))
       expect(api_v1).not_to include(a_string_matching(/regenerate/))
       expect(api_v1).to include(a_string_matching(%r{^GET /api/v1/repositories/:repository_id/agent_keys\(}))
       expect(api_v1).to include(a_string_matching(%r{^DELETE /api/v1/repositories/:repository_id/agent_keys/:id}))
+      expect(api_v1).to include(a_string_matching(%r{^GET /api/v1/repositories/:repository_id/agent_keys/presented_revoked}))
       expect(api_v1).not_to include(a_string_matching(%r{^POST .*agent_keys}))
     end
   end
