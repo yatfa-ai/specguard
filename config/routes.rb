@@ -319,5 +319,13 @@ Rails.application.routes.draw do
   get "/schemas/open-test-intent.v1.json", to: "schemas#open_test_intent_v1",
                                            as: :open_test_intent_schema, format: false
 
+  # The server's own identity, askable at last (SPGD-1197). Every client in the family carries an
+  # askable version of itself — the validator's `--version`, the CLIs, the bridge's `serverInfo` —
+  # and this route gives the server the same property, read from the release bot's VERSION file.
+  # Root-level and unauthenticated DELIBERATELY: the credential seam fails closed inside `api/`,
+  # and the root is where the platform's no-account reads already live (`/up`, the schema mirror
+  # above). See VersionsController for the full consumer story.
+  get "version", to: "versions#show"
+
   get "up", to: "rails/health#show", as: :rails_health_check
 end
