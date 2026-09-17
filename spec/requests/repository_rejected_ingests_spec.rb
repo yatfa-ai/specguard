@@ -85,6 +85,33 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       expect(panel_text).to include("specguard-rspec/0.3.1")
     end
 
+    # The other half of that question. The "Reported by" column says which gem asked; this one
+    # says which build refused it — the founding scenario's two sides on one row, and the only way
+    # a retained window spanning the deploy that closed the floor can tell them apart. Rendered
+    # verbatim, the stored stamp and no other.
+    # @intent: {"entity": "IngestRejection", "action": "name answering build", "behavior": "the panel renders the stored server build verbatim in the Served by column beside the reporting client, the other half of the version-floor question", "layer": "request"}
+    it "names the build that served, which is the other half of the version-floor question" do
+      expect(IngestRejection.last.server_version).to be_present
+      expect(panel_text).to include(IngestRejection.last.server_version)
+    end
+
+    # The honesty rule for a row the stamp postdates — the NO BACKFILL half of this column's
+    # contract, stated on the surface. "Not recorded" is deliberately a different word from the
+    # client column's "Not reported": there, the row knows and the client said nothing; here, the
+    # row itself predates the stamp and the platform genuinely does not know which build answered.
+    # One blank meaning two different things would read the absences as the same fact.
+    # @intent: {"entity": "IngestRejection", "action": "disclose unrecorded build", "behavior": "a row whose server_version was nulled after the fact renders Not recorded in the Served by column, never Not reported and never a fabricated version", "layer": "request"}
+    it "renders a pre-stamp row as Not recorded, distinct from the client column's Not reported" do
+      IngestRejection.last.update_columns(server_version: nil)
+      visit_repository
+
+      expect(panel_text).to include("Not recorded")
+      # The distinction is the point, so it is asserted where it is visible: the table names no
+      # client absence at all on this row, and the client column still reads the reported gem.
+      expect(panel.find("table").text.squish).not_to include("Not reported")
+      expect(panel.find("table").text.squish).to include("specguard-rspec/0.3.1")
+    end
+
     # The honesty bound: the panel must not imply it can see failed AUTHENTICATIONS, because a 401
     # resolves no repository and writes no row.
     # @intent: {"entity": "IngestRejection", "action": "disclose 401 blind spot", "behavior": "the panel text mentions 401, telling the reader an empty panel is not evidence that no request was rejected for its key", "layer": "request"}

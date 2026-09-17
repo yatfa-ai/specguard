@@ -60,11 +60,39 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
       expect(IngestRejection.last.user_agent).to eq("specguard-rspec/0.3.1")
     end
 
+    # The OTHER half of the version-floor question. The client's header says which gem asked; the
+    # row's build stamp says which build refused it — "refused by the build before the deploy" and
+    # "refused by the build after it" are the same picture without it. Stubbed rather than derived
+    # from the working tree's VERSION file so this pin asserts the WIRING (the recorder stamps the
+    # accessor's answer onto the row) and cannot go stale when the release bot bumps; the real
+    # identity read is pinned end to end in `spec/requests/server_version_spec.rb`.
+    # @intent: { entity: "IngestRejection", action: "record the answering server build", behavior: "the answering build's version is stamped on the row beside the client header, which is what makes a version floor's two sides distinguishable", layer: "request" }
+    it "records the server build that answered" do
+      allow(VersionsController).to receive(:server_version).and_return("0.9.9")
+
+      ingest(refused_body)
+
+      expect(IngestRejection.last.server_version).to eq("0.9.9")
+    end
+
     # @intent: { entity: "IngestRejection", action: "store nil for an absent User-Agent", behavior: "an empty header column becomes nil on the row rather than a placeholder or blank string", layer: "request" }
     it "records a nil User-Agent rather than a placeholder when the client sent none" do
       ingest(refused_body, headers: { "User-Agent" => "" })
 
       expect(IngestRejection.last.user_agent).to be_nil
+    end
+
+    # `#served_by`'s nil-when-absent rule, on the same terms as the absent-header example above:
+    # a build with no VERSION file stores NULL, never an empty string or a placeholder version —
+    # and a row written by such a build renders "Not recorded" rather than inventing one.
+    # @intent: { entity: "IngestRejection", action: "store nil for an absent server build", behavior: "when the build identity read returns nil the row stores NULL rather than a placeholder or blank string", layer: "request" }
+    it "records a nil server build rather than a placeholder when the build has no VERSION" do
+      allow(VersionsController).to receive(:server_version).and_return(nil)
+
+      ingest(refused_body)
+
+      expect(IngestRejection.last.server_version).to be_nil
+      expect(IngestRejection.last.served_by).to be_nil
     end
 
     # Success criterion 2. The row is bookkeeping the client never asked for and must be invisible
@@ -237,6 +265,23 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
 
       stored = IngestRejection.last.user_agent
       expect(stored.length).to be <= IngestRejection::MAX_USER_AGENT_LENGTH
+      expect(stored).to end_with("...")
+    end
+
+    # The third identity on the row, bounded on the same whole-row argument its two neighbours
+    # state. `server_version` is PLATFORM-owned rather than client-controlled, so the bound never
+    # fires on real traffic — but the row's size ceiling is a claim about every column it holds,
+    # and a pathological VERSION file would walk straight past a fence that only ever measured the
+    # columns beside it, exactly as the ~100 KB header once did. The ellipsis keeps a cut visible
+    # rather than passing the truncated tail off as the build that answered.
+    # @intent: { entity: "IngestRejection", action: "shorten a pathological server build", behavior: "a pathological build identity is truncated on the row to its bound and ends with an ellipsis marker", layer: "request" }
+    it "shortens a pathological server build rather than storing it whole" do
+      allow(VersionsController).to receive(:server_version).and_return("v" * 100_000)
+
+      ingest(refused_body)
+
+      stored = IngestRejection.last.server_version
+      expect(stored.length).to be <= IngestRejection::MAX_SERVER_VERSION_LENGTH
       expect(stored).to end_with("...")
     end
 

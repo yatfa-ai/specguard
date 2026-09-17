@@ -121,6 +121,17 @@ module Ingest
     # equivalent here — the row is built and saved either way — and going through the class gives
     # the write a single named seam. That matters because the whole point of the rescue above is a
     # failure path, and a failure path with no way to provoke it is a failure path nobody has run.
+    #
+    # `server_version` is the THIRD identity on this row, and the one that answers which side of
+    # the version-floor question is outdated. It is read from `VersionsController.server_version` —
+    # the memoized per-process answer the answering request itself serves — because the process
+    # answering the HTTP request is the process writing the row, and a deploy is a process restart:
+    # exactly when the answer changes. Both paths that land here (the controller 400 and the
+    # boundary refusals delegated by `Ingest::BoundaryRefusalRecorder`) are answered by this
+    # process, so one read covers the family. It is bounded like `user_agent` — the whole-row
+    # ceiling is a claim about every column, platform-owned or not — with the same nil-preserving
+    # `&.` shape, because a row written by a build with no VERSION file stores NULL and
+    # `#served_by` reads nil-when-absent rather than an empty string.
     def write
       reasons = Array(@errors).map(&:to_s)
 
@@ -129,7 +140,9 @@ module Ingest
         occurred_at: @occurred_at,
         details: bounded_details(reasons),
         total_reasons_count: reasons.size,
-        user_agent: @user_agent.presence&.truncate(IngestRejection::MAX_USER_AGENT_LENGTH)
+        user_agent: @user_agent.presence&.truncate(IngestRejection::MAX_USER_AGENT_LENGTH),
+        server_version: VersionsController.server_version.to_s.presence
+                           &.truncate(IngestRejection::MAX_SERVER_VERSION_LENGTH)
       )
     end
 

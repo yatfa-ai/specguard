@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_07_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_17_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -81,6 +81,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_07_120000) do
     t.jsonb "details", default: [], null: false
     t.datetime "occurred_at", null: false
     t.bigint "repository_id", null: false
+    t.string "server_version"
     t.integer "total_reasons_count", default: 0, null: false
     t.string "user_agent"
     t.index ["repository_id", "occurred_at", "id"], name: "index_ingest_rejections_on_repository_and_recency", order: { occurred_at: :desc, id: :desc }
