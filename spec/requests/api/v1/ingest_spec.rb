@@ -1479,6 +1479,19 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         expect(IngestRejection.sole.user_agent).to eq("specguard-rspec/0.1.0")
       end
 
+      # The OTHER half of the founding scenario, on the path where it actually lands. The column
+      # above says which gem asked; this stamp says which build refused it — a window spanning the
+      # deploy that closed (or opened) the version floor cannot tell the two sides apart without
+      # it. Derived from the VERSION file rather than stubbed, because this example's claim is that
+      # a REAL boundary refusal records the REAL answering build end to end — and deriving the
+      # expectation from the same file the accessor reads keeps the pin true across release bumps.
+      # @intent: { entity: "IngestRejection", action: "stamp the boundary row with the server build", behavior: "the gzip-refused row at the boundary carries the answering build's version, the other half of the version floor", layer: "request" }
+      it "stamps the boundary refusal with the build that answered it" do
+        ingest_raw_gzip("this is not gzip at all")
+
+        expect(IngestRejection.sole.server_version).to eq(Rails.root.join("VERSION").binread.strip)
+      end
+
       # The attribution rule, which this ticket fixes the ORDERING of without widening. A row is
       # owned by a repository or it is not written — `repository_id` stays `null: false` and a
       # nullable one would turn a per-repository panel into a global error log.

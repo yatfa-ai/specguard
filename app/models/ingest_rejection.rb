@@ -92,6 +92,22 @@ class IngestRejection < ApplicationRecord
   # `user_agent` reads as visibly shortened rather than as the version the client claimed.
   MAX_USER_AGENT_LENGTH = 300
 
+  # How long the server's OWN build identity may be on this row.
+  #
+  # The two bounds above are the client-controlled columns; `server_version` is the third
+  # identity the row carries, and it is PLATFORM-owned — read from the VERSION file via
+  # `VersionsController.server_version`, not from anything the client sent. It is bounded anyway,
+  # on the same whole-row argument `MAX_USER_AGENT_LENGTH` makes: the row-size ceiling is a claim
+  # about every column the row holds, and an unbounded column re-opens the hole
+  # `MAX_REASON_LENGTH` closed one column over, whatever writes it. Like the genuine-string
+  # argument beside its neighbours, the bound only ever fires on a pathological VERSION file —
+  # a real release stamp (`0.1.46`) is two orders of magnitude under it. `String#truncate`'s
+  # ellipsis keeps a cut visible rather than passing it off as the build that answered.
+  #
+  # 300 characters, matching its neighbours, because one number for the row's identity strings
+  # is easier to reason about than a special case this value has never needed.
+  MAX_SERVER_VERSION_LENGTH = 300
+
   # How many rows the repository page lists. The panel is a disclosure that this is happening and
   # what the endpoint said, not a browsable archive — the same bounded-panel shape every sibling on
   # that page uses.
@@ -125,4 +141,9 @@ class IngestRejection < ApplicationRecord
   # What the request said it was. Nil when the client sent no `User-Agent` at all — the surface
   # says so rather than substituting a version nobody reported.
   def reported_client = user_agent.presence
+
+  # Which build answered. Nil when the row predates the stamp — the surface says "Not recorded"
+  # rather than substituting a version the row never carried, the same honesty rule
+  # `#reported_client` states for a client that sent nothing.
+  def served_by = server_version.presence
 end

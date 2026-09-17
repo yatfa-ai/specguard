@@ -121,7 +121,8 @@
              end %><%= safe_join(parts, ", ") %>.
         </p>
 
-        <%= render UI::TableComponent.new(columns: ["When", "Reported by", "What the endpoint said"],
+        <%= render UI::TableComponent.new(columns: ["When", "Reported by", "Served by",
+                                                    "What the endpoint said"],
                                           describedby: "rejected-ingests-basis") do %>
           <% @rejected_ingests.rows.each do |rejection| %>
             <tr>
@@ -145,6 +146,31 @@
                   <span class="font-mono text-xs break-all"><%= rejection.reported_client %></span>
                 <% else %>
                   <span class="text-app-muted">Not reported</span>
+                <% end %>
+              </td>
+              <td class="px-3 py-2 align-top text-app-content-secondary">
+                <%# WHICH BUILD refused this delivery — the other half of the version-floor
+                    question. `specguard-rspec/<version>` beside this column makes "the old gem"
+                    and "the old installation" distinguishable pictures: the founding scenario
+                    (`CreateIngestRejections`) is a gem gzipping against an installation deployed
+                    before `GzipRequestBody`, and without the server build on the row a window
+                    spanning that deploy cannot tell the two sides apart. The value is the
+                    recorder's capture of `VersionsController.server_version` at the moment of
+                    refusal — a historical record, because a retained window spans deploys and the
+                    build that answered days ago may be gone when the owner reads the row.
+
+                    Rendered verbatim, stored string and no other — the standing rule these rows
+                    are held to for the endpoint's own sentences and the client's own header.
+
+                    "Not recorded" is deliberately a DIFFERENT word from the rows' "Not reported":
+                    "Not reported" means the client sent no header (the row knows, and the client
+                    said nothing); a nil `server_version` means the ROW predates the stamp and the
+                    platform genuinely does not know which build answered. One blank meaning two
+                    different things would read the absence as the same fact, which it is not. %>
+                <% if rejection.served_by %>
+                  <span class="font-mono text-xs break-all"><%= rejection.served_by %></span>
+                <% else %>
+                  <span class="text-app-muted">Not recorded</span>
                 <% end %>
               </td>
               <td class="px-3 py-2 align-top text-app-content">
