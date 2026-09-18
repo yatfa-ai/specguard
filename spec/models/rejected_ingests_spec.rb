@@ -145,4 +145,26 @@ RSpec.describe RejectedIngests do
       expect(verdict.retained_window).to be_nil
     end
   end
+
+  # The row reader's blank fold — the same recorder-proof class one grain down from the summary's
+  # fold above. `IngestRejection#served_by` is `server_version.presence`, and every landed driver
+  # of that column supplies a real value or `nil`, so the fold's behaviour on a stored `""` is
+  # asserted by nothing. The header's argument holds for this column too, checked: it is nullable
+  # and unconstrained, and the recorder's `.presence` is a write-path guarantee, not a row
+  # guarantee — so a legacy or hand-written row can carry `""`, and the panel's
+  # `<% if rejection.served_by %>` is truthy for one, rendering an EMPTY "Served by" cell where
+  # the honesty rule says "Not recorded". The twin `#reported_client` fold is pinned above at the
+  # bucket grain; this pins the row grain. The stored-value assertion keeps the example honest:
+  # it fails on any future writer that silently normalizes the column before storing.
+  describe "IngestRejection#served_by" do
+    # @intent: { entity: "IngestRejection", action: "fold blank served_by", behavior: "a row whose stored server_version is the empty string reads nil from served_by, the same value a NULL row reads", layer: "unit" }
+    it "folds a stored blank server_version into the nil a NULL row reads" do
+      row = repository.ingest_rejections.create!(
+        occurred_at: Time.current, details: ["nope"], total_reasons_count: 1, server_version: ""
+      )
+
+      expect(row.reload.server_version).to eq("")
+      expect(row.served_by).to be_nil
+    end
+  end
 end
