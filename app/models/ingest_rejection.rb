@@ -4,8 +4,12 @@
 #
 # The schema-level argument — why only the authenticated family is recordable, why `details` is
 # stored verbatim, why `user_agent` is on the row, why there are no `timestamps` — is in
-# `CreateIngestRejections` and is not repeated here. What lives here is the retention rule and the
-# two reads the surface makes.
+# `CreateIngestRejections` and is not repeated here. This file holds the rules the row is kept
+# under — its retention window and its size bounds, which `CreateIngestRejections` defers to by
+# name — and the readers the row is served through. Those readers are a shared contract: the
+# repository page's rejection panel renders them, and so do the serialized rows
+# `RepositoryOverview#serialized_ingest_rejection_row` serves to API and agent clients — so
+# changing a reader's contract means keeping every surface that renders it in step.
 class IngestRejection < ApplicationRecord
   belongs_to :repository
 
