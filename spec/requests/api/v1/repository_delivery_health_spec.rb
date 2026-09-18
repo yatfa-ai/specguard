@@ -179,6 +179,24 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(delivery_health["rejections"].first["reported_client"]).to eq("specguard-rspec/0.3.1")
     end
 
+    # The server half of the same identity pair, served beside the client half — this is the key
+    # that answers WHICH BUILD refused the delivery, not only which client was refused. The build
+    # is supplied by stubbing the read the production writer consults (`VersionsController
+    # .server_version`, the memoized per-process answer), never by hand-building a row: rows are
+    # written by `Ingest::RejectionRecorder`, which applies the retention bounds and derives
+    # `total_reasons_count`. Key position mirrors the panel's column order — `served_by` sits
+    # immediately after `reported_client`, the two identity halves adjacent.
+    # @intent: { entity: "rejections", action: "report the server build", behavior: "a refusal recorded while the build identity read returns a known value serves that build on the row served_by, positioned immediately after reported_client", layer: "request" }
+    it "reports the build that served it on served_by" do
+      allow(VersionsController).to receive(:server_version).and_return("0.9.9")
+
+      refuse(at: 1.hour.ago)
+
+      row = delivery_health["rejections"].first
+      expect(row.keys.index("served_by")).to eq(row.keys.index("reported_client") + 1)
+      expect(row["served_by"]).to eq("0.9.9")
+    end
+
     # A version nobody reported must not be invented, least of all on the block whose subject is a
     # diagnosis BY client version.
     # @intent: { entity: "rejections", action: "null the absent client", behavior: "a refusal with no User-Agent reports a null reported_client rather than an invented placeholder", layer: "request" }
@@ -186,6 +204,23 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       refuse(at: 1.hour.ago, user_agent: nil)
 
       expect(delivery_health["rejections"].first["reported_client"]).to be_nil
+    end
+
+    # `#served_by`'s own nil-when-absent rule, mirrored from `ingest_rejection_spec`. A NULL
+    # `served_by` and a NULL `reported_client` mean different things: the client half means the
+    # request sent no header; the server half means THE ROW PREDATES THE STAMP and the platform
+    # genuinely does not know which build answered. No-backfill was SPGD-1202's deliberate choice,
+    # so pre-stamp rows are a real and permanent population — this is the pin that keeps that
+    # absence honest: `nil`, never a placeholder, and never the build answering THIS request
+    # (stubbing the read to `nil` produces, through the production writer, exactly the shape a
+    # pre-stamp row has).
+    # @intent: { entity: "rejections", action: "null the absent server build", behavior: "a refusal recorded while the build identity read returns nil serves a null served_by rather than a placeholder or the build answering the read request", layer: "request" }
+    it "reports a null server build rather than a placeholder when the row predates the stamp" do
+      allow(VersionsController).to receive(:server_version).and_return(nil)
+
+      refuse(at: 1.hour.ago)
+
+      expect(delivery_health["rejections"].first["served_by"]).to be_nil
     end
 
     # @intent: { entity: "rejections", action: "stamp each row", behavior: "each row carries the refusal own occurred_at in iso8601", layer: "request" }
