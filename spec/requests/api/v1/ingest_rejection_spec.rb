@@ -250,6 +250,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
     # header pass a fence whose name is a claim about the row.
     # @intent: { entity: "IngestRejection", action: "bound the whole row size", behavior: "many long reasons plus a huge header still serialize to a row under a stated byte ceiling because every client-controlled column is bounded", layer: "request" }
     it "keeps the row under a stated size ceiling however large the payload or the client's header" do
+      allow(VersionsController).to receive(:server_version).and_return("v" * 100_000)
       ingest({ commit_sha: "a" * 40,
                specs: Array.new(200) { { file_path: "x" * 5_000, line_number: 0 } } },
              headers: { "User-Agent" => "u" * 100_000 })

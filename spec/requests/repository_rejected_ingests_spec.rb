@@ -468,6 +468,7 @@ RSpec.describe "Repository rejected deliveries", type: :request do
     # it this ceiling holds only because the fixture happens to send a well-behaved client string.
     # @intent: {"entity": "IngestRejection", "action": "hold worst-case byte ceiling", "behavior": "a full window of whole-suite refusals with 5,000-character file paths and a DISTINCT 100,000-character user agent per row keeps every stored reason within the length cap, renders the capped rows and list items, and holds the panel html under 200,000 bytes", "layer": "request"}
     it "keeps the whole panel under a stated ceiling in the worst case it exists for" do
+      allow(VersionsController).to receive(:server_version).and_return("v" * 100_000)
       (IngestRejection::PANEL_LIMIT + 2).times do |i|
         refuse_a_large_delivery(file_path: "x" * 5_000, user_agent: "u#{i}" + "u" * 100_000)
       end
