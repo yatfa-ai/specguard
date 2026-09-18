@@ -167,9 +167,13 @@
 
                     "Not recorded" is deliberately a DIFFERENT word from the rows' "Not reported":
                     "Not reported" means the client sent no header (the row knows, and the client
-                    said nothing); a nil `server_version` means the ROW predates the stamp and the
-                    platform genuinely does not know which build answered. One blank meaning two
-                    different things would read the absence as the same fact, which it is not. %>
+                    said nothing); a nil `server_version` means the ROW carries no build identity
+                    recorded, so the platform genuinely does not know which build answered. The
+                    write path can land on that nil in more than one way — for example a row
+                    retained from before the stamp existed, a build whose VERSION file is missing
+                    or unreadable, a column stored blank — so the nil does not distinguish them.
+                    One blank meaning two different things would read the absence as the same
+                    fact, which it is not. %>
                 <% if rejection.served_by %>
                   <span class="font-mono text-xs break-all"><%= rejection.served_by %></span>
                 <% else %>
