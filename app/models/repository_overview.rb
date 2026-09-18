@@ -566,10 +566,22 @@ class RepositoryOverview
   # client sent no `User-Agent`, which is `IngestRejection#reported_client`'s own rule: a version
   # nobody reported must not be invented, least of all on the block whose subject is a diagnosis by
   # client version.
+  #
+  # ⚠️ THE TWO NULLS ON THIS ROW MEAN DIFFERENT THINGS, and a client must not read one as the
+  # other — the panel draws the distinction in words ("Not reported" vs "Not recorded"); this
+  # surface has only `null`, so the distinction lives here in prose. A null `reported_client`
+  # means THE CLIENT SENT NO `User-Agent` (the row knows, and the client said nothing). A null
+  # `served_by` means THE ROW PREDATES THE STAMP — `IngestRejection::REPOSITORY_RETENTION_ROWS`
+  # retains refusals across deploys, so the platform genuinely does not know which build answered.
+  # `served_by` is served through the reader `IngestRejection#served_by` (`server_version.presence`),
+  # not the raw column, so both API keys and the panel's cells name the same fact — the parity rule
+  # this endpoint's controller states outright: the two surfaces do not get to name the same facts
+  # differently.
   def serialized_ingest_rejection_row(rejection)
     {
       occurred_at: rejection.occurred_at.iso8601,
       reported_client: rejection.reported_client,
+      served_by: rejection.served_by,
       reasons: rejection.reasons,
       omitted_reasons_count: rejection.omitted_reasons_count,
       reasons_truncated: rejection.reasons_truncated?
