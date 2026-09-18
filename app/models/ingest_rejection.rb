@@ -142,8 +142,11 @@ class IngestRejection < ApplicationRecord
   # says so rather than substituting a version nobody reported.
   def reported_client = user_agent.presence
 
-  # Which build answered. Nil when the row predates the stamp — the surface says "Not recorded"
-  # rather than substituting a version the row never carried, the same honesty rule
-  # `#reported_client` states for a client that sent nothing.
+  # Which build answered. Nil when the row carries no build identity recorded — the surface says
+  # "Not recorded" rather than substituting a version the row never carried, the same honesty rule
+  # `#reported_client` states for a client that sent nothing. The write path can land on that nil
+  # in more than one way — for example a row retained from before the stamp existed, a build whose
+  # VERSION file is missing or unreadable, a column stored blank — so the null says only that the
+  # platform cannot name which build answered, never which way it got there.
   def served_by = server_version.presence
 end

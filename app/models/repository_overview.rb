@@ -571,8 +571,11 @@ class RepositoryOverview
   # other — the panel draws the distinction in words ("Not reported" vs "Not recorded"); this
   # surface has only `null`, so the distinction lives here in prose. A null `reported_client`
   # means THE CLIENT SENT NO `User-Agent` (the row knows, and the client said nothing). A null
-  # `served_by` means THE ROW PREDATES THE STAMP — `IngestRejection::REPOSITORY_RETENTION_ROWS`
-  # retains refusals across deploys, so the platform genuinely does not know which build answered.
+  # `served_by` means THE ROW CARRIES NO BUILD IDENTITY RECORDED — the platform genuinely does
+  # not know which build answered, and the write path can land on that nil in more than one way
+  # (for example a row `IngestRejection::REPOSITORY_RETENTION_ROWS` retains across deploys from
+  # before the stamp existed; a build whose VERSION file is missing or unreadable; a column
+  # stored blank), so the `null` does not distinguish them.
   # `served_by` is served through the reader `IngestRejection#served_by` (`server_version.presence`),
   # not the raw column, so both API keys and the panel's cells name the same fact — the parity rule
   # this endpoint's controller states outright: the two surfaces do not get to name the same facts
