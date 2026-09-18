@@ -1,8 +1,11 @@
     <%# == Deliveries the endpoint REFUSED
         Every other panel on this page is built out of runs that were ACCEPTED. This one is the
-        only surface in the product that can say a delivery arrived and was thrown away — and
+        per-delivery detail record behind the refusal verdict at the top of this page — and
         before it existed, that event left no platform-side record at all: `render_bad_request`
-        renders JSON and returns, and nothing was written.
+        renders JSON and returns, and nothing was written. That verdict, and these same rows, are
+        served beyond the browser too: API and agent clients read them through
+        `serialized_delivery_health` on `RepositoryOverview`, so this panel is the browser's
+        rendering of them, and the renderings are kept in step.
 
         The reason that mattered is at the top of the page. `authenticate_api_key!` stamps
         `api_keys.last_used_at` on the way IN, so a refused delivery still records a use, and the
