@@ -155,10 +155,10 @@ class NearDuplicateClusters
   # So the threshold has to land strictly inside (0.80, 0.89]. That is a 0.09-wide window, and the
   # question is where in it.
   #
-  # **The margin came from `script/embedding_collision_audit.rb`**, which was the evidence the
+  # **The margin came from the embedding-collision census script**, which was the evidence the
   # feature-hashing provider told you to read before choosing any similarity threshold, and which
-  # re-derived itself on whatever corpus it was pointed at. Run for this slice against this
-  # repository's own suite — `SIZE=1700 ruby script/embedding_collision_audit.rb spec`, 1,700 real
+  # re-derived itself on whatever corpus it was pointed at. That script is gone — deleted by
+  # `f5c4acc` (2026-08-18) alongside the provider it audited. The recorded run: 1,700 real
   # example names, a full census of all 1,444,150 pairs, each scored twice: once as the 1536-bucket
   # vector production then stored, once in a collision-free space:
   #
