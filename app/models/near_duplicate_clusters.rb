@@ -320,7 +320,8 @@ class NearDuplicateClusters
   # a.repository_id` it replaced derived the tenant from whatever row the lateral was invoked for,
   # so the boundary held only as a consequence of the outer predicate holding first, while a literal
   # states the tenant in the inner scan itself and cannot be widened by anything the outer query
-  # later does. (It was changed for a planner reason, not this one — `spec_identity.rb:334` argues
+  # later does. (It was changed for a planner reason, not this one — `SpecIdentity`'s
+  # "It was measured to cost the plan" argument for the literal `repository_id` binding argues
   # that at the query, and warns against tidying it back. The tenant argument here survives either
   # spelling; it is simply cheaper to make about this one.) The CAPTION half
   # has no such protection — `SpecObservation.identity_presence_in` is `where(test_run_id:)` with no

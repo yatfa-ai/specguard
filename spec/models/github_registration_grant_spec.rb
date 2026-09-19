@@ -165,7 +165,8 @@ RSpec.describe GithubRegistrationGrant do
     # so `valid?` genuinely answers true and the INSERT is what collides. Postgres raises the real
     # `PG::UniqueViolation` against `index_github_registration_grants_on_user_id`, and `find_by`
     # afterwards is an ordinary read (the transaction is not aborted, because the error is caught).
-    # Drop `RecordNotUnique` from the rescue list in `github_registration_grant.rb:76` and only this
+    # Drop `RecordNotUnique` from `GithubRegistrationGrant.capture`'s
+    # `rescue ActiveRecord::RecordNotUnique, ActiveRecord::RecordInvalid` and only this
     # example fails — naming the constraint, so it is also the example that notices if the index
     # itself goes away.
     # @intent: { entity: "GithubRegistrationGrant", action: "capture a reading", behavior: "a Postgres-level unique violation in the same race is rescued the same way, returning the existing row", layer: "unit" }
