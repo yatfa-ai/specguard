@@ -87,9 +87,11 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
                "commit_sha" => run.commit_sha, "branch" => "main")
     end
 
-    # The addition is local to `run_anchor`. Every other block is untouched, which is the half an
-    # example that only read `run_anchor` could not see.
-    # @intent: { entity: "run_anchor", action: "contain the disclosure", behavior: "the two new keys appear on run_anchor only; latest_run and the delivery_health rejections window keep their original key sets untouched", layer: "request" }
+    # The addition is local to `run_anchor`. Every other block is untouched by THAT ticket, which is
+    # the half an example that only read `run_anchor` could not see. (The `rejections_window` set
+    # has since grown by SPGD-1248's own two keys; what this example pins is that no
+    # `observations_retained`/`retention_runs` key leaked out of `run_anchor`.)
+    # @intent: { entity: "run_anchor", action: "contain the disclosure", behavior: "the two new keys appear on run_anchor only; latest_run keeps its original key set and the delivery_health rejections window carries no run-anchor retention key", layer: "request" }
     it "leaves every other block's keys exactly where they were" do
       create_test_run(repository: repository, branch: "main", total_specs_count: 12)
 
@@ -97,7 +99,8 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
 
       expect(body["latest_run"].keys).not_to include("observations_retained", "retention_runs")
       expect(body["delivery_health"]["rejections_window"].keys)
-        .to contain_exactly("limit", "bounded", "retention_rows", "any_reasons_truncated")
+        .to contain_exactly("limit", "bounded", "retention_rows", "any_reasons_truncated",
+                            "retained_total", "retained_clients")
     end
 
     # ⭐ THE DEFECT ITSELF, pinned as the direct comparison the ticket asks for. Before this key

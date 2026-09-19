@@ -236,8 +236,12 @@ class RejectedIngests
   #   list exists to invite.
   # * **Not paid by every caller.** Only a caller that READS {RejectedIngests#retained_window}
   #   triggers the grouped query — the panel's summary, once per page render, memoized. The
-  #   repositories grid asks {.verdict} per card and must not pay a grouped read per card, and the
-  #   JSON API publishes `retention_rows` and never asks for a composition, so neither does.
+  #   repositories grid asks {.verdict} per card and must not pay a grouped read per card, and
+  #   its {#retained_window} is `nil` (`@repository` absent), so the grid never reads one. The
+  #   singular JSON endpoint (`GET /api/v1/repository`) DOES read the composition —
+  #   `delivery_health.rejections_window.retained_total` and `.retained_clients` — and pays the
+  #   one grouped read on a refusing repository only: an accepting repository takes the
+  #   {RetainedWindow.empty} short-circuit and issues nothing.
   class RetainedWindow
     # One grouped read. `group(:user_agent).count` keys the hash on the STORED value — an
     # ellipsis-truncated string where `MAX_USER_AGENT_LENGTH` bit, `nil` where the client sent no

@@ -57,13 +57,15 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(health["rejections"]).to eq([])
     end
 
-    # @intent: { entity: "rejections_window", action: "disclose bounds", behavior: "the empty state still reports the panel limit, the retention row budget and a false bounded flag, keeping the window contract unconditional", layer: "request" }
+    # @intent: { entity: "rejections_window", action: "disclose bounds", behavior: "the empty state still reports the panel limit, the retention row budget and a false bounded flag, an empty population beside them, keeping the window contract unconditional", layer: "request" }
     it "discloses both bounds even with nothing to bound" do
       expect(delivery_health["rejections_window"]).to eq(
         "limit" => IngestRejection::PANEL_LIMIT,
         "bounded" => false,
         "retention_rows" => IngestRejection::REPOSITORY_RETENTION_ROWS,
-        "any_reasons_truncated" => false
+        "any_reasons_truncated" => false,
+        "retained_total" => 0,
+        "retained_clients" => []
       )
     end
   end
@@ -253,6 +255,119 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
 
       expect(health["rejections"].size).to eq(IngestRejection::PANEL_LIMIT)
       expect(health["rejections_window"]["bounded"]).to be(false)
+    end
+  end
+
+  # ── The window's population and its client composition ────────────────────────────────────────
+  #
+  # `retained_total` / `retained_clients` are the two measured facts the block used to publish only
+  # the bounds of: everything `REPOSITORY_RETENTION_ROWS` still holds, counted and split by client
+  # from ONE grouped query — `RejectedIngests#retained_window`, the same summary the panel states
+  # above its rows. `bounded` says something was cut (SPGD-601 keeps it a peek's boolean by
+  # design); these two say how much and what. The founding scenario is a fleet mid-upgrade, where
+  # the old-gem bulk sits exactly in the rows the `rejections` list does not show.
+  describe "the retained window's population and its client composition" do
+    # @intent: { entity: "rejections_window", action: "report the population", behavior: "past the panel limit retained_total reports the window's whole population while rejections stays page-length and bounded stays true, the figure bounded could never carry", layer: "request" }
+    it "reports the window's population, not the page length, past the panel limit" do
+      (IngestRejection::PANEL_LIMIT + 1).times { |i| refuse(at: (i + 1).hours.ago) }
+
+      health = delivery_health
+
+      expect(health["rejections_window"]["retained_total"]).to eq(IngestRejection::PANEL_LIMIT + 1)
+      expect(health["rejections"].size).to eq(IngestRejection::PANEL_LIMIT)
+      expect(health["rejections_window"]["bounded"]).to be(true)
+    end
+
+    # THE FOUNDING SCENARIO. `PANEL_LIMIT` rows of the new client; the old-gem refusal older than
+    # all of them. Before the population existed on this surface, an agent reading the page
+    # concluded "the NEW gem is being refused" and aimed the remedy at the wrong runner; the
+    # browser, above the same rows, names the old one.
+    # @intent: { entity: "rejections_window", action: "name the off-page client", behavior: "a client whose only refusals sit beyond the page appears in retained_clients and in no rejections row", layer: "request" }
+    it "names a client whose refusals sit only beyond the page" do
+      IngestRejection::PANEL_LIMIT.times { |i| refuse(at: (i + 1).hours.ago, user_agent: "specguard-rspec/0.4.0") }
+      refuse(at: (IngestRejection::PANEL_LIMIT + 1).hours.ago, user_agent: "specguard-rspec/0.2.9")
+
+      health = delivery_health
+
+      expect(health["rejections_window"]["retained_clients"].map { |e| e["reported_client"] })
+        .to include("specguard-rspec/0.2.9")
+      expect(health["rejections"].map { |row| row["reported_client"] })
+        .to eq(["specguard-rspec/0.4.0"] * IngestRejection::PANEL_LIMIT)
+    end
+
+    # @intent: { entity: "rejections_window", action: "reconcile buckets to population", behavior: "the retained_clients counts sum exactly to retained_total, one grouped read behind both", layer: "request" }
+    it "sums its client buckets to the window's population" do
+      3.times { |i| refuse(at: (i + 1).hours.ago, user_agent: "specguard-rspec/0.4.0") }
+      2.times { |i| refuse(at: (10 + i).hours.ago, user_agent: "old-runner/0.1.0") }
+      refuse(at: 20.hours.ago, user_agent: nil)
+
+      window = delivery_health["rejections_window"]
+
+      expect(window["retained_total"]).to eq(6)
+      expect(window["retained_clients"].sum { |entry| entry["count"] }).to eq(window["retained_total"])
+    end
+
+    # The row-level vocabulary, borrowed not invented: a null `reported_client` here is the same
+    # bucket the rows render as "Not reported" — the client sent no `User-Agent` — never an empty
+    # string and never a placeholder, and never the `served_by` null (a missing BUILD identity).
+    # @intent: { entity: "rejections_window", action: "serve the unreported bucket", behavior: "a refusal recorded with no User-Agent yields a null reported_client entry with its real count, and no empty-string client ever appears", layer: "request" }
+    it "serves the unreported bucket as a null client, matching the row-level key" do
+      refuse(at: 1.hour.ago, user_agent: nil)
+      refuse(at: 2.hours.ago, user_agent: "specguard-rspec/0.4.0")
+
+      entries = delivery_health["rejections_window"]["retained_clients"]
+      unreported = entries.find { |entry| entry["reported_client"].nil? }
+
+      expect(unreported).to be_present
+      expect(unreported["count"]).to eq(1)
+      expect(entries.map { |entry| entry["reported_client"] }).not_to include("")
+    end
+
+    # `RetainedWindow`'s own order, left untouched by the serializer: largest bucket first, ties
+    # alphabetical.
+    # @intent: { entity: "rejections_window", action: "preserve summary order", behavior: "retained_clients keeps the summary largest-bucket-first order with alphabetical ties", layer: "request" }
+    it "orders clients largest bucket first with alphabetical ties" do
+      2.times { |i| refuse(at: (i + 1).hours.ago, user_agent: "specguard-rspec/0.4.0") }
+      2.times { |i| refuse(at: (10 + i).hours.ago, user_agent: "old-runner/0.1.0") }
+      1.times { refuse(at: 20.hours.ago, user_agent: "specguard-rspec/0.2.9") }
+
+      expect(delivery_health["rejections_window"]["retained_clients"].map { |e| e["reported_client"] })
+        .to eq(["old-runner/0.1.0", "specguard-rspec/0.4.0", "specguard-rspec/0.2.9"])
+    end
+
+    # `queries_against` drops only SCHEMA, so the peek and the grouped read both land in its list.
+    # ONE read on an accepting repository is the pre-change baseline — `.for`'s peek, the only
+    # `ingest_rejections` statement this endpoint ever issued here — so equality pins the
+    # `RetainedWindow.empty` short-circuit rather than restating a budget. A refusing repository
+    # pays the peek plus exactly one grouped read, and reaching the summary again on ONE overview
+    # object re-pays nothing: the grouped read is memoized however many times the block is reached.
+    # @intent: { entity: "rejections_window", action: "bound the reads", behavior: "an accepting repository issues no grouped read beyond the peek, a refusing one pays exactly one memoized grouped read", layer: "request" }
+    it "issues no grouped read when nothing was refused and one, memoized, when something was" do
+      accept(at: 1.hour.ago)
+
+      clean = queries_against("ingest_rejections") { delivery_health }
+
+      expect(clean.size).to eq(1)
+      expect(clean.first).not_to include("GROUP BY")
+
+      11.times { |i| refuse(at: (i + 1).hours.ago) }
+
+      refusing = queries_against("ingest_rejections") { delivery_health }
+
+      expect(refusing.size).to eq(2)
+      expect(refusing.count { |sql| sql.include?("GROUP BY") }).to eq(1)
+
+      # Reaching the block again on ONE overview object re-pays nothing: the grouped read is
+      # memoized on the serializer's `rejected_ingests` (`body` is the public surface that
+      # reaches it).
+      overview = RepositoryOverview.new(repository: repository, params: {})
+
+      memoized = queries_against("ingest_rejections") do
+        2.times { overview.body }
+      end
+
+      expect(memoized.size).to eq(2)
+      expect(memoized.count { |sql| sql.include?("GROUP BY") }).to eq(1)
     end
   end
 
