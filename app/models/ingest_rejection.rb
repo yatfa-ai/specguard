@@ -43,8 +43,10 @@ class IngestRejection < ApplicationRecord
   #
   # `REPOSITORY_RETENTION_ROWS` above bounds how many refusals a repository keeps. It says nothing
   # about how big one of them is, and `Ingest::Payload` has no cap of its own: it emits one error
-  # per invalid spec — up to five, each embedding the client's own `file_path` — so the length of
-  # `details` is a function of the SUITE SIZE, not of how wrong the payload is.
+  # per failed check, runs several checks per spec, and its intent check emits one error per
+  # schema violation — so the per-spec count is determined by how the client's payload is wrong,
+  # not by a ceiling the producer enforces. Each error embeds the client's own `file_path`, and
+  # the length of `details` is a function of the SUITE SIZE, not of how wrong the payload is.
   #
   # ⚠️ That is not a tail case here, it is the design point. This table exists for a pipeline
   # refusing EVERY run, and the failure it was built to diagnose — a version floor, an envelope or
