@@ -481,7 +481,32 @@ class RepositoryOverview
   # capped at `RETAINED_REASONS_PER_ROW` with no per-row disclosure beside it, so serving it raw
   # would hand a client a silently-shortened objection to read as the endpoint's whole sentence —
   # exactly the habit this block was built to correct, at a smaller grain.
+  #
+  # == The window's population and its client composition
+  #
+  # `rejections_window` also carries the window's two MEASURED facts, both read off
+  # {RejectedIngests#retained_window} — the same summary the panel states above its rows, one
+  # grouped query, memoized:
+  #
+  # * `retained_total` is the population of the RETAINED WINDOW — everything the retention rule
+  #   still holds, up to `retention_rows` — and is the sum of `retained_clients`' buckets, so the
+  #   two come from one `GROUP BY` and cannot disagree. It is NOT the length of the `rejections`
+  #   array beside it: that list is bounded by `limit`, and the whole point of the pair is that
+  #   they differ — on a fleet mid-upgrade the old-gem refusals sit exactly in the rows the list
+  #   does not show, which is the reading `bounded: true` can disclose but never count.
+  # * `retained_clients` splits that population by reported client, largest bucket first, ties
+  #   alphabetical — `RetainedWindow`'s own order, not re-sorted here. `reported_client: null`
+  #   carries the row-level key's meaning (`serialized_ingest_rejection_row`): the client sent no
+  #   `User-Agent`. It is not the `served_by` null, which names a missing BUILD identity, and the
+  #   nil/blank fold happens inside `RetainedWindow` so the summary and the rows speak one
+  #   vocabulary and SQL's `NULL`-vs-`''` split never reaches the wire.
+  #
+  # An accepting repository serves `retained_total: 0` and `retained_clients: []` — a positive
+  # finding, not an absent key — and issues no extra read for them: `RetainedWindow.empty`
+  # short-circuits off the peek `.for` has already paid.
   def serialized_delivery_health
+    window = rejected_ingests.retained_window
+
     {
       refusing: rejected_ingests.refusing?,
       last_rejection_at: rejected_ingests.last_rejection_at&.iso8601,
@@ -489,7 +514,9 @@ class RepositoryOverview
         limit: IngestRejection::PANEL_LIMIT,
         bounded: rejected_ingests.bounded?,
         retention_rows: IngestRejection::REPOSITORY_RETENTION_ROWS,
-        any_reasons_truncated: rejected_ingests.truncated_rows?
+        any_reasons_truncated: rejected_ingests.truncated_rows?,
+        retained_total: window.total,
+        retained_clients: window.entries.map { |client, count| { reported_client: client, count: count } }
       },
       rejections: rejected_ingests.rows.map { |rejection| serialized_ingest_rejection_row(rejection) }
     }
