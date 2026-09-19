@@ -203,7 +203,8 @@ RSpec.describe SpecGuard::DesignSystemLint do
   # No example anywhere drove a `.rb` file before the scan-scope block above, so the `.rb` side of
   # `comment?` was unexercised. The ERB side is covered by "when the comment wraps across lines";
   # `.rb` needs its own pins because `#` — unlike `<%#` — is line-initial on every comment line,
-  # which is exactly the assumption the implementation states at design_system_lint.rb:170-171.
+  # which is exactly the assumption the comment above `DesignSystemLint`'s `COMMENT_LINE` regex
+  # states.
   describe "comment handling in .rb files" do
     def rb_counts(source)
       Dir.mktmpdir do |dir|

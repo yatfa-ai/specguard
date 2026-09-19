@@ -5,7 +5,8 @@
 # newest accepted run on the other. One query each for the whole list, whatever N is.
 #
 # Neither method decides anything. The verdict itself is `RejectedIngests.verdict`'s and stays
-# there: `rejected_ingests.rb:80-84` forbids a second inline expression of the ordering rule, and
+# there: the one-expression rule beside `RejectedIngests#refusing?` forbids a second inline
+# expression of the ordering rule, and
 # the rule has two `nil` limbs that do not both fall out of a bare `>` — a `nil` rejection is not
 # refusing, and a `nil` accepted side WITH a rejection present is the most refusing state there is,
 # which inverts. So this module hands a caller two timestamps per repository and nothing else; the
