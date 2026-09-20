@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest"
+
 # The OpenTestIntent v1 contract — the protocol every `intent` on an ingested spec must satisfy.
 #
 # `SCHEMA_PATH` is a byte-identical vendored copy of the `open-test-intent` repo's
@@ -37,6 +39,25 @@ module OpenTestIntent
     # whitespace, and the mirror's whole claim is that it is byte-identical to the canonical
     # document. Read once and frozen, since the file cannot change without a deploy.
     def raw_document = @raw_document ||= SCHEMA_PATH.binread.freeze
+
+    # The SHA-256 of the bytes this process actually validates against, hex-encoded and lowercase
+    # — the digest the rest of the family compares with, pinned independently in three sibling
+    # repos (`open-test-intent`'s `CanonicalV1SHA256`, `specguard-rspec`'s `CANONICAL_V1_SHA256`,
+    # `specguard-ts`'s `SCHEMA_CONTRACT_DIGEST`). It is deliberately a DIFFERENT algorithm from
+    # `SCHEMA_BLOB_SHA` above, and both are kept: the blob SHA-1 is the in-repo guard against the
+    # file's *git* identity drifting from its publisher, while this one is the cross-repo one —
+    # a git blob hash is comparable with none of those three constants, so serving it would state
+    # an identity nobody else can check. Mirrors what `open-test-intent`'s `SHA256Hex` documents
+    # about having ONE fold: those digests are COMPARED, so a difference must mean the schemas
+    # differ and never that the arithmetic does.
+    #
+    # Folded over `raw_document` rather than re-reading the file, for that same reason and for the
+    # `--schema-source` one: a function that re-read the path could digest something other than
+    # the bytes the validator loaded. It costs no new disk read (`raw_document` is already read
+    # once per process and frozen) and does not mutate or re-serialize it, so `SchemasController`'s
+    # byte-identical mirror is untouched. Memoized per process on the same terms as the read
+    # itself: the file cannot change without a deploy, and a deploy is a process restart.
+    def schema_sha256 = @schema_sha256 ||= Digest::SHA256.hexdigest(raw_document).freeze
 
     def schema
       @schema ||= JSONSchemer.schema(SCHEMA_PATH)
