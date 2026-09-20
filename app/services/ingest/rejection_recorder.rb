@@ -1,14 +1,15 @@
 # frozen_string_literal: true
 
 module Ingest
-  # Writes the one row a refused delivery leaves behind, bounded on every axis it can grow along —
-  # `IngestRejection::RETAINED_REASONS_PER_ROW` and `MAX_REASON_LENGTH` cap what one row's `details`
-  # holds, `MAX_USER_AGENT_LENGTH` caps the other client-controlled column beside it, and
-  # `REPOSITORY_RETENTION_ROWS` caps how many rows a repository keeps, enforced on the way past.
+  # Writes the one row a refused delivery leaves behind: each column the write stamps is truncated
+  # against its own `IngestRejection` cap, and `REPOSITORY_RETENTION_ROWS` caps how many rows a
+  # repository keeps, enforced on the way past.
   #
-  # Called from `Api::V1::IngestsController#create` on the 400 path, BEFORE `render_bad_request`
-  # returns. Everything about which requests are recordable — authenticated-but-refused only, never
-  # a 401 — is argued in `IngestRejection` and `CreateIngestRejections` and is not re-derived here.
+  # Written from the controller's 400 path before `render_bad_request` returns, and from the
+  # boundary refusals `Ingest::BoundaryRefusalRecorder` records for the middleware above the
+  # controller. Everything about which requests are recordable — authenticated-but-refused only,
+  # never a 401 — is argued in `IngestRejection` and `CreateIngestRejections` and is not re-derived
+  # here.
   #
   # == A failed record does NOT fail the request, and that is a decision rather than a default
   #
