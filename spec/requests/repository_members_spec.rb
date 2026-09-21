@@ -12,6 +12,7 @@ RSpec.describe "Repository members", type: :request do
   let(:owner) { create_user(github_handle: "octocat") }
   let(:repository) { create_repository(user: owner, github_full_name: "acme/billing-service") }
   let(:colleague) { create_user(github_uid: "9999", github_handle: "hubot") }
+  let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
 
   describe "the owner" do
     before do
@@ -325,8 +326,6 @@ RSpec.describe "Repository members", type: :request do
            params: { membership_grant: { handle: "dependabot", permissions: [""] + permissions } }
     end
 
-    let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
-
     before { third_party }
 
     context "a member holding 'members.manage'" do
@@ -575,7 +574,6 @@ RSpec.describe "Repository members", type: :request do
         create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
       end
 
-      let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
       let!(:third_party_membership) do
         create_membership(repository: repository, user: third_party, permissions: %w[view])
       end
@@ -808,8 +806,6 @@ RSpec.describe "Repository members", type: :request do
       label.css("span").last.text.strip
     end
 
-    let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
-
     describe "'members.manage', read by an actor who holds it" do
       before do
         create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
@@ -941,7 +937,6 @@ RSpec.describe "Repository members", type: :request do
   # the owner-facing surfaces now *disclose* it, and the last example pins the behaviour itself so
   # it stays a decision rather than an accident.
   describe "the API keys a member minted" do
-    let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
 
     before do
       create_membership(repository: repository, user: colleague, permissions: %w[view keys.manage])
@@ -1124,7 +1119,6 @@ RSpec.describe "Repository members", type: :request do
   # behind `keys.manage`, "so a bare count on the card would leak past the same line". A count on
   # this page is the same count, and it must answer this viewer the same way.
   describe "the key count and the 'keys.manage' line" do
-    let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
 
     before do
       create_membership(repository: repository, user: third_party, permissions: %w[view keys.manage])
@@ -1251,7 +1245,6 @@ RSpec.describe "Repository members", type: :request do
   # The permission is not owner-only: the roadmap grants it "add/remove collaborators", so a
   # non-owner holder is legitimate and gets the same page.
   describe "a member holding 'members.manage'" do
-    let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
 
     before do
       create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
