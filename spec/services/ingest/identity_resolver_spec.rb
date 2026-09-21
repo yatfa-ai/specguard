@@ -83,6 +83,14 @@ RSpec.describe Ingest::IdentityResolver do
 
   def identity_texts = repository.spec_identities.pluck(:text).sort
 
+  # The provider, down and back. `reset` on the proxy rather than a second `allow`, so the "back"
+  # state is the real `LexicalEmbeddingProvider` this file installs and not another stub.
+  def provider_down
+    allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+  end
+
+  def provider_back = RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
+
   # How many embeddings a block caused, counted through `EmbeddingGenerator.provider=` — the public
   # swap seam `with lexical embeddings` itself uses — rather than by stubbing
   # `EmbeddingGenerator.call`: what is counted is then the real call the resolver makes through the
@@ -1623,12 +1631,6 @@ RSpec.describe Ingest::IdentityResolver do
     # the page arrives deduplicated the guard is asked about a row nobody chose — and a sighting
     # travels backwards in time again, which is the failure that guard exists to make structurally
     # impossible.
-    def provider_down
-      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
-    end
-
-    def provider_back = RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
-
     # Two tests, at one line offset, ingested as one run. Two so the example can put the newer
     # sighting FIRST in the page for one of them and LAST for the other — see below for why one
     # would certify nothing.
@@ -1727,12 +1729,6 @@ RSpec.describe Ingest::IdentityResolver do
     # survives a retry differently again. Each of those gets its own example rather than riding on
     # the `UPDATE`s', because "the wrapper is applied" and "this statement is correct when it is
     # applied twice" are different claims.
-    def provider_down
-      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
-    end
-
-    def provider_back = RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
-
     def three_specs(offset: 0)
       [["cart", "Cart adds an item to the cart"],
        ["order", "Order#checkout rejects an expired card"],
@@ -3030,14 +3026,6 @@ RSpec.describe Ingest::IdentityResolver do
   end
 
   describe "an example the provider cannot embed" do
-    # The provider, down and back. `reset` on the proxy rather than a second `allow`, so the "back"
-    # state is the real `LexicalEmbeddingProvider` this group installed and not another stub.
-    def provider_down
-      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
-    end
-
-    def provider_back = RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
-
     # A LATER ingest of this repository, carrying a test that has nothing to do with the failed one.
     # This is the production trigger under test everywhere below: nothing it contains can create the
     # failed row's identity, so if that row resolves, the cross-run sweep is what resolved it.
