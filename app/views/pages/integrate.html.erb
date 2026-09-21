@@ -540,7 +540,7 @@ describe("expired-card checkout flow", () => {
 
       <div class="space-y-2" data-controller="copy-text">
         <%= render UI::CopyableCodeComponent.new(multiline: true) do %>bundle exec specguard-lint --changed   # CI mode: only files in the current diff
-bundle exec specguard-lint             # one-off audit: every *_spec.rb
+bundle exec specguard-lint             # one-off audit: every *_spec.rb outside dependency/build directories
 bundle exec specguard-lint spec/models/order_spec.rb<% end %>
         <p class="text-xs text-app-muted">
           The TypeScript client ships the same linter for JS/TS sources — same schema, same exit
