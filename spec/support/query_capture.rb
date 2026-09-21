@@ -35,11 +35,25 @@
 # none of these, add it beside them with the same kind of note rather than bending one of them to
 # fit.
 #
-# `rows_touched` is not one of those rules and totals nothing on the wire: it plans the statement
-# `captured_sql` caught and sums the rows the plan says were touched. It also carries the failure
-# evidence at the foot of this file — the plan it already fetched, surfaced on a failing bound
-# rather than discarded — and that section says why that is a hook rather than the rescue its
-# sibling in spec/support/near_duplicate_failure_evidence.rb uses.
+# `rows_touched` and `plan_for_actual_sql` are not one of those rules and total nothing on the
+# wire: both plan the statement `captured_sql` caught — one to sum the rows the plan says were
+# touched, one to hand back the plan Postgres chose.
+#
+# BOTH carry failure evidence at the foot of this file, and the two legs surface different halves
+# of a reddening:
+#
+#   - `rows_touched` fails as a naked number comparison, so its leg surfaces the PLAN it already
+#     fetched — the access method and the per-node actual rows.
+#   - `plan_for_actual_sql` fails with the plan itself already in the matcher's `got`, so its leg
+#     surfaces what the plan output does not show: the catalog statistics — `pg_class.reltuples` /
+#     `relpages` for the captured table and every index on it — that decided the choice. Those are
+#     exactly the numbers `restores_relation_statistics_for` exists because `ANALYZE` perturbs
+#     them, and the same leg spec/support/near_duplicate_failure_evidence.rb collects for the HNSW
+#     family; this one is for the plan-asserting family in spec/models/spec_observation_spec.rb,
+#     whose reddening has been misattributed at three separate seats in ~15 days while the stats
+#     that explained the plan sat unread in the catalog. (SPGD-1351.)
+#
+# The evidence sections say why these are hooks rather than the rescue the HNSW sibling uses.
 module QueryCapture
   # `table` is a String (matched as a substring, the original and still the common spelling) or a
   # Regexp (matched against the statement). The Regexp spelling exists because a table is not always
@@ -105,8 +119,13 @@ module QueryCapture
     ActiveSupport::Notifications.unsubscribe(subscriber)
   end
 
+  # The snapshot is taken at CAPTURE time and retained beside the plan, not re-read on the failure
+  # path — see the relation-statistics evidence section below for why that ordering is deliberate
+  # and what it costs.
   def plan_for_actual_sql(table, &)
-    ActiveRecord::Base.connection.select_values("EXPLAIN #{captured_sql(table, &)}").join("\n")
+    sql = captured_sql(table, &)
+    retain_plan_relation_statistics(table, RelationStatistics.snapshot(table))
+    ActiveRecord::Base.connection.select_values("EXPLAIN #{sql}").join("\n")
   end
 
   # How many rows of `table` the read ACTUALLY touched, off `EXPLAIN (ANALYZE)` — the only spelling
@@ -306,12 +325,138 @@ module QueryCapture
     discard_retained_rows_touched_plans
   end
 
+  # ───────────────────── `plan_for_actual_sql` relation-statistics evidence ─────────────────────
+  #
+  # A plan assertion fails with the plan already visible — it is the matcher's `got` — so what the
+  # reader of the red is missing is not the plan but the WHY: `pg_class.reltuples`/`relpages` for
+  # the captured table and every index on it, the numbers that decided the access method. These
+  # are the same numbers `restores_relation_statistics_for` manages, because `ANALYZE`-written
+  # `pg_class` rows survive the example's rollback and move plan choice — and the drill-down
+  # example this evidence serves has been misattributed at three separate seats in ~15 days while
+  # the explaining numbers sat unread in the catalog (a physically larger competing index beside a
+  # logically clean catalog is exactly the state that flips plan choice and reads as a phantom
+  # regression).
+  #
+  # == The snapshot is taken at CAPTURE time, and that ordering is deliberate
+  #
+  # Not a failure-path re-read: by the time the evidence hook runs, the declaring group's restore
+  # machinery and autovacuum are both free to have rewritten `pg_class` — the support file
+  # documents autovacuum re-deriving the numbers within 0-10 seconds of a rollback. A snapshot
+  # taken at the same instant the EXPLAIN was produced — while the example transaction is open and
+  # the perturbed catalog state is live — is immune to that ordering by construction: it is the
+  # state the planner actually acted on. The cost is one extra catalog SELECT per
+  # `plan_for_actual_sql` invocation, on the success path too — spec-only, plan-asserting examples
+  # only. (If that cost is ever objected to, the fallback is retaining the table and reading stats
+  # on the failure path — but that variant re-introduces the ordering question above and must be
+  # tested against the declaring group's restore; do not make that trade silently.)
+  #
+  # == Why this is a sibling HOOK and how the two legs compose
+  #
+  # The same reason `append_rows_touched_plan_evidence` is a hook rather than a rescue — the
+  # helper has already RETURNED the plan by the time the assertion is made, so a `rescue` here
+  # would catch nothing; that section carries the full argument. It is a sibling hook rather than
+  # a branch of the existing one so each leg stays a self-contained reader of its own retention,
+  # and the two compose rather than fight: `example.display_exception=` writes the example's
+  # `@exception`, so the hook that runs second (RSpec runs `after` hooks in definition-reverse
+  # order) reads the FIRST hook's enriched exception and dups IT — one message carrying original
+  # failure + first leg + second leg, and on the aggregate path two entries of their own. Each
+  # hook clears only its own retention in its own `ensure`; between them both lists are empty
+  # after every example, failed or not — the same discard discipline the rows_touched leg follows,
+  # for the same leak class.
+  PLAN_RELATION_STATISTICS_EVIDENCE_HEADER =
+    "──── plan_for_actual_sql relation statistics evidence (SPGD-1351) ────"
+
+  # Carries the evidence into an aggregate's sub-failure list. Named for what it holds, because
+  # that name is what the reader sees rendered beside the failed assertion.
+  class PlanRelationStatistics < StandardError; end
+
+  # The statistics snapshots this example retained, in invocation order. A call site may invoke
+  # `plan_for_actual_sql` more than once, and the failure names ONE plan, so order and table are
+  # what let a reader tell which invocation produced it. Empty — and the hook therefore a no-op —
+  # for every example that never called the helper.
+  def retained_plan_relation_statistics
+    @retained_plan_relation_statistics ||= []
+  end
+
+  def retain_plan_relation_statistics(table, snapshot)
+    retained_plan_relation_statistics << { table: table.to_s, snapshot: snapshot }
+  end
+
+  def discard_retained_plan_relation_statistics
+    @retained_plan_relation_statistics = nil
+  end
+
+  # The retained snapshots, formatted. ISSUES NO QUERY: every datum here was already in hand at
+  # capture — the reader-facing reason the capture-time variant was chosen over a failure-path
+  # re-read.
+  def plan_relation_statistics_evidence
+    lines = [
+      PLAN_RELATION_STATISTICS_EVIDENCE_HEADER,
+      "RelationStatistics.snapshot taken at the moment plan_for_actual_sql ran its EXPLAIN, " \
+      "while the example transaction was still open — the pg_class state the planner acted on, " \
+      "not whatever the catalog carries after the rollback. Rendering it issued no query. Each " \
+      "snapshot is labelled by the table it was taken against and by the order it was invoked " \
+      "in, because the failure names one plan and an example may invoke the helper more than " \
+      "once."
+    ]
+
+    retained_plan_relation_statistics.each_with_index do |retained, index|
+      lines << "── plan_for_actual_sql(#{retained[:table].inspect}), invocation #{index + 1} ──"
+      retained[:snapshot].each do |row|
+        lines << "  #{row['relname']}: reltuples=#{row['reltuples']} relpages=#{row['relpages']}"
+      end
+    end
+
+    lines << "──────────────────────────────────────────────────"
+    lines.join("\n")
+  end
+
+  # Appends the retained snapshots to what the reader will SEE for a failing example, leaving the
+  # original failure's class, backtrace and message text untouched above it — the same additive
+  # mechanism, and the same original-failure-wins rescue, as `append_rows_touched_plan_evidence`,
+  # whose section carries the full rationale for both shapes.
+  def append_plan_relation_statistics_evidence(example)
+    return if retained_plan_relation_statistics.empty?
+
+    failure = example.exception
+    return if failure.nil?
+
+    evidence =
+      begin
+        plan_relation_statistics_evidence
+      rescue StandardError => e
+        "#{PLAN_RELATION_STATISTICS_EVIDENCE_HEADER}\ncould not be collected (#{e.class}: #{e.message})"
+      end
+
+    if defined?(RSpec::Core::MultipleExceptionError::InterfaceTag) &&
+       RSpec::Core::MultipleExceptionError::InterfaceTag === failure
+      # An aggregate is a LIST of failures; appending to its message would bury the evidence above
+      # entries it does not belong to. It takes an entry of its own instead.
+      note = PlanRelationStatistics.new(evidence)
+      note.set_backtrace([])
+      failure.add(note)
+    else
+      # Duplicated and re-messaged for the same reason its sibling is: a dup carries the
+      # original's class, backtrace and every other attribute across for free — and, because
+      # `display_exception=` writes `@exception`, the hook that runs after this one dups THIS
+      # enriched exception, which is how the two legs land in one message.
+      enriched = failure.dup
+      message = "#{failure.message}\n#{evidence}"
+      enriched.define_singleton_method(:message) { message }
+      enriched.define_singleton_method(:to_s) { message }
+      example.display_exception = enriched
+    end
+  ensure
+    discard_retained_plan_relation_statistics
+  end
+
   # One definition of the wiring, called by this file's own `RSpec.configure` below and by the
   # examples that exercise the mechanism against a sandboxed configuration. Two hand-rolled
   # copies would be free to drift in exactly the way this file's header warns about.
   def self.install_into(config)
     config.include self
     config.after { |example| append_rows_touched_plan_evidence(example) }
+    config.after { |example| append_plan_relation_statistics_evidence(example) }
   end
 end
 
