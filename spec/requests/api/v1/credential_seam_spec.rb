@@ -38,6 +38,12 @@ RSpec.describe "API v1 — the credential seam", type: :request do
     }
   end
 
+  # `"api_keys"` is a substring of `"user_api_keys"`, so this one filter counts statements against
+  # BOTH tables — which is exactly the population every block below measures.
+  def credential_reads(&)
+    queries_against("api_keys", &)
+  end
+
   # The SECOND decision the ticket makes, and the one the 401s above cannot see: the seam is held by
   # discriminating on the PREFIX, so a cross-presented token is refused without reading anything.
   #
@@ -49,12 +55,6 @@ RSpec.describe "API v1 — the credential seam", type: :request do
   # transactions are deliberately in the count here; a refusal that reads nothing has none of
   # either.
   describe "the prefix, which decides before anything is read" do
-    # `"api_keys"` is a substring of `"user_api_keys"`, so this one filter counts statements against
-    # BOTH tables — which is exactly the population these examples need to see nothing of.
-    def credential_reads(&)
-      queries_against("api_keys", &)
-    end
-
     # A WIDER population than `credential_reads`, and the difference is the whole point of it.
     #
     # `Api::BaseController` claims authentication costs one indexed read. Two different regressions
@@ -182,10 +182,6 @@ RSpec.describe "API v1 — the credential seam", type: :request do
   # `credential_health` can report "a key you revoked is still being presented". Every other 401
   # stays unattributable: a token that was never a key resolves to no row, and nothing is written.
   describe "a revoked repository key arriving at a repository-key endpoint" do
-    def credential_reads(&)
-      queries_against("api_keys", &)
-    end
-
     # The positive case, and its exact shape: the 401 costs TWO reads of the table — resolution's
     # `authenticate` (which the revoked filter empties) and the failure path's one lookup on the
     # same unique digest index — plus the stamp, which is the point of the path. Asserted as
@@ -285,10 +281,6 @@ RSpec.describe "API v1 — the credential seam", type: :request do
   # collapsing into each other: an `sgu_` failure probes exactly its own table, as an `sgk_`
   # failure probes exactly its.
   describe "a revoked user key arriving at a user-key endpoint" do
-    def credential_reads(&)
-      queries_against("api_keys", &)
-    end
-
     # The `sgu_` twin of the positive case above, and the same exact shape: the 401 costs TWO reads
     # of the table — resolution's `authenticate` (which the `live` filter empties) and the failure
     # path's one lookup on the same unique digest index — plus the stamp, which is the point of the
@@ -363,10 +355,6 @@ RSpec.describe "API v1 — the credential seam", type: :request do
     end
   end
   describe "a revoked agent key arriving at an endpoint that accepts the agent credential" do
-    def credential_reads(&)
-      queries_against("api_keys", &)
-    end
-
     # The sga_ member of the fork, at an endpoint that accepts the agent credential
     # (`GET /api/v1/repositories` declares `accepts_user_credential` AND
     # `accepts_agent_credential`). Same body, same cost shape, and the same non-collapse: an
