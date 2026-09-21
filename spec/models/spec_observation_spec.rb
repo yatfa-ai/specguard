@@ -3,9 +3,12 @@
 require "rails_helper"
 
 RSpec.describe SpecObservation do
+  let(:repository) { create_repository }
+  let(:run) { create_test_run(repository: repository) }
+  let(:previous_run) { create_test_run(repository: repository, commit_sha: "prev123") }
+
   describe "the questions one run's rows have to answer" do
     let(:rows_per_run) { 500 }
-    let(:repository) { create_repository }
     let(:run) { create_test_run(repository: repository, total_specs_count: rows_per_run) }
 
     let(:slowest) { run.spec_observations.order(duration_seconds: :desc).limit(20) }
@@ -1007,7 +1010,6 @@ RSpec.describe SpecObservation do
   # spec/requests/repository_unstable_tests_spec.rb.
   describe "the questions a window of runs has to answer" do
     let(:rows_per_run) { 300 }
-    let(:repository) { create_repository }
     # Twenty runs in the table and six of them in the window, so "read the window through an index"
     # is a decision the planner makes rather than a foregone conclusion — the same reason the
     # single-run block above seeds twenty.
@@ -1475,7 +1477,6 @@ RSpec.describe SpecObservation do
   # spec/models/slowest_tests_spec.rb.
   describe "the questions a repository's runtime history has to answer" do
     let(:rows_per_run) { 300 }
-    let(:repository) { create_repository }
     # Twenty runs in the table and six of them in the window, so "read the window through an index"
     # is a decision the planner makes rather than a foregone conclusion — the sibling blocks seed
     # twenty for the same reason.
@@ -1803,8 +1804,6 @@ RSpec.describe SpecObservation do
   end
 
   describe "what happens when the things it hangs off go away" do
-    let(:repository) { create_repository }
-    let(:run) { create_test_run(repository: repository) }
 
     def observe(test_run, shard: nil, example_id: "./spec/a_spec.rb[1:1]")
       SpecObservation.create!(
@@ -1845,8 +1844,6 @@ RSpec.describe SpecObservation do
   # The read `repositories#show` makes off these rows — the first read anything in the application
   # has ever made of this table.
   describe "the ranking the by-duration index was built for" do
-    let(:repository) { create_repository }
-    let(:run) { create_test_run(repository: repository) }
 
     # One example of one run. `duration_seconds:` is passed explicitly at every call site,
     # including the nils: an untimed row is the state this whole section turns on, and a builder
@@ -2772,7 +2769,6 @@ RSpec.describe SpecObservation do
     # per-example rows of the two runs are unrelated — same paths, different line numbers — and the
     # expected counts hold regardless.
     describe ".directory_growth_between" do
-      let(:previous_run) { create_test_run(repository: repository, commit_sha: "prev123") }
 
       # One area's worth of rows in one run, at line numbers that cannot collide within it.
       def observe_area(test_run, directory, count, from: 1)
@@ -2973,7 +2969,6 @@ RSpec.describe SpecObservation do
     # quietly become the area read narrowed would be green under any fixture where the two agree,
     # and none of these agree.
     describe ".file_growth_between" do
-      let(:previous_run) { create_test_run(repository: repository, commit_sha: "prev123") }
 
       # One file's worth of rows in one run, at line numbers that cannot collide within it. `from`
       # is what keeps the two runs' example ids from lining up: a correspondence between the runs is
@@ -3232,7 +3227,6 @@ RSpec.describe SpecObservation do
     # examples and not in seconds — because a read that had quietly become the count read relabelled
     # would be green under any fixture where the two happen to agree.
     describe ".directory_runtime_growth_between" do
-      let(:previous_run) { create_test_run(repository: repository, commit_sha: "prev123") }
 
       # One area's worth of rows in one run, at line numbers that cannot collide within it. Each
       # example carries `each` seconds; a nil `each` is the row a client sent with no timing.
@@ -3525,7 +3519,6 @@ RSpec.describe SpecObservation do
     # become the file COUNT read relabelled would be green under any fixture where the two agree. So
     # no fixture here has one file in the area, and no fixture here moves counts and seconds together.
     describe ".file_runtime_growth_between" do
-      let(:previous_run) { create_test_run(repository: repository, commit_sha: "prev123") }
 
       # One file's worth of rows in one run, at line numbers that cannot collide within it. Each
       # example carries `each` seconds; a nil `each` is the row a client sent with no timing. `from`
@@ -3907,8 +3900,6 @@ RSpec.describe SpecObservation do
   # `#derived_intent` returns nil for renders an empty cell under a caption saying SpecGuard read it,
   # and no other example in this repository compares the two.
   describe "the reading of a row, in SQL and in Ruby" do
-    let(:repository) { create_repository }
-    let(:run) { create_test_run(repository: repository) }
 
     # One row per corpus entry, all unannotated, so the CASE reaches its regex arm on every one of
     # them. `spec_file_path` is set because `#derived_intent` reads it for the layer — it cannot
@@ -3986,8 +3977,6 @@ RSpec.describe SpecObservation do
   end
 
   describe ".reading_counts_in" do
-    let(:repository) { create_repository }
-    let(:run) { create_test_run(repository: repository) }
 
     def observe(name:, status: "unannotated", line_number: 1, **attrs)
       described_class.create!(
