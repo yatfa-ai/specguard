@@ -569,12 +569,14 @@ RSpec.describe Repository do
     end
   end
 
-  describe "#suite_size_trajectory" do
-    def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
-      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
-                                   created_at: at)
-    end
+  # One finished test run — the shared fixture of the four sibling describes below, defined once
+  # at file level instead of a block-local copy per describe.
+  def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
+    repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
+                                 created_at: at)
+  end
 
+  describe "#suite_size_trajectory" do
     # @intent: { entity: "Repository", action: "order the series oldest first", behavior: "the trajectory hands back the branch's runs oldest first so the series reads left to right", layer: "unit" }
     it "returns the branch's runs oldest first, so the series reads left to right" do
       repository = create_repository
@@ -817,11 +819,6 @@ RSpec.describe Repository do
   end
 
   describe "#latest_test_run_on_branch" do
-    def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
-      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
-                                   created_at: at)
-    end
-
     # @intent: { entity: "Repository", action: "answer per branch", behavior: "latest_test_run_on_branch returns the newest run of that branch even when a newer run exists on another branch", layer: "unit" }
     it "answers with the newest run on that branch, not the newest run in the repository" do
       repository = create_repository
@@ -877,11 +874,6 @@ RSpec.describe Repository do
   end
 
   describe "#latest_test_run_for_commit" do
-    def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
-      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
-                                   created_at: at)
-    end
-
     # @intent: { entity: "Repository", action: "answer per commit", behavior: "latest_test_run_for_commit returns the run on the asked-for sha rather than the repository's newest run", layer: "unit" }
     it "answers with the run on that sha, not the newest run in the repository" do
       repository = create_repository
@@ -955,11 +947,6 @@ RSpec.describe Repository do
   end
 
   describe "#branch_histories" do
-    def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
-      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
-                                   created_at: at)
-    end
-
     # @intent: { entity: "Repository", action: "list branches with counts", behavior: "branch_histories names every branch that has runs with how many runs each holds", layer: "unit" }
     it "names every branch that has runs, with how many each has" do
       repository = create_repository
