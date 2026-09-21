@@ -321,10 +321,13 @@ Rails.application.routes.draw do
 
   # The server's own identity, askable at last (SPGD-1197). Every client in the family carries an
   # askable version of itself — the validator's `--version`, the CLIs, the bridge's `serverInfo` —
-  # and this route gives the server the same property, read from the release bot's VERSION file.
-  # Root-level and unauthenticated DELIBERATELY: the credential seam fails closed inside `api/`,
-  # and the root is where the platform's no-account reads already live (`/up`, the schema mirror
-  # above). See VersionsController for the full consumer story.
+  # and this route gives the server the same property: the build, read from the release bot's
+  # VERSION file, plus (SPGD-1316) the OpenTestIntent contract this process ENFORCES — the
+  # vendored schema's SHA-256 and its origin, so a client whose annotations lint clean locally and
+  # 400 on ingest can see which half of that disagreement moved. Root-level and unauthenticated
+  # DELIBERATELY: the credential seam fails closed inside `api/`, and the root is where the
+  # platform's no-account reads already live (`/up`, the schema mirror above). See
+  # VersionsController for the full consumer story.
   get "version", to: "versions#show"
 
   get "up", to: "rails/health#show", as: :rails_health_check
