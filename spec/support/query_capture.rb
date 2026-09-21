@@ -34,6 +34,12 @@
 # positively need the cached repeats a page-budget drops. If a new example needs a rule that is
 # none of these, add it beside them with the same kind of note rather than bending one of them to
 # fit.
+#
+# `rows_touched` is not one of those rules and totals nothing on the wire: it plans the statement
+# `captured_sql` caught and sums the rows the plan says were touched. It also carries the failure
+# evidence at the foot of this file — the plan it already fetched, surfaced on a failing bound
+# rather than discarded — and that section says why that is a hook rather than the rescue its
+# sibling in spec/support/near_duplicate_failure_evidence.rb uses.
 module QueryCapture
   # `table` is a String (matched as a substring, the original and still the common spelling) or a
   # Regexp (matched against the statement). The Regexp spelling exists because a table is not always
@@ -110,11 +116,15 @@ module QueryCapture
   #
   # Only nodes carrying a `Relation Name` are counted, so a bitmap's index node and its heap node
   # are not the same rows twice — the index node names an index and no relation.
+  #
+  # The parsed plan is RETAINED on the example before it is walked — see the evidence section
+  # below for what that buys and why it costs no query.
   def rows_touched(table, &)
     plan = ActiveRecord::Base.connection.select_value(
       "EXPLAIN (ANALYZE, FORMAT JSON) #{captured_sql(table, &)}"
     )
     plan = JSON.parse(plan) if plan.is_a?(String)
+    retain_rows_touched_plan(table, plan)
 
     total = 0
     walk = lambda do |node|
@@ -128,8 +138,183 @@ module QueryCapture
 
     total
   end
+
+  # ─────────────────────────── `rows_touched` failure evidence ───────────────────────────
+  #
+  # `rows_touched` returns an Integer, so every bound built on it fails as a naked number
+  # comparison — an expected ceiling and a got value, and nothing else — with no plan, no access
+  # method and no per-node actual rows, and therefore no indication of WHY the bound was exceeded.
+  # The plan that answers it was parsed microseconds earlier in the very same method and then
+  # dropped on the floor.
+  # These bounds are documented as plan-sensitive (the groups that hold them declare
+  # `restores_relation_statistics_for` precisely because `ANALYZE`-written `pg_class.reltuples`
+  # survives a rollback and moves plan choice, and the sibling access-method matcher in
+  # spec/models/spec_observation_spec.rb was widened after exactly that happened), so the agent
+  # adjudicating a reddening needs the plan and has had to reconstruct it by hand.
+  #
+  # == WHY THIS IS A HOOK AND NOT A RESCUE — do not "fix" it back toward the HNSW shape
+  #
+  # spec/support/near_duplicate_failure_evidence.rb collects its evidence by RESCUING
+  # `RSpec::Expectations::ExpectationNotMetError` and re-raising with the evidence appended. That
+  # shape is STRUCTURALLY UNAVAILABLE here, and the reason is in the CALL SITES rather than in
+  # this file: `rows_touched` has already RETURNED an Integer by the time the comparison is made,
+  # and the comparison is made in the example body, outside any block this file controls. Nothing
+  # raises inside `rows_touched`, so a `rescue` placed there would catch nothing. The HNSW
+  # precedent works only because `evidencing_near_duplicate_failure` wraps the ASSERTIONS too —
+  # its caller opted in by enclosing them. Adopting that shape here means editing the call sites,
+  # and the whole point of this helper is that they keep reading as a bare numeric bound.
+  #
+  # So the plan is retained on per-example state and appended to the RENDERED failure from an
+  # `after` hook via RSpec's `Example#display_exception=`. That alters only what is displayed, not
+  # pass/fail status — `set_exception` would be the wrong verb, since it ADDS a failure.
+  #
+  # == What this does NOT reach, stated rather than left to be discovered
+  #
+  # An example carrying `:aggregate_failures` METADATA has a nil `example.exception` in every
+  # `after` hook: rspec-core's own built-in `around` hook calls `set_aggregate_failures_exception`
+  # only after the example's hooks have run, so there is no hook from which that shape is
+  # reachable. An `aggregate_failures` block written INSIDE an example body is reached normally,
+  # and takes the branch below that appends to the aggregate rather than rewriting it.
+  #
+  # == The green path pays nothing
+  #
+  # Retention is one array push over a plan `rows_touched` had already parsed, and rendering
+  # happens only when an example both retained a plan and failed. Rendering issues NO query — it
+  # walks the retained structure — so the EXPLAIN a green example pays for is still exactly the
+  # one `rows_touched` itself made.
+  ROWS_TOUCHED_EVIDENCE_HEADER = "──── rows_touched plan evidence (SPGD-1344) ────"
+
+  # Carries the evidence into an aggregate's sub-failure list. Named for what it holds, because
+  # that name is what the reader sees rendered beside the bound that broke.
+  class RetainedPlan < StandardError; end
+
+  # The plans this example retained, in invocation order. A call site may invoke `rows_touched`
+  # more than once against the same table, and the failure names ONE number, so order and table
+  # are what let a reader tell which invocation produced it. Empty — and the hook therefore a
+  # no-op — for every example that never called `rows_touched`.
+  def retained_rows_touched_plans
+    @retained_rows_touched_plans ||= []
+  end
+
+  def retain_rows_touched_plan(table, plan)
+    retained_rows_touched_plans << { table: table.to_s, plan: plan }
+  end
+
+  def discard_retained_rows_touched_plans
+    @retained_rows_touched_plans = nil
+  end
+
+  # The evidence block, formatted. ISSUES NO QUERY: every datum here was already in hand.
+  def rows_touched_plan_evidence
+    lines = [
+      ROWS_TOUCHED_EVIDENCE_HEADER,
+      "Retained by rows_touched from the EXPLAIN (ANALYZE) it had already run for this example; " \
+      "rendering it issued no query. Each retained plan is labelled by the table it was taken " \
+      "against and by the order it was invoked in, because a bound names one number and an " \
+      "example may invoke the helper more than once."
+    ]
+
+    retained_rows_touched_plans.each_with_index do |retained, index|
+      lines << "── rows_touched(#{retained[:table].inspect}), invocation #{index + 1} ──"
+      lines.concat(rows_touched_plan_lines(retained[:plan]))
+    end
+
+    lines << "──────────────────────────────────────────────────"
+    lines.join("\n")
+  end
+
+  # The parsed plan as a readable tree rather than one unbroken JSON line: the access method, the
+  # relation or index it names, and the per-node actual rows are what the bound is adjudicated on.
+  def rows_touched_plan_lines(plan)
+    root = Array(plan).first || {}
+    lines = rows_touched_plan_node_lines(root["Plan"] || {})
+    timings = ["Planning Time", "Execution Time"].filter_map do |key|
+      "#{key}: #{root[key]}" if root.key?(key)
+    end
+    lines << "  #{timings.join('  ')}" unless timings.empty?
+    lines
+  end
+
+  def rows_touched_plan_node_lines(node, depth = 0)
+    indent = "  " * (depth + 1)
+
+    heading = [node["Node Type"]]
+    heading << "using #{node['Index Name']}" if node["Index Name"]
+    heading << "on #{node['Relation Name']}" if node["Relation Name"]
+
+    measured = ["Actual Rows", "Actual Loops", "Rows Removed by Filter"].filter_map do |key|
+      "#{key.downcase}=#{node[key]}" if node.key?(key)
+    end
+    heading << "(#{measured.join(', ')})" unless measured.empty?
+
+    lines = ["#{indent}#{heading.join(' ')}"]
+    ["Index Cond", "Filter"].each do |key|
+      lines << "#{indent}  #{key}: #{node[key]}" if node[key]
+    end
+    Array(node["Plans"]).each do |child|
+      lines.concat(rows_touched_plan_node_lines(child, depth + 1))
+    end
+    lines
+  end
+
+  # Appends the retained plans to what the reader will SEE for a failing example, leaving the
+  # original failure's class, backtrace and message text untouched above it.
+  #
+  # The ORIGINAL FAILURE ALWAYS WINS: if rendering the evidence blows up, say so inline rather
+  # than replacing the bound's own message with a collector stack trace — the same fallback
+  # `with_appended_near_duplicate_evidence` makes.
+  #
+  # The `ensure` is belt-and-braces rather than the thing that keeps a plan out of a later
+  # example's failure: RSpec builds a FRESH example-group instance per example, so the ivar these
+  # plans live on is already per-example and a probe that removed this line left the isolation
+  # green. It is kept because the state is read from a hook rather than from the body that wrote
+  # it — the same caution this file's header states for the subscribers, whose `ensure` IS
+  # load-bearing because a subscriber is process-global and genuinely outlives the example.
+  def append_rows_touched_plan_evidence(example)
+    return if retained_rows_touched_plans.empty?
+
+    failure = example.exception
+    return if failure.nil?
+
+    evidence =
+      begin
+        rows_touched_plan_evidence
+      rescue StandardError => e
+        "#{ROWS_TOUCHED_EVIDENCE_HEADER}\ncould not be collected (#{e.class}: #{e.message})"
+      end
+
+    if defined?(RSpec::Core::MultipleExceptionError::InterfaceTag) &&
+       RSpec::Core::MultipleExceptionError::InterfaceTag === failure
+      # An aggregate is a LIST of failures; appending to its message would bury the evidence above
+      # entries it does not belong to. It takes an entry of its own instead.
+      note = RetainedPlan.new(evidence)
+      note.set_backtrace([])
+      failure.add(note)
+    else
+      # Duplicated and re-messaged rather than reconstructed with `original.class.new(...)` — the
+      # spelling near_duplicate_failure_evidence.rb uses — because this path never chooses the
+      # class it is handed: a dup carries the original's class, backtrace and every other
+      # attribute across for free, and cannot fail on an exception whose constructor takes
+      # something other than a message.
+      enriched = failure.dup
+      message = "#{failure.message}\n#{evidence}"
+      enriched.define_singleton_method(:message) { message }
+      enriched.define_singleton_method(:to_s) { message }
+      example.display_exception = enriched
+    end
+  ensure
+    discard_retained_rows_touched_plans
+  end
+
+  # One definition of the wiring, called by this file's own `RSpec.configure` below and by the
+  # examples that exercise the mechanism against a sandboxed configuration. Two hand-rolled
+  # copies would be free to drift in exactly the way this file's header warns about.
+  def self.install_into(config)
+    config.include self
+    config.after { |example| append_rows_touched_plan_evidence(example) }
+  end
 end
 
 RSpec.configure do |config|
-  config.include QueryCapture
+  QueryCapture.install_into(config)
 end
