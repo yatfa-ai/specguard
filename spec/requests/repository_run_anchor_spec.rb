@@ -22,6 +22,7 @@ RSpec.describe "Repository run anchor", type: :request do
   before { @user = sign_in_via_github }
 
   let(:repository) { create_repository(user: @user) }
+  let(:api_key) { repository.api_keys.create! }
 
   def page = Capybara.string(response.body)
 
@@ -407,7 +408,6 @@ RSpec.describe "Repository run anchor", type: :request do
   # verdict over them is inverted. Only an example that anchors on an old run of a HEALTHY repository
   # can see it.
   describe "the delivery-health verdict under an anchor" do
-    let(:api_key) { repository.api_keys.create! }
 
     # Refused between the two accepted runs, and every timestamp set explicitly rather than left to
     # insertion order: the verdict is a strict `>` between two instants, and rows written in one
@@ -595,7 +595,6 @@ RSpec.describe "Repository run anchor", type: :request do
   # the fallback in different vocabularies and the failure would be for one of them to 404, or to
   # resolve to a different row, where the other fell back.
   describe "cross-surface parity with the JSON endpoint" do
-    let(:api_key) { repository.api_keys.create! }
 
     def api_run_anchor(sha)
       get "/api/v1/repository", params: { commit_sha: sha },
@@ -658,10 +657,6 @@ RSpec.describe "Repository run anchor", type: :request do
   # right state with the wrong words ("these rows have been deleted") is a false claim too — and
   # that second one is wrong on exactly the population `Ingest::QuietBucketPruner` exists for.
   describe "a run whose per-example observations have aged out" do
-    # `api_key` and the anchor read are declared locally rather than reached for, exactly as the
-    # delivery-health and parity blocks above declare their own: they are siblings, so nothing
-    # leaks between them.
-    let(:api_key) { repository.api_keys.create! }
 
     def api_run_anchor(sha)
       get "/api/v1/repository", params: { commit_sha: sha },
