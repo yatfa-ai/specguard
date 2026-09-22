@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "rails_helper"
+
 # The integration guide documents the CLIENT GEM but lives in the PLATFORM'S repository — two
 # codebases, one page. That gap is how it drifted before: the page shipped a yanked gem name in
 # its install snippet and described a Ruby validator arm the gem had deleted, for a full day
