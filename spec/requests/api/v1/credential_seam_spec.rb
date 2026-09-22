@@ -505,7 +505,7 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       repo = create_repository(user: person, github_full_name: "acme/not-reachable")
       token = create_agent_api_key(user: person, repositories: [repo], permissions: []).raw_token
 
-      statements = queries_against("api_keys") do
+      statements = credential_reads do
         post "/api/v1/ingest", params: ingest_payload, as: :json, headers: bearer(token)
       end
 
