@@ -4202,6 +4202,8 @@ RSpec.describe Ingest::IdentityResolver do
       # and a plan assertion against the copy certifies the copy — and `COUNT(*)` is AR's own
       # projection for `#count` on exactly this relation.
       def plan_for(relation)
+        retain_plan_relation_statistics(relation.klass.table_name,
+          RelationStatistics.snapshot(relation.klass.table_name), source: "plan_for")
         sql = relation.select(Arel.star.count).to_sql
         ActiveRecord::Base.connection.select_values("EXPLAIN #{sql}").join("\n")
       end
