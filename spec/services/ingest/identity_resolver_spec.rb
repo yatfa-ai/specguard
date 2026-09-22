@@ -3878,6 +3878,8 @@ RSpec.describe Ingest::IdentityResolver do
         # copy would be asserting nothing about the sweep.
         relation = described_class.new(create_test_run(repository: repository))
                                   .send(:unattempted_embed_backlog, sweep_limit)
+        retain_plan_relation_statistics(relation.klass.table_name,
+          RelationStatistics.snapshot(relation.klass.table_name), source: "inline EXPLAIN")
         plan = ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
 
         expect(plan).to include("index_spec_observations_on_unattempted_embed_backlog")

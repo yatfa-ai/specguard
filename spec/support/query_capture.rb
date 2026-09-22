@@ -325,12 +325,13 @@ module QueryCapture
     discard_retained_rows_touched_plans
   end
 
-  # ─────────────────── the plan helpers' relation-statistics evidence ───────────────────
+  # ───────────────── the plan assertions' relation-statistics evidence ─────────────────
   #
-  # "Helpers", plural, because more than one joins: `plan_for_actual_sql` (below, SPGD-1351) and
-  # the file-local `plan_for` relations the plan-asserting spec files define (SPGD-1381). Each
-  # retaining call site names itself through `source:`, so a rendered snapshot says WHICH helper
-  # took it.
+  # More than one call-site shape joins: `plan_for_actual_sql` (below, SPGD-1351), the file-local
+  # `plan_for` relations the plan-asserting spec files define (SPGD-1381), and the three assertions
+  # that EXPLAIN inline in their own body rather than through any helper (SPGD-1390). Each
+  # retaining call site names itself through `source:`, so a rendered snapshot says WHICH helper —
+  # or that no helper at all — took it.
   #
   # A plan assertion fails with the plan already visible — it is the matcher's `got` — so what the
   # reader of the red is missing is not the plan but the WHY: `pg_class.reltuples`/`relpages` for
@@ -369,23 +370,24 @@ module QueryCapture
   # after every example, failed or not — the same discard discipline the rows_touched leg follows,
   # for the same leak class.
   PLAN_RELATION_STATISTICS_EVIDENCE_HEADER =
-    "──── plan_for / plan_for_actual_sql relation statistics evidence (SPGD-1351) ────"
+    "──── plan_for / plan_for_actual_sql / inline EXPLAIN relation statistics evidence (SPGD-1351) ────"
 
   # Carries the evidence into an aggregate's sub-failure list. Named for what it holds, because
   # that name is what the reader sees rendered beside the failed assertion.
   class PlanRelationStatistics < StandardError; end
 
-  # The statistics snapshots this example retained, in invocation order. A call site may invoke a
-  # plan helper more than once, and the failure names ONE plan, so order and table are what let a
-  # reader tell which invocation produced it. Empty — and the hook therefore a no-op — for every
-  # example that never called a retaining helper.
+  # The statistics snapshots this example retained, in invocation order. A call site may retain
+  # more than once, and the failure names ONE plan, so order and table are what let a reader tell
+  # which invocation produced it. Empty — and the hook therefore a no-op — for every example that
+  # never retained one.
   def retained_plan_relation_statistics
     @retained_plan_relation_statistics ||= []
   end
 
-  # `source` names the helper that took the snapshot, so the rendered label says which plan
-  # assertion the numbers belong to. The default is the caller this machinery was built for;
-  # every other retaining helper passes its own name.
+  # `source` names what took the snapshot, so the rendered label says which plan assertion the
+  # numbers belong to. The default is the caller this machinery was built for; every other
+  # retaining site passes its own name — a helper's own name, or `"inline EXPLAIN"` where the
+  # assertion EXPLAINs in its own body and there is no helper to name.
   def retain_plan_relation_statistics(table, snapshot, source: "plan_for_actual_sql")
     retained_plan_relation_statistics <<
       { table: table.to_s, snapshot: snapshot, source: source.to_s }
@@ -401,12 +403,13 @@ module QueryCapture
   def plan_relation_statistics_evidence
     lines = [
       PLAN_RELATION_STATISTICS_EVIDENCE_HEADER,
-      "RelationStatistics.snapshot taken at the moment a plan helper ran its EXPLAIN, " \
+      "RelationStatistics.snapshot taken at the moment a plan assertion ran its EXPLAIN, " \
       "while the example transaction was still open — the pg_class state the planner acted on, " \
       "not whatever the catalog carries after the rollback. Rendering it issued no query. Each " \
-      "snapshot is labelled by the helper that took it, the table it was taken against and by " \
-      "the order it was invoked in, because the failure names one plan and an example may " \
-      "invoke a helper more than once."
+      "snapshot is labelled by the helper that took it — or by \"inline EXPLAIN\" where the " \
+      "assertion EXPLAINs in its own body rather than through a helper — by the table it was " \
+      "taken against and by the order it was invoked in, because the failure names one plan and " \
+      "an example may invoke a helper more than once."
     ]
 
     retained_plan_relation_statistics.each_with_index do |retained, index|
