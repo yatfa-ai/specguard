@@ -5,10 +5,12 @@ require "stringio"
 require "rspec/core/sandbox"
 
 # The relation-statistics evidence `spec/support/query_capture.rb` attaches to a failing
-# `plan_for_actual_sql` assertion: the `pg_class.reltuples`/`relpages` snapshot of the captured
+# plan-helper assertion: the `pg_class.reltuples`/`relpages` snapshot of the captured
 # table and every index on it, taken at the moment the helper ran its EXPLAIN and surfaced on the
 # failure path, so a reddening plan assertion arrives with the numbers that decided the access
-# method rather than with the plan alone.
+# method rather than with the plan alone. The helper family is `plan_for_actual_sql` (this file's
+# original subject, SPGD-1351) and the file-local `plan_for` relations the plan-asserting spec
+# files define, which joined through the same retention and hook (SPGD-1381).
 #
 # Exercised against SANDBOXED inner examples rather than against the production assertions in
 # spec/models/spec_observation_spec.rb, and that is the whole shape of this file — the same shape
@@ -32,7 +34,7 @@ require "rspec/core/sandbox"
 # is always state). An assertion on a reltuples or relpages figure would redden on exactly that
 # variance. So these examples assert that a snapshot is THERE and that it names the table and the
 # indexes whose numbers it carries — schema-stable names, not plan- or scale-dependent figures.
-RSpec.describe "the plan_for_actual_sql assertion's relation-statistics failure evidence" do
+RSpec.describe "the plan helpers' relation-statistics failure evidence" do
   let(:repository) { create_repository }
   let(:run) { create_test_run(repository: repository) }
 
@@ -112,6 +114,74 @@ RSpec.describe "the plan_for_actual_sql assertion's relation-statistics failure 
     )
   end
 
+  # ── the `plan_for` arm (SPGD-1381) ──
+  #
+  # The two file-local `plan_for` helpers — spec/models/spec_observation_spec.rb's bare-EXPLAIN
+  # shape and spec/services/ingest/identity_resolver_spec.rb's COUNT-projection shape — retain the
+  # same snapshot through the same machinery, labelled `source: "plan_for"`, so a failing
+  # plan_for assertion wears the same section with ITS helper's name on the label. The mirror
+  # bodies below exist because the production definitions are file-local by design (unifying them
+  # is fenced out of this slice); what is certified here is the machinery's rendering of a
+  # `source: "plan_for"` retention — a drift between a mirror and its production body would
+  # surface as the production file's own reds.
+  #
+  # @intent: { entity: "QueryCapture", action: "fail a plan_for assertion (the bare-EXPLAIN definition)", behavior: "the rendered failure names the plan_for helper and its table, with the original failure intact above the section", layer: "unit" }
+  it "names the plan_for helper and its table when a plan_for assertion fails" do
+    run_id = run.id
+
+    rendered = rendered_inner_run do
+      # Mirrors spec/models/spec_observation_spec.rb's file-local `plan_for`.
+      def plan_for(relation)
+        retain_plan_relation_statistics(relation.klass.table_name,
+          RelationStatistics.snapshot(relation.klass.table_name), source: "plan_for")
+        ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
+      end
+
+      it "asserts an access method that cannot exist" do
+        plan = plan_for(SpecObservation.where(test_run_id: run_id))
+        expect(plan).to match(IMPOSSIBLE_PLAN)
+      end
+    end
+
+    expect(rendered).to include(QueryCapture::PLAN_RELATION_STATISTICS_EVIDENCE_HEADER)
+    expect(rendered).to include("── plan_for(\"spec_observations\"), invocation 1 ──")
+    expect(rendered).to include("spec_observations: reltuples=")
+    # Same additive shape as the plan_for_actual_sql arm above: the assertion's own failure is
+    # rendered first and untouched, the section appended — never substituted.
+    expect(rendered).to match(
+      /#{Regexp.escape(IMPOSSIBLE_PLAN.source)}.*#{Regexp.escape(QueryCapture::PLAN_RELATION_STATISTICS_EVIDENCE_HEADER)}/m
+    )
+  end
+
+  # The second definition, whose whole point for the machinery is the table's derivation: the
+  # identity_resolver helper wraps the relation in a `COUNT(*)` projection for its SQL, so the
+  # table can no longer be read off the SQL string — it comes from `relation.klass`. This is the
+  # arm where a wrong derivation would render the WRONG table's statistics beside a count's plan.
+  #
+  # @intent: { entity: "QueryCapture", action: "fail a plan_for assertion whose SQL is a COUNT projection", behavior: "the table still resolves from relation.klass and the rendered label carries it", layer: "unit" }
+  it "resolves the table from the relation when the plan_for SQL is a COUNT projection" do
+    run_id = run.id
+
+    rendered = rendered_inner_run do
+      # Mirrors spec/services/ingest/identity_resolver_spec.rb's file-local `plan_for`.
+      def plan_for(relation)
+        retain_plan_relation_statistics(relation.klass.table_name,
+          RelationStatistics.snapshot(relation.klass.table_name), source: "plan_for")
+        sql = relation.select(Arel.star.count).to_sql
+        ActiveRecord::Base.connection.select_values("EXPLAIN #{sql}").join("\n")
+      end
+
+      it "asserts an access method that cannot exist" do
+        plan = plan_for(SpecObservation.where(test_run_id: run_id))
+        expect(plan).to match(IMPOSSIBLE_PLAN)
+      end
+    end
+
+    expect(rendered).to include(QueryCapture::PLAN_RELATION_STATISTICS_EVIDENCE_HEADER)
+    expect(rendered).to include("── plan_for(\"spec_observations\"), invocation 1 ──")
+    expect(rendered).to include("spec_observations: reltuples=")
+  end
+
   # @intent: { entity: "QueryCapture", action: "pass a plan_for_actual_sql assertion", behavior: "a satisfied assertion renders no evidence, so the green path is untouched", layer: "unit" }
   it "renders nothing when the assertion holds" do
     read = observation_read_for(run.id)
@@ -149,6 +219,36 @@ RSpec.describe "the plan_for_actual_sql assertion's relation-statistics failure 
 
     # Exactly the example that retained a snapshot wears one. The second failure is rendered in the
     # same output, so a leak would show up as a second evidence block.
+    expect(rendered.scan(QueryCapture::PLAN_RELATION_STATISTICS_EVIDENCE_HEADER).length).to eq(1)
+  end
+
+  # The same discard discipline, driven through a `plan_for` invocation rather than through
+  # `plan_for_actual_sql`: both helpers land their snapshots in the same list the same hook
+  # clears, so a plan_for snapshot must no more colour a later example than a
+  # plan_for_actual_sql one — the retain/discard pair is the machinery's, not either helper's.
+  #
+  # @intent: { entity: "QueryCapture", action: "fail an example that never called a plan helper, after one that invoked plan_for", behavior: "no snapshot retained by a plan_for invocation reaches a later example's failure", layer: "unit" }
+  it "does not let a plan_for snapshot reach a later example's failure" do
+    run_id = run.id
+
+    rendered = rendered_inner_run do
+      # Mirrors spec/models/spec_observation_spec.rb's file-local `plan_for`.
+      def plan_for(relation)
+        retain_plan_relation_statistics(relation.klass.table_name,
+          RelationStatistics.snapshot(relation.klass.table_name), source: "plan_for")
+        ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
+      end
+
+      it "retains a snapshot and fails" do
+        plan = plan_for(SpecObservation.where(test_run_id: run_id))
+        expect(plan).to match(IMPOSSIBLE_PLAN)
+      end
+
+      it "fails without ever calling the helper" do
+        expect("inheriting nothing").to eq("something else")
+      end
+    end
+
     expect(rendered.scan(QueryCapture::PLAN_RELATION_STATISTICS_EVIDENCE_HEADER).length).to eq(1)
   end
 

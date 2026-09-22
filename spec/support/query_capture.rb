@@ -325,7 +325,12 @@ module QueryCapture
     discard_retained_rows_touched_plans
   end
 
-  # ───────────────────── `plan_for_actual_sql` relation-statistics evidence ─────────────────────
+  # ─────────────────── the plan helpers' relation-statistics evidence ───────────────────
+  #
+  # "Helpers", plural, because more than one joins: `plan_for_actual_sql` (below, SPGD-1351) and
+  # the file-local `plan_for` relations the plan-asserting spec files define (SPGD-1381). Each
+  # retaining call site names itself through `source:`, so a rendered snapshot says WHICH helper
+  # took it.
   #
   # A plan assertion fails with the plan already visible — it is the matcher's `got` — so what the
   # reader of the red is missing is not the plan but the WHY: `pg_class.reltuples`/`relpages` for
@@ -344,11 +349,11 @@ module QueryCapture
   # documents autovacuum re-deriving the numbers within 0-10 seconds of a rollback. A snapshot
   # taken at the same instant the EXPLAIN was produced — while the example transaction is open and
   # the perturbed catalog state is live — is immune to that ordering by construction: it is the
-  # state the planner actually acted on. The cost is one extra catalog SELECT per
-  # `plan_for_actual_sql` invocation, on the success path too — spec-only, plan-asserting examples
-  # only. (If that cost is ever objected to, the fallback is retaining the table and reading stats
-  # on the failure path — but that variant re-introduces the ordering question above and must be
-  # tested against the declaring group's restore; do not make that trade silently.)
+  # state the planner actually acted on. The cost is one extra catalog SELECT per retaining
+  # invocation, on the success path too — spec-only, plan-asserting examples only. (If that cost is
+  # ever objected to, the fallback is retaining the table and reading stats on the failure path —
+  # but that variant re-introduces the ordering question above and must be tested against the
+  # declaring group's restore; do not make that trade silently.)
   #
   # == Why this is a sibling HOOK and how the two legs compose
   #
@@ -364,22 +369,26 @@ module QueryCapture
   # after every example, failed or not — the same discard discipline the rows_touched leg follows,
   # for the same leak class.
   PLAN_RELATION_STATISTICS_EVIDENCE_HEADER =
-    "──── plan_for_actual_sql relation statistics evidence (SPGD-1351) ────"
+    "──── plan_for / plan_for_actual_sql relation statistics evidence (SPGD-1351) ────"
 
   # Carries the evidence into an aggregate's sub-failure list. Named for what it holds, because
   # that name is what the reader sees rendered beside the failed assertion.
   class PlanRelationStatistics < StandardError; end
 
-  # The statistics snapshots this example retained, in invocation order. A call site may invoke
-  # `plan_for_actual_sql` more than once, and the failure names ONE plan, so order and table are
-  # what let a reader tell which invocation produced it. Empty — and the hook therefore a no-op —
-  # for every example that never called the helper.
+  # The statistics snapshots this example retained, in invocation order. A call site may invoke a
+  # plan helper more than once, and the failure names ONE plan, so order and table are what let a
+  # reader tell which invocation produced it. Empty — and the hook therefore a no-op — for every
+  # example that never called a retaining helper.
   def retained_plan_relation_statistics
     @retained_plan_relation_statistics ||= []
   end
 
-  def retain_plan_relation_statistics(table, snapshot)
-    retained_plan_relation_statistics << { table: table.to_s, snapshot: snapshot }
+  # `source` names the helper that took the snapshot, so the rendered label says which plan
+  # assertion the numbers belong to. The default is the caller this machinery was built for;
+  # every other retaining helper passes its own name.
+  def retain_plan_relation_statistics(table, snapshot, source: "plan_for_actual_sql")
+    retained_plan_relation_statistics <<
+      { table: table.to_s, snapshot: snapshot, source: source.to_s }
   end
 
   def discard_retained_plan_relation_statistics
@@ -392,16 +401,16 @@ module QueryCapture
   def plan_relation_statistics_evidence
     lines = [
       PLAN_RELATION_STATISTICS_EVIDENCE_HEADER,
-      "RelationStatistics.snapshot taken at the moment plan_for_actual_sql ran its EXPLAIN, " \
+      "RelationStatistics.snapshot taken at the moment a plan helper ran its EXPLAIN, " \
       "while the example transaction was still open — the pg_class state the planner acted on, " \
       "not whatever the catalog carries after the rollback. Rendering it issued no query. Each " \
-      "snapshot is labelled by the table it was taken against and by the order it was invoked " \
-      "in, because the failure names one plan and an example may invoke the helper more than " \
-      "once."
+      "snapshot is labelled by the helper that took it, the table it was taken against and by " \
+      "the order it was invoked in, because the failure names one plan and an example may " \
+      "invoke a helper more than once."
     ]
 
     retained_plan_relation_statistics.each_with_index do |retained, index|
-      lines << "── plan_for_actual_sql(#{retained[:table].inspect}), invocation #{index + 1} ──"
+      lines << "── #{retained[:source]}(#{retained[:table].inspect}), invocation #{index + 1} ──"
       retained[:snapshot].each do |row|
         lines << "  #{row['relname']}: reltuples=#{row['reltuples']} relpages=#{row['relpages']}"
       end

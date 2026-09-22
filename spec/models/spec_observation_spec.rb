@@ -514,6 +514,8 @@ RSpec.describe SpecObservation do
       # Postgres's own plan for the exact SQL the relation would run, rather than
       # `ActiveRecord::Relation#explain`, whose proxy renders the plan only when inspected.
       def plan_for(relation)
+        retain_plan_relation_statistics(relation.klass.table_name,
+          RelationStatistics.snapshot(relation.klass.table_name), source: "plan_for")
         ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
       end
 
