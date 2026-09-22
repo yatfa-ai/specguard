@@ -5,12 +5,13 @@ require "stringio"
 require "rspec/core/sandbox"
 
 # The relation-statistics evidence `spec/support/query_capture.rb` attaches to a failing
-# plan-helper assertion: the `pg_class.reltuples`/`relpages` snapshot of the captured
-# table and every index on it, taken at the moment the helper ran its EXPLAIN and surfaced on the
+# plan assertion: the `pg_class.reltuples`/`relpages` snapshot of the captured
+# table and every index on it, taken at the moment that assertion ran its EXPLAIN and surfaced on the
 # failure path, so a reddening plan assertion arrives with the numbers that decided the access
-# method rather than with the plan alone. The helper family is `plan_for_actual_sql` (this file's
-# original subject, SPGD-1351) and the file-local `plan_for` relations the plan-asserting spec
-# files define, which joined through the same retention and hook (SPGD-1381).
+# method rather than with the plan alone. The retaining family is `plan_for_actual_sql` (this file's
+# original subject, SPGD-1351), the file-local `plan_for` relations the plan-asserting spec
+# files define, which joined through the same retention and hook (SPGD-1381), and the three
+# assertions that EXPLAIN inline in their own body with no helper to name (SPGD-1390).
 #
 # Exercised against SANDBOXED inner examples rather than against the production assertions in
 # spec/models/spec_observation_spec.rb, and that is the whole shape of this file — the same shape
@@ -180,6 +181,44 @@ RSpec.describe "the plan helpers' relation-statistics failure evidence" do
     expect(rendered).to include(QueryCapture::PLAN_RELATION_STATISTICS_EVIDENCE_HEADER)
     expect(rendered).to include("── plan_for(\"spec_observations\"), invocation 1 ──")
     expect(rendered).to include("spec_observations: reltuples=")
+  end
+
+  # ── the inline-EXPLAIN arm (SPGD-1390) ──
+  #
+  # Three plan assertions EXPLAIN in their OWN body rather than through any helper — there is no
+  # helper to carry the retention for them, so the assertion retains directly and labels itself
+  # `source: "inline EXPLAIN"`. That label is the reader's only signal that no helper took these
+  # numbers, which is why it is pinned rather than assumed: the composed label is
+  # `retained[:source]` verbatim, so a source string that never reached the renderer would surface
+  # as an unlabelled section. Mirrored here for the same reason the `plan_for` arms are — the
+  # production call sites are green and must stay both green and unedited, and what has to be
+  # certified is what a reader SEES when one of them breaks.
+  #
+  # @intent: { entity: "QueryCapture", action: "fail a plan assertion that EXPLAINs inline with no helper", behavior: "the rendered failure labels the snapshot \"inline EXPLAIN\" with its table, the original failure intact above the section", layer: "unit" }
+  it "labels the snapshot as an inline EXPLAIN when the assertion EXPLAINs in its own body" do
+    run_id = run.id
+
+    rendered = rendered_inner_run do
+      # Mirrors the three inline sites: the retain sits beside the EXPLAIN — after the group's
+      # ANALYZE and inside the open example transaction — with no helper between them.
+      it "asserts an access method that cannot exist" do
+        relation = SpecObservation.where(test_run_id: run_id)
+        retain_plan_relation_statistics(relation.klass.table_name,
+          RelationStatistics.snapshot(relation.klass.table_name), source: "inline EXPLAIN")
+        plan = ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
+
+        expect(plan).to match(IMPOSSIBLE_PLAN)
+      end
+    end
+
+    expect(rendered).to include(QueryCapture::PLAN_RELATION_STATISTICS_EVIDENCE_HEADER)
+    expect(rendered).to include("── inline EXPLAIN(\"spec_observations\"), invocation 1 ──")
+    expect(rendered).to include("spec_observations: reltuples=")
+    # Same additive shape as every arm above: the assertion's own failure is rendered first and
+    # untouched, the section appended — never substituted.
+    expect(rendered).to match(
+      /#{Regexp.escape(IMPOSSIBLE_PLAN.source)}.*#{Regexp.escape(QueryCapture::PLAN_RELATION_STATISTICS_EVIDENCE_HEADER)}/m
+    )
   end
 
   # @intent: { entity: "QueryCapture", action: "pass a plan_for_actual_sql assertion", behavior: "a satisfied assertion renders no evidence, so the green path is untouched", layer: "unit" }

@@ -3634,6 +3634,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       ActiveRecord::Base.connection.execute("ANALYZE test_runs")
 
       walk = executed_sql { get_repository }.grep(/WITH RECURSIVE/).first
+      # Taken here — after the group's `ANALYZE` and while this example's transaction is still open
+      # — because that is the catalog state the planner acts on; `walk` is a String off the
+      # notification and carries no `klass`, so the table comes from the model constant.
+      retain_plan_relation_statistics(TestRun.table_name,
+        RelationStatistics.snapshot(TestRun.table_name), source: "inline EXPLAIN")
       # Proves the probe can produce a non-empty result at all: an unmatched grep and a clean plan
       # are indistinguishable at the assertion below.
       expect(walk).to be_present
@@ -3820,6 +3825,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       end)
       ActiveRecord::Base.connection.execute("ANALYZE test_runs")
 
+      # Taken here — after the group's `ANALYZE` and while this example's transaction is still open
+      # — because that is the catalog state the planner acts on; the relation is built inline in the
+      # interpolation below and is not bound to a local, so the table comes from the model constant.
+      retain_plan_relation_statistics(TestRun.table_name,
+        RelationStatistics.snapshot(TestRun.table_name), source: "inline EXPLAIN")
       plan = ActiveRecord::Base.connection.select_values(
         "EXPLAIN #{repository.recent_test_runs(limit: Repository::TRAJECTORY_LIMIT, branch: 'main').to_sql}"
       ).join("\n")
