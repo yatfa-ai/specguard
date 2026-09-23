@@ -153,7 +153,9 @@
           discovered: a reader who runs the suite on their laptop and sees no run in SpecGuard is
           otherwise looking at a silent success. Two files, because they mean different things:
           without a key the run is a local development record; a key that could not deliver is a
-          queued run waiting for replay. %>
+          queued run waiting for replay — provided the queue write itself succeeded. When the
+          queue cannot be written either, the run's telemetry is lost, and the copy says so
+          rather than promising recovery unconditionally. %>
       <%= render UI::AlertComponent.new(tone: :neutral, title: "With no API key set, the run is written to a file") do %>
         <p class="mt-1">
           <code>SPECGUARD_API_KEY</code> is the switch. Unset, the formatter appends the run to
@@ -162,7 +164,11 @@
           A run that <em>had</em> a key but could not deliver — refused, timed out, network down —
           lands in a different file, the replay queue <code>log/test_results.jsonl</code>, and
           <code>bundle exec specguard-ingest log/test_results.jsonl</code> re-delivers it to the
-          endpoint afterwards, so a run survives a network blip. (On the wire
+          endpoint afterwards — but only when the queue write itself succeeded. The fall-back is
+          best effort, not a guarantee: if the queue file cannot be written either — a full disk,
+          a read-only checkout — the client warns that this run's telemetry was lost. The test
+          run is unaffected either way; what is at stake is the telemetry, never the suite. (On
+          the wire
           a body of 256 KiB or more is gzipped, so a large run's request is compressed even though
           the file's line is not. <code>rspec --dry-run</code> writes nothing at all — there is no
           run to record.)
@@ -248,8 +254,10 @@
             <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_OUTPUT_PATH</td>
             <td class="px-3 py-2 text-xs text-app-muted">log/test_results.jsonl</td>
             <td class="px-3 py-2 text-app-content-secondary">
-              The replay queue: where a run that <em>had</em> a key but could not deliver lands,
-              one run per line, for <code>specguard-ingest</code> to re-deliver later.
+              The replay queue: where a run that <em>had</em> a key but could not deliver lands
+              when the queue write itself succeeds — one run per line, for
+              <code>specguard-ingest</code> to re-deliver later. If the queue cannot be written
+              either, the run's telemetry is lost and there is nothing to replay.
             </td>
           </tr>
           <tr>
@@ -356,7 +364,9 @@
         <p class="mt-1">
           The sinks are the gem's: no key appends to <code>log/test_results.local.jsonl</code>, the
           development record; a key that could not deliver lands in the replay queue
-          <code>log/test_results.jsonl</code>. That queue is re-delivered by the package's second
+          <code>log/test_results.jsonl</code> when that queue write succeeds. When the queue
+          cannot be written either, the package reports the outcome as <code>lost</code> — this
+          run's telemetry was lost. Otherwise the queue is re-delivered by the package's second
           command:
         </p>
         <div class="mt-2" data-controller="copy-text">

@@ -80,4 +80,23 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
     expect(response.body).to include("specguard-ruby")
     expect(response.body).to include("Minitest")
   end
+
+  # @intent: {"entity": "GET /docs/integrate", "action": "state the loss arm, not an unconditional promise", "behavior": "the page neither promises replay-queue recovery unconditionally (the old 'so a run survives a network blip' sentence) nor omits the double-failure arm: when the replay queue cannot be written either, the page states that the run's telemetry was lost", "layer": "request"}
+  it "does not promise queue recovery unconditionally, and states the double-failure loss arm" do
+    get integration_guide_path
+
+    # Negative-first, because every positive clause on this page ("specguard-ingest",
+    # "log/test_results.jsonl", "replay queue") is already true on a page that collapsed both
+    # delivery arms into one promise — which is exactly how the four name-checking examples
+    # above missed that drift. The clients split the arms (specguard-rspec formatter.rb
+    # sink_clause; specguard-ts transport.ts outcome "lost"): the queue line written means the
+    # run can be re-delivered; the queue not written either means the telemetry is gone.
+    expect(response.body).not_to include("so a run survives a network blip"),
+          "/docs/integrate promises queue recovery unconditionally again — false whenever the " \
+          "replay queue itself cannot be written"
+
+    expect(response.body).to include("telemetry was lost"),
+          "/docs/integrate states only the recoverable arm — it never says what happens when " \
+          "the replay queue cannot be written either"
+  end
 end
