@@ -637,9 +637,14 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
           The body must be a JSON <em>object</em>. An array, a bare string or a number is refused
           with <code>the request body must be a JSON object</code>, and a body that will not parse
           at all is refused with <code>The request body could not be parsed as JSON.</code> Unknown
-          top-level keys are ignored rather than rejected — with one exception: a key literally named
+          top-level keys are ignored rather than rejected — with exceptions: a key literally named
           <code>_json</code> is refused, because that is the name Rails gives a non-object body it
-          has wrapped, and the endpoint cannot tell the two apart.
+          has wrapped, and the endpoint cannot tell the two apart. And no string anywhere in the
+          body may contain a NUL character (<code>\u0000</code>): an envelope field, a spec field,
+          a nested <code>intent</code> field, an unknown key's value or an unknown key itself —
+          any of them carrying one refuses the run with a <code>400</code> whose entry names the
+          location, because Postgres cannot store a NUL in a <code>text</code> or
+          <code>jsonb</code> column.
         </p>
       </div>
 
@@ -694,7 +699,7 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             <td class="px-3 py-2 font-mono text-xs text-app-content">duration_seconds</td>
             <td class="px-3 py-2 text-xs text-app-muted">number or null</td>
             <td class="px-3 py-2 text-xs text-app-muted">no</td>
-            <td class="px-3 py-2 text-app-content-secondary">The whole run's wall clock. Must not be negative.</td>
+            <td class="px-3 py-2 text-app-content-secondary">The whole run's wall clock. Must be a finite, non-negative number — an overflowing literal such as <code>1e400</code> parses to infinity and is refused, not counted as a long run.</td>
           </tr>
           <tr>
             <td class="px-3 py-2 font-mono text-xs text-app-content">specs</td>
@@ -734,8 +739,10 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             <td class="px-3 py-2 text-xs text-app-muted">integer</td>
             <td class="px-3 py-2 text-xs text-app-content">yes</td>
             <td class="px-3 py-2 text-app-content-secondary">
-              Must be a positive integer. Together with <code>file_path</code> this is the
-              definition site, and the line an annotation is read from.
+              Must be a positive integer no larger than 2147483647 — the largest value the
+              column stores, so a bigger one is refused rather than overflowing. Together with
+              <code>file_path</code> this is the definition site, and the line an annotation is
+              read from.
             </td>
           </tr>
           <tr>
@@ -779,7 +786,9 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             <td class="px-3 py-2 text-xs text-app-muted">number or null</td>
             <td class="px-3 py-2 text-xs text-app-muted">no</td>
             <td class="px-3 py-2 text-app-content-secondary">
-              Seconds, for this one example. Must not be negative. <code>null</code> is a faithful
+              Seconds, for this one example. Must be a finite, non-negative number — an
+              overflowing literal such as <code>1e400</code> parses to infinity and is refused.
+              <code>null</code> is a faithful
               record for an example that never ran; it is not the same as <code>0</code>, which
               enters the slowest-test and per-file aggregates as a real measurement.
             </td>
@@ -916,7 +925,11 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
               Refused, and nothing was stored. <code>details</code> carries
               <strong class="text-app-content">every</strong> failure found, not just the first —
               <code>message</code> repeats the first one. A single bad example can produce several
-              entries, because each field is checked independently. Entries about an example are
+              entries, because each field is validated on its own. One refusal narrows that list:
+              if any string in the body contains a NUL character, that check runs first and the
+              other checks do not run at all, so <code>details</code> carries
+              only the NUL entries, each naming its location. Fix those and resubmit — the
+              NUL-free payload gets the full list. Entries about an example are
               prefixed <code>specs[i]</code> and then named by whichever coordinates the entry
               actually has: <code>specs[0] spec/order_spec.rb:9:</code> with both,
               <code>specs[0] spec/order_spec.rb:</code> with only a path,
@@ -1030,7 +1043,11 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
 
       <%= render UI::AlertComponent.new(tone: :neutral, title: "If a run is refused, the endpoint tells you exactly why") do %>
         <p class="mt-1">
-          A <code>400</code> lists every problem it found in <code>details</code>. Entries about an
+          A <code>400</code> lists every problem it found in <code>details</code> — with one
+          exception: when any string in the body contains a NUL character, that check runs first,
+          the other checks do not run, and <code>details</code> carries only the NUL entries, each
+          naming its location. Fix those and resubmit: the NUL-free payload gets the full list.
+          Entries about an
           example are prefixed with its index in <code>specs</code> and then named by whatever
           coordinates that entry has — <code>specs[3] spec/models/order_spec.rb:9: …</code> with
           both, and, when one is missing, the other alone: <code>specs[3] spec/models/order_spec.rb:
