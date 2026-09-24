@@ -163,11 +163,51 @@ module Ingest
       @errors << "#{label(spec, index)}: file_path is required and must be a non-empty string"
     end
 
+    # Positivity is not the only guarantee this endpoint owes the columns, and integer-ness is
+    # not the only one it owes the validator: every destination column — `spec_identities`,
+    # `spec_intents`, `spec_observations` — is PG int4, and `upsert_all` serializes through
+    # `ActiveModel::Type::Integer`, whose cast happily accepts a bignum and whose serializer then
+    # raises `ActiveModel::RangeError` for one the 4-byte limit cannot store. Escaped, that is a
+    # 500 from inside `Ingest::RunRecorder`'s transaction where this endpoint promises a
+    # per-spec 400 — the same single-gate reasoning as {#validate_duration} beside it — and it
+    # leaves no `IngestRejection` row, so the refused delivery is invisible to the panel built for
+    # exactly that; a replaying client is worse off still, because its 5xx path treats the line as
+    # a platform failure and retries it forever.
+    #
+    # The bound is read off the column rather than retyped: `serializable?` is the very predicate
+    # the serializer applies, and the limit the refusal message names comes from the same column
+    # type, so widening either destination to bigint relaxes the gate and corrects the message
+    # with no edit here. The original message is kept byte-identical for every input it already
+    # refused — only the newly-discovered arm speaks of the maximum.
     def validate_line_number(spec, index)
       value = spec["line_number"]
-      return if value.is_a?(Integer) && value.positive?
+
+      if value.is_a?(Integer) && value.positive?
+        return if line_number_type.serializable?(value)
+
+        return @errors << "#{label(spec, index)}: line_number must be at most #{line_number_max}"
+      end
 
       @errors << "#{label(spec, index)}: line_number is required and must be a positive integer"
+    end
+
+    # The column type `line_number` serializes through on the synchronous path (`spec_observations`
+    # — the write `Ingest::ObservationRecorder` is inside), and the one its message names. The
+    # asynchronous destinations (`spec_identities`, `spec_intents`) declare the same int4 column,
+    # so one type answers for every writer.
+    def line_number_type
+      @line_number_type ||= SpecObservation.type_for_attribute("line_number")
+    end
+
+    # The largest value the column can store, derived from the type's own byte limit rather than
+    # retyped — `limit` falls back to {ActiveModel::Type::Integer::DEFAULT_LIMIT} exactly as the
+    # type's internal `_limit` does when a column declares none. int4, 4 bytes: `2**31 - 1`.
+    def line_number_max
+      @line_number_max ||= begin
+        limit = line_number_type.limit || ActiveModel::Type::Integer::DEFAULT_LIMIT
+
+        (1 << (limit * 8 - 1)) - 1
+      end
     end
 
     def validate_status(spec, index)

@@ -976,6 +976,81 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["message"]).to include("line_number")
     end
 
+    # The sibling defect of the duration block below, one column type over: `line_number` reaches
+    # three int4 columns — `spec_identities`, `spec_intents` and `spec_observations` — through
+    # `upsert_all`, whose serialize step raises `ActiveModel::RangeError` for anything past
+    # `2**31 - 1` even though the value parses fine and passes a positivity-only check. Before the
+    # validator grew a range arm, that exception escaped inside `Ingest::RunRecorder`'s
+    # transaction as a 500 with no `IngestRejection` row — and a replaying client treats a 5xx as
+    # a platform failure, so the line was retried forever. Not reachable from the shipped
+    # formatter, which sends a real example's line number; the population is the one every
+    # envelope validator exists for: third-party and non-Ruby producers.
+    describe "a line_number the int4 column cannot store" do
+      # Asserted as a *status* rather than as "no exception", exactly as the Hash-duration example
+      # below is: the RangeError escaping the transaction IS the 500 this must never answer.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject an overflowing line number as 400", behavior: "a per-spec line_number past the int4 maximum is a collected validation failure naming the bound, not a RangeError that 500s", layer: "request" }
+      it "answers 400, not 500, for a line_number one past the int4 maximum" do
+        expect { ingest(ingest_payload(specs: [unannotated_spec(line_number: 2_147_483_648)])) }
+          .to change(IngestRejection, :count).by(1)
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"])
+          .to include("spec/models/user_spec.rb:2147483648: line_number must be at most 2147483647")
+        expect(IngestRejection.last.details).to eq(response.parsed_body["details"])
+        expect(TestRun.count).to eq(0)
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The annotated twin of the refusal above: status and intent are irrelevant to the range
+      # arm, and the label names the annotation's own coordinates.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject an annotated overflow", behavior: "an annotated spec with an overflowing line_number is refused by the same range rule and named by its own label", layer: "request" }
+      it "refuses an annotated spec's overflowing line_number by its own label" do
+        ingest(ingest_payload(specs: [annotated_spec(line_number: 2_147_483_648)]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"])
+          .to include("spec/models/invoice_spec.rb:2147483648: line_number must be at most 2147483647")
+      end
+
+      # A bignum is the same arm, not a different one — the parse succeeds, so the only thing
+      # standing between the client and the 500 was the range check.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a bignum line number", behavior: "a far-past-the-limit integer literal such as ten to the thirtieth is refused with the same bound-naming message", layer: "request" }
+      it "rejects a bignum the same way" do
+        ingest(ingest_payload(specs: [unannotated_spec(line_number: 10**30)]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("line_number must be at most 2147483647")
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # Collected rather than raised holds for this arm too: the overflow is one spec's failure,
+      # and the rest of the payload is still diagnosed in the same response.
+      # @intent: { entity: "POST /api/v1/ingest", action: "collect overflow errors with others", behavior: "one overflowing line_number does not hide the other specs failures, all of which appear in the same details list", layer: "request" }
+      it "does not suppress the other specs' errors" do
+        ingest(ingest_payload(specs: [unannotated_spec(line_number: 1),
+                                      unannotated_spec(line_number: 2_147_483_648),
+                                      unannotated_spec(line_number: 0)]))
+
+        details = response.parsed_body["details"]
+
+        expect(response).to have_http_status(:bad_request)
+        expect(details.size).to eq(2)
+        expect(details.grep(/at most/).size).to eq(1)
+        expect(details.grep(/must be a positive integer/).size).to eq(1)
+      end
+
+      # The counterweight: the int4 maximum itself is exactly what the column stores, so the new
+      # arm must not tighten the gate past it.
+      # @intent: { entity: "SpecObservation", action: "accept the int4 maximum", behavior: "a line_number of 2147483647 still passes the gate and reaches the column unchanged", layer: "request" }
+      it "still accepts a line_number at the int4 maximum" do
+        ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/a_spec.rb",
+                                                       line_number: 2_147_483_647)]))
+
+        expect(response).to have_http_status(:accepted)
+        expect(SpecObservation.sole.line_number).to eq(2_147_483_647)
+      end
+    end
+
     # @intent: { entity: "POST /api/v1/ingest", action: "reject an unknown status", behavior: "a spec status outside the allowed vocabulary is refused with the field named", layer: "request" }
     it "rejects an unknown status" do
       ingest(ingest_payload(specs: [annotated_spec.merge(status: "skipped")]))
