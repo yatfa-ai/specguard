@@ -99,4 +99,28 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
           "/docs/integrate states only the recoverable arm — it never says what happens when " \
           "the replay queue cannot be written either"
   end
+
+  # @intent: {"entity": "GET /docs/integrate", "action": "state the keyless local sink's write-failure arm, not an unconditional promise", "behavior": "the page neither describes the keyless local write as unconditional (the old 'the run is written to a file' framing) nor omits the arm: when the local file cannot be written, the page states that the client prints one line naming the configured path (the clients' own warning wording) and that the test run is unaffected, while a successful write stays silent", "layer": "request"}
+  it "does not promise the keyless local write unconditionally, and states its failure arm" do
+    get integration_guide_path
+
+    # Negative-first, because every positive token about this sink ("log/test_results.local.jsonl",
+    # SPECGUARD_LOCAL_OUTPUT_PATH, "development record") is already true on a page that presented
+    # the local write as something that always succeeds — which is exactly why the name-checking
+    # examples above stayed green through that drift. The clients split the arms
+    # (specguard-rspec formatter.rb append_local; specguard-ts transport.ts local branch): the
+    # write succeeding is silent and ordinary; the write failing prints one line naming the
+    # configured path and leaves the test run unaffected.
+    expect(response.body).not_to include("the run is written to a file"),
+          "/docs/integrate presents the keyless local write as unconditional again — false " \
+          "whenever log/test_results.local.jsonl cannot be written"
+
+    expect(response.body).to include("could not write telemetry"),
+          "/docs/integrate states only the ordinary keyless arm — it never says what happens " \
+          "when the local file cannot be written"
+
+    expect(response.body).to include("nothing is printed"),
+          "/docs/integrate no longer describes the successful keyless write as silent and " \
+          "ordinary — the failure arm must not read as the usual case"
+  end
 end
