@@ -66,7 +66,19 @@ class Repository < ApplicationRecord
   before_validation :normalize_full_name
   before_validation :derive_name
 
-  validates :github_full_name, presence: true, uniqueness: { case_sensitive: false },
+  # The character Postgres refuses to store. A `github_full_name` carrying one can never collide
+  # with an existing row, but the uniqueness validator below runs BEFORE `format` (validators run
+  # in declaration order) and its SELECT raises `ArgumentError: string contains null byte` out of
+  # the adapter — turning `valid?` into a raise and every register, rename and bulk write that
+  # decides through it into an HTML 500. The `unless:` skips that query for a NUL-bearing name so
+  # `format` — which cannot match a NUL — answers with the ordinary refusal. The value is refused,
+  # not stripped: `normalize_full_name` deliberately leaves it in place. Refuse, don't coerce, the
+  # same rule `Ingest::Payload` states.
+  NUL = "\u0000"
+
+  validates :github_full_name, presence: true,
+                               uniqueness: { case_sensitive: false,
+                                             unless: -> { github_full_name.to_s.include?(NUL) } },
                                format: { with: FULL_NAME_FORMAT, message: "must look like org/repo" }
   validates :name, presence: true
 

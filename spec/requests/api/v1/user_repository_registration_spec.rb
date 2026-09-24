@@ -175,6 +175,22 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
       expect(response.parsed_body["message"]).to include("must look like org/repo")
     end
 
+    # SPGD-1471 — the NUL case. Validators run in declaration order, so the uniqueness SELECT
+    # used to raise `ArgumentError: string contains null byte` before `format` could refuse the
+    # name, turning this request into an HTML 500; the validation now skips that query for a
+    # NUL-bearing name and the ordinary 400 renders. The key count is asserted beside the
+    # repository count because this endpoint mints one in the same exchange — a partial write
+    # would strand a repository with no key or a key with no repository.
+    # @intent: { entity: "Repository registration", action: "refuse a NUL-bearing name", behavior: "a github_full_name containing a NUL is refused 400 with the must look like org/repo message and neither a repository nor an api key is written", layer: "request" }
+    it "still refuses a name containing a NUL byte" do
+      expect {
+        register("acme/x\u0000y")
+      }.to change(Repository, :count).by(0).and change(ApiKey, :count).by(0)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("must look like org/repo")
+    end
+
     # @intent: { entity: "Repository registration", action: "refuse a taken name", behavior: "a name another account already registered is refused 400 even though the grant names it", layer: "request" }
     it "refuses a name another account already registered" do
       create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),

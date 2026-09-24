@@ -15,6 +15,21 @@ RSpec.describe Repository do
     expect(repository.errors[:github_full_name]).to include("must look like org/repo")
   end
 
+  # The NUL case, which is about ORDER as much as about content: validators run in declaration
+  # order, so the uniqueness SELECT runs before `format` — and a NUL makes that SELECT raise
+  # `ArgumentError: string contains null byte` out of the adapter, turning `valid?` into a raise
+  # and every register, rename and bulk write that decides through it into a 500. The validation
+  # skips that query for a NUL-bearing name (Postgres cannot store one, so it can never collide),
+  # and this example holds both halves of the contract: no raise, and the ordinary `format`
+  # refusal `format` would have given had it been reached first.
+  # @intent: { entity: "Repository", action: "validate a full name", behavior: "a full name containing a NUL leaves the record invalid with the must look like org/repo error instead of raising out of the uniqueness query", layer: "unit" }
+  it "refuses a full name containing a NUL instead of raising" do
+    repository = create_user.repositories.new(github_full_name: "acme/x\u0000y")
+
+    expect(repository.valid?).to be(false)
+    expect(repository.errors[:github_full_name]).to include("must look like org/repo")
+  end
+
   # @intent: { entity: "Repository", action: "derive a short name", behavior: "the short name is taken as the segment after the slash of the stored full name", layer: "unit" }
   it "derives the short name from the full name" do
     expect(create_repository(github_full_name: "acme/billing-service").name).to eq("billing-service")
@@ -34,6 +49,23 @@ RSpec.describe Repository do
                 .repositories.new(github_full_name: "acme/billing-service")
 
     expect(duplicate).not_to be_valid
+  end
+
+  # The counterweight to the NUL skip above. The `unless:` on the uniqueness validation must stay
+  # scoped to NUL-bearing names — a blanket skip (or a deleted validation) would silence the
+  # duplicate refusal entirely, and the "losing the uniqueness race" examples below cannot catch
+  # that: they STUB `validate_each` and exercise the save-time `RecordNotUnique` translation, so
+  # they stay green with the uniqueness validation gone. Only a `valid?`-level duplicate proves
+  # the query still runs and refuses. The duplicate is a CASE variant, which is the behaviour
+  # `case_sensitive: false` exists for and what an inline `WHERE github_full_name = ?` would miss.
+  # @intent: { entity: "Repository", action: "register uniquely", behavior: "a case-variant duplicate of an existing full name fails valid? with the :taken kind so the uniqueness query still runs and refuses for NUL-free names", layer: "unit" }
+  it "rejects a case-variant duplicate at validation time with the :taken kind" do
+    create_repository(github_full_name: "acme/api")
+    duplicate = create_user(github_uid: "2002", github_handle: "hubot")
+                .repositories.new(github_full_name: "ACME/api")
+
+    expect(duplicate.valid?).to be(false)
+    expect(duplicate.errors.of_kind?(:github_full_name, :taken)).to be(true)
   end
 
   # The uniqueness validation above RACES — its SELECT runs before the INSERT, so a competing
