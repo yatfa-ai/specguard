@@ -26,8 +26,15 @@
 # exists to show. A test that failed in every run and one that passed in every run, merged, are a
 # perfect picture of flakiness that nothing in the suite is doing. A silent wrong answer needs the
 # guard more than a crash does. Anything that is not a String is treated as no ask, which is the same
-# answer an absent param gets — the response is exactly what it was before the parameter existed. All
-# three shapes are pinned; see `spec/support/shared_examples/malformed_unstable_test_param.rb`.
+# answer an absent param gets — the response is exactly what it was before the parameter existed.
+#
+# A String that carries a NUL is the shape the String half alone lets through: a `%00` in the
+# description parses to a String and answers `.presence` like any other, but Postgres cannot hold a
+# NUL in a text value, so no row could ever match the ask — and handing it to the `where(name: …)`
+# it reaches raises `ArgumentError` before anything answers. It is treated as no ask, the same
+# answer the shapes above get.
+#
+# All four shapes are pinned; see `spec/support/shared_examples/malformed_unstable_test_param.rb`.
 #
 # `.presence` SECOND, and it is load-bearing here for the reason it is load-bearing one ladder over:
 # `spec_observations.name` is NULLABLE — `Ingest::ObservationRecorder#attributes` writes it through
@@ -56,6 +63,6 @@ module RequestedUnstableTestParam
     return @requested_unstable_test if defined?(@requested_unstable_test)
 
     raw = params[:unstable_test]
-    @requested_unstable_test = raw.is_a?(String) ? raw.presence : nil
+    @requested_unstable_test = raw.is_a?(String) && !raw.include?("\u0000") ? raw.presence : nil
   end
 end

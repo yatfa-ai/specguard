@@ -8,6 +8,10 @@
 # them reaches a `where` that raises — a 500 on a URL anyone can type into the bar. The single guard
 # they all land on is `RequestedBranchParam#requested_branch`.
 #
+# A String that carries a NUL is the shape that list cannot see: `?branch=ma%00in` parses to a
+# String and passes both halves of the guard, but Postgres cannot hold a NUL in a text value, so no
+# row could ever match the ask — it is treated as no ask, like the shapes above.
+#
 # One list rather than one per surface, and that is the point of the file. Both surfaces read the
 # same guard through the same module, so a shape either surface tolerates is a shape BOTH tolerate;
 # two hand-written lists had already drifted (the human page pinned two of these three, the API all
@@ -35,9 +39,10 @@ RSpec.shared_examples "a surface that treats a malformed branch parameter as no 
   [
     ["an array", { branch: ["main"] }],
     ["a nested hash", { branch: { a: "b" } }],
-    ["an array of hashes", { branch: [{ a: "b" }] }]
+    ["an array of hashes", { branch: [{ a: "b" }] }],
+    ["a string carrying a NUL", { branch: "ma\u0000in" }]
   ].each do |shape, query|
-    # @intent: { entity: "RequestedBranchParam", action: "treat non-string branch as no ask", behavior: "a branch parameter in a non-String shape answers 200 with the unfiltered result rather than 500, matching an absent parameter", layer: "request" }
+    # @intent: { entity: "RequestedBranchParam", action: "treat non-string and NUL-carrying branch as no ask", behavior: "a branch parameter in a non-String shape or carrying a NUL answers 200 with the unfiltered result rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when branch arrives as #{shape}" do
       expect_branch_param_treated_as_no_ask(query)
     end

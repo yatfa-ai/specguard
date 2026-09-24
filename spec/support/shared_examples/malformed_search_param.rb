@@ -7,7 +7,11 @@
 # of them. None is a String. `?q=` — a browser's unfilled search field — IS a String and is a
 # fourth shape rather than a fifth container: it is caught by the `.presence` half of the same
 # guard, because an ask has to carry text to find rather than merely be present in the URL. All
-# four land on `RequestedSearchParam#requested_search`, which is why they are pinned together.
+# five land on `RequestedSearchParam#requested_search`, which is why they are pinned together.
+#
+# A String that carries a NUL is the fifth shape: `?q=acme%00billing` parses to a String and passes
+# both halves of the guard, but Postgres cannot hold a NUL in a text value, so no row could ever
+# match the ask — it is treated as no ask, like the shapes above.
 #
 # Its own file rather than a widening of any sibling `malformed_*_param.rb`, and one file per
 # parameter is the point of the split — each doc comment governs ONE parameter, and folding a
@@ -44,9 +48,10 @@ RSpec.shared_examples "a surface that treats a malformed search parameter as no 
     ["an array", { q: ["acme/billing-service"] }],
     ["a nested hash", { q: { a: "b" } }],
     ["an array of hashes", { q: [{ a: "b" }] }],
-    ["a blank string", { q: "" }]
+    ["a blank string", { q: "" }],
+    ["a string carrying a NUL", { q: "acme/billing\u0000-service" }]
   ].each do |shape, query|
-    # @intent: { entity: "RequestedSearchParam", action: "treat a q that is not a search string as no ask", behavior: "a q parameter that carries no text to find — a non-String container shape, or a blank string — answers 200 with the unfiltered page rather than 500 or a silently coerced match, matching an absent parameter", layer: "request" }
+    # @intent: { entity: "RequestedSearchParam", action: "treat a q that is not a search string as no ask", behavior: "a q parameter that is not a text ask — a non-String container shape, a blank string, or a string carrying a NUL — answers 200 with the unfiltered page rather than 500 or a silently coerced match, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when q arrives as #{shape}" do
       expect_search_param_treated_as_no_ask(query)
     end

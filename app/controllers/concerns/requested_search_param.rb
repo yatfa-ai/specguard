@@ -13,8 +13,16 @@
 # and `?q[a]=b` to `ActionController::Parameters`. On THIS parameter the hazard is the one the
 # spec-file sibling carries — an Array reaching an `ILIKE` would not raise; coerced somewhere it
 # would answer a question nobody asked, on a URL anyone can type into the bar. Anything that is not
-# a String is treated as no ask, the same answer an absent param gets. All three container shapes
-# are pinned, beside the blank string the `.presence` below settles the same way; see
+# a String is treated as no ask, the same answer an absent param gets.
+#
+# A String that carries a NUL is the shape the String half alone lets through: a `%00` in the
+# search text parses to a String and answers `.presence` like any other, but Postgres cannot hold a
+# NUL in a text value, so no row could ever match the ask — and handing it to the `ILIKE` it
+# reaches raises `ArgumentError` before anything answers. It is treated as no ask, the same answer
+# an absent param gets.
+#
+# All three container shapes
+# are pinned, beside the blank string and the NUL-carrying String the guard settles the same way; see
 # `spec/support/shared_examples/malformed_search_param.rb`.
 #
 # `.presence` SECOND, so `?q=` — a browser's unfilled search field — is not an ask. An ask has to
@@ -42,6 +50,6 @@ module RequestedSearchParam
     return @requested_search if defined?(@requested_search)
 
     raw = params[:q]
-    @requested_search = raw.is_a?(String) ? raw.presence : nil
+    @requested_search = raw.is_a?(String) && !raw.include?("\u0000") ? raw.presence : nil
   end
 end

@@ -7,6 +7,10 @@
 # `?unstable_test[][a]=b` is an Array of them. None is a String, and the single guard they all land
 # on is `RequestedUnstableTestParam#requested_unstable_test`.
 #
+# A String that carries a NUL is the shape that list cannot see: `?unstable_test=a%00b` parses to a
+# String and passes both halves of the guard, but Postgres cannot hold a NUL in a text value, so no
+# row could ever match the ask — it is treated as no ask, like the shapes above.
+#
 # Its own file rather than a widening of `malformed_repeated_description_param.rb`, and one file per
 # parameter is the point of the split. Each one's doc comment governs *one parameter on every
 # surface* — its list is the answer to "which shapes does `?unstable_test=` tolerate", and folding a
@@ -39,16 +43,17 @@
 #
 # The host method is run as an ordinary example-group method, so its `let`s, its `before` hooks and
 # its own fixture helpers are all in scope. It must assert the NO-ASK answer specifically, not merely
-# a 200: a guard that swallowed every value would also answer 200 on all three shapes, and only the
+# a 200: a guard that swallowed every value would also answer 200 on all four shapes, and only the
 # positive-path example next to it — the one that proves `?unstable_test=<name>` IS honoured —
 # separates the two. Keep that example beside the host group.
 RSpec.shared_examples "a surface that treats a malformed unstable-test parameter as no ask" do
   [
     ["an array", { unstable_test: ["Invoice finalize locks the line items"] }],
     ["a nested hash", { unstable_test: { a: "b" } }],
-    ["an array of hashes", { unstable_test: [{ a: "b" }] }]
+    ["an array of hashes", { unstable_test: [{ a: "b" }] }],
+    ["a string carrying a NUL", { unstable_test: "Invoice finalize locks the line\u0000 items" }]
   ].each do |shape, query|
-    # @intent: { entity: "RequestedUnstableTestParam", action: "treat non-string unstable_test as no ask", behavior: "an unstable_test parameter in a non-String shape answers 200 with the unfiltered answer rather than 500, matching an absent parameter", layer: "request" }
+    # @intent: { entity: "RequestedUnstableTestParam", action: "treat non-string and NUL-carrying unstable_test as no ask", behavior: "an unstable_test parameter in a non-String shape or carrying a NUL answers 200 with the unfiltered answer rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when unstable_test arrives as #{shape}" do
       expect_unstable_test_param_treated_as_no_ask(query)
     end

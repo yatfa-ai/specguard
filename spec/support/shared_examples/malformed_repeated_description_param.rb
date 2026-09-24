@@ -8,6 +8,10 @@
 # String, and the single guard they all land on is
 # `RequestedRepeatedDescriptionParam#requested_repeated_description`.
 #
+# A String that carries a NUL is the shape that list cannot see: `?repeated_description=a%00b` parses
+# to a String and passes both halves of the guard, but Postgres cannot hold a NUL in a text value,
+# so no row could ever match the ask — it is treated as no ask, like the shapes above.
+#
 # Its own file rather than a widening of `malformed_spec_file_param.rb`, and one file per parameter
 # is the point of the split. Each one's doc comment governs *one parameter on every surface* — its
 # list is the answer to "which shapes does `?repeated_description=` tolerate", and folding a second
@@ -36,16 +40,17 @@
 #
 # The host method is run as an ordinary example-group method, so its `let`s, its `before` hooks and
 # its own fixture helpers are all in scope. It must assert the NO-ASK answer specifically, not merely
-# a 200: a guard that swallowed every value would also answer 200 on all three shapes, and only the
+# a 200: a guard that swallowed every value would also answer 200 on all four shapes, and only the
 # positive-path example next to it — the one that proves `?repeated_description=<name>` IS honoured —
 # separates the two. Keep that example beside the host group.
 RSpec.shared_examples "a surface that treats a malformed repeated-description parameter as no ask" do
   [
     ["an array", { repeated_description: ["shared across a loop"] }],
     ["a nested hash", { repeated_description: { a: "b" } }],
-    ["an array of hashes", { repeated_description: [{ a: "b" }] }]
+    ["an array of hashes", { repeated_description: [{ a: "b" }] }],
+    ["a string carrying a NUL", { repeated_description: "shared across a\u0000 loop" }]
   ].each do |shape, query|
-    # @intent: { entity: "RequestedRepeatedDescriptionParam", action: "treat non-string repeated_description as no ask", behavior: "a repeated_description parameter in a non-String shape answers 200 with the unfiltered answer rather than 500, matching an absent parameter", layer: "request" }
+    # @intent: { entity: "RequestedRepeatedDescriptionParam", action: "treat non-string and NUL-carrying repeated_description as no ask", behavior: "a repeated_description parameter in a non-String shape or carrying a NUL answers 200 with the unfiltered answer rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when repeated_description arrives as #{shape}" do
       expect_repeated_description_param_treated_as_no_ask(query)
     end
