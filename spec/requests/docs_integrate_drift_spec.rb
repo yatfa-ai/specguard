@@ -9,6 +9,12 @@ require "rails_helper"
 # bundled gem itself, so the gem changing (a variable added or renamed, a default moved, a
 # concept removed) reddens THIS suite until the page catches up. The gem is the source of truth
 # because it is the code the reader will actually install.
+#
+# The page also documents the platform's own endpoint, and the server is a second source of
+# truth with the same gap: `POST /api/v1/ingest`'s validators changed three times in a single
+# day (non-finite durations, the int4 line_number bound, the NUL refusal) while the page stayed
+# behind all three — its own header promises the opposite. The last example holds the page
+# against `Ingest::Payload` itself the same way it holds the rest against the gem.
 # `require: false` in the Gemfile — the gem is loaded by the reporters at test time, so a
 # spec reading its constants says so itself.
 require "specguard/rspec/configuration"
@@ -122,5 +128,55 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
     expect(response.body).to include("nothing is printed"),
           "/docs/integrate no longer describes the successful keyless write as silent and " \
           "ordinary — the failure arm must not read as the usual case"
+  end
+
+  # @intent: {"entity": "GET /docs/integrate", "action": "hold the page against the ingest server's refusals", "behavior": "the page makes no unqualified per-field completeness promise and matches the server's current refusal contract: it names the line_number bound read from Ingest::Payload rather than a spec literal, states on both duration rows that the value must be finite as well as non-negative, and states that a NUL anywhere in the body \u2014 an unknown key's value included \u2014 is refused with a location-named entry, while a NUL-carrying 400 lists only the NUL entries, the other checks not running until a NUL-free resubmit returns the full list", "layer": "request"}
+  it "matches the ingest server's current refusal contract, not last week's" do
+    # Read from the server, never a literal here: the bound is derived from the column type's
+    # own limit, so widening the int4 column changes what this expectation demands and reddens
+    # the spec against a page still showing the old maximum. (`line_number_max` is private
+    # because it is an implementation detail of one validator; the spec reads it through
+    # `send` on a payload built from an empty body — which collects its errors without
+    # raising, and only the bound is read.)
+    line_number_max = Ingest::Payload.new({}).send(:line_number_max).to_s
+
+    get integration_guide_path
+
+    # Negative-first, because every positive token about the 400 ("details", "every failure",
+    # "specs[0]") is already true on a page that promises the full list unconditionally — which
+    # is exactly how this page stayed behind three validator fixes landed in one day. The
+    # banned phrase is the unscoped completeness claim as it stood before the NUL short-circuit
+    # existed: a revert of the rescoped wording reddens here.
+    expect(response.body).not_to include("each field is checked independently"),
+          "/docs/integrate promises the full details list unconditionally again — false while " \
+          "a NUL in the body makes the endpoint list only the NUL entries"
+
+    expect(response.body).to include(line_number_max),
+          "the server refuses line_number above #{line_number_max} (read from " \
+          "Ingest::Payload), which /docs/integrate does not state"
+
+    # Both duration rows must state finiteness — `1e400` parses to Float::INFINITY and is
+    # refused by the same non-negative arm, so "must not be negative" alone is not the
+    # contract the server enforces.
+    expect(response.body.scan("Must be a finite, non-negative number").length).to be >= 2,
+          "both duration rows (the run's duration_seconds and the per-spec duration) must " \
+          "state that the value must be finite as well as non-negative"
+
+    # The NUL refusal, worded as the server words its entries: the six characters \u0000, not
+    # an actual NUL byte, which the page cannot render and the server never sends.
+    expect(response.body).to include("\\u0000"),
+          "/docs/integrate never states that a NUL (\\u0000) anywhere in the body is refused"
+    expect(response.body).to include("NUL"),
+          "/docs/integrate never names the NUL refusal"
+
+    # The NUL-only arm, on both surfaces that make the completeness promise (the 400 response
+    # row and the "If a run is refused" alert): a NUL-carrying body gets only the NUL entries,
+    # and the NUL-free resubmit gets the full list.
+    expect(response.body.scan("only the NUL entries").length).to be >= 2,
+          "both completeness surfaces (the 400 row and the refusal alert) must state that a " \
+          "NUL-carrying body is answered with only the NUL entries"
+    expect(response.body.scan("gets the full list").length).to be >= 2,
+          "both completeness surfaces (the 400 row and the refusal alert) must state that the " \
+          "NUL-free resubmit gets the full list"
   end
 end
