@@ -18,6 +18,16 @@ module Ingest
   class Payload
     STATUSES = %w[annotated unannotated].freeze
 
+    # The character Postgres refuses to store, and the six-character text a refusal renders it as
+    # (see {#validate_no_nul_characters} for why the second constant exists at all).
+    NUL = "\u0000"
+    NUL_AS_TEXT = "\\u0000"
+
+    # The key Rails' ParamsWrapper nests a duplicate of the body under for this controller
+    # (`ingest`, after `Api::V1::IngestsController`). The NUL walk reads it to know what not to
+    # treat as a second client location — see {#walkable_body}.
+    PARAMS_WRAPPER_MIRROR_KEY = "ingest"
+
     attr_reader :errors
 
     def initialize(body)
@@ -77,6 +87,9 @@ module Ingest
     def validate
       return @errors << "the request body must be a JSON object" unless object_body?
 
+      validate_no_nul_characters
+      return if @errors.any?
+
       validate_commit_sha
       validate_branch
       validate_ci_run_id
@@ -88,6 +101,110 @@ module Ingest
     # Rails parses a non-object JSON body (an array, a bare string) into `{"_json" => …}` rather
     # than failing, so an object-shaped Hash here is not proof the client sent an object.
     def object_body? = @body.is_a?(Hash) && !@body.key?("_json")
+
+    # A NUL (`\u0000`) anywhere in the body is refused, because Postgres cannot hold one: a `text`
+    # write fails at the adapter (`ArgumentError: string contains null byte`) and a `jsonb` write
+    # fails at the server (`PG::UntranslatableCharacter`, "unsupported Unicode escape sequence").
+    # No destination column carries a check constraint and `upsert_all` runs no validations, so
+    # this walk is the only gate — the same single-gate reasoning as {#validate_duration} beside
+    # it. Without it the failure lands inside `Ingest::RunRecorder`'s transaction: an
+    # `ArgumentError` escaping as a 500 from an endpoint whose whole contract is a collected,
+    # per-spec 400, with no `TestRun`, no `SpecObservation` and no `IngestRejection` row — and a
+    # client classifying that 500 as a platform fault replays a line that can never land instead
+    # of fixing its payload.
+    #
+    # The refusal path fails the same way today, and from the other direction: every per-spec
+    # message names the spec through {#label}, which interpolates the spec's own `file_path`, so
+    # a NUL reaching a message makes the rejection row's own `jsonb` write
+    # (`Ingest::RejectionRecorder`) fail too. The response is still a correct 400 — which is
+    # exactly what makes this arm easy to miss — but the refusal is recorded nowhere, and the
+    # panel built for refusals shows nothing for it. Hence {NUL_AS_TEXT}: wherever client text
+    # enters a message — this walk's path segments and {#label} — the character is rendered as
+    # the literal six characters `\u0000`, and the stored detail survives.
+    #
+    # One walk over the whole parsed body rather than a rule per field, deliberately: what cannot
+    # be stored is a property of the columns (`text`, and every string inside `jsonb`), not of any
+    # field, so a field the envelope gains later is covered by the same walk instead of needing
+    # another slice — ten per-field patches would repeat the shape this file's git history shows
+    # keeps recurring. Errors are collected one per offending location, named by path
+    # (`commit_sha`, `specs[0].file_path`, `specs[0].intent.behavior`); a hash key is client text
+    # like any value, so an offending key is named — escaped — in its own path. The walk reads
+    # {#walkable_body} rather than the raw body, because Rails' ParamsWrapper leaves a duplicate
+    # of the whole parsed body under its own key in `request_parameters`, and reporting that
+    # Rails-internal second location would double every refusal at a path the client's JSON does
+    # not contain.
+    #
+    # The remaining validators are skipped once this one fires. Each of them can echo client text
+    # into a message — {#label} by construction, and json_schemer quotes the offending value on
+    # some schema failures — so their output beside a NUL cannot be trusted to survive the `jsonb`
+    # write the details list is stored through. The client still gets a named location to fix,
+    # and the payload it resubmits gets the full list.
+    #
+    # Stripping or scrubbing the NUL is deliberately NOT done: refuse, don't coerce — the rule
+    # this file already states for `ci_run_id`, and stronger here, because a scrubbed example name
+    # or file path is no longer the example the client ran.
+    def validate_no_nul_characters
+      refuse_nuls(walkable_body)
+    end
+
+    # The body the walk covers. Rails' ParamsWrapper, which runs above this endpoint for JSON
+    # requests, merges a second copy of the whole parsed body under its wrapper key — same data,
+    # second location, under a key the client never sent (`ingest`, after the controller).
+    # Walking the copy would report every NUL twice, once at a path the client's own JSON does
+    # not contain, so when the copy is exactly that — a mirror of everything beside it — the
+    # walk skips it. The equality guard is what makes the skip safe rather than lossy: if the
+    # key is instead genuine client data that merely looks like a mirror, every byte inside it
+    # is also present at the top level, so nothing the client sent goes unwalked either way.
+    def walkable_body
+      mirror = @body[PARAMS_WRAPPER_MIRROR_KEY]
+      return @body.except(PARAMS_WRAPPER_MIRROR_KEY) if @body.size > 1 && mirror.is_a?(Hash) &&
+                                                          mirror == @body.except(PARAMS_WRAPPER_MIRROR_KEY)
+
+      @body
+    end
+
+    def refuse_nuls(node, path = nil)
+      case node
+      when Hash
+        node.each do |key, value|
+          child_path = path_segment(path, key)
+          flag_nul_in(key, child_path) if key.is_a?(String)
+          refuse_nuls(value, child_path)
+        end
+      when Array
+        node.each_with_index { |value, index| refuse_nuls(value, "#{path}[#{index}]") }
+      when String
+        flag_nul_in(node, path)
+      end
+    end
+
+    # A NUL in a hash key is the same defect as one in a value — jsonb refuses it in both — and
+    # the key is also where the walk builds its own path from, so the escaped key is what the
+    # refusal names.
+    def flag_nul_in(text, path)
+      return unless text.include?(NUL)
+
+      @errors << "#{path}: must not contain a NUL character (#{NUL_AS_TEXT}), " \
+                 "which Postgres text and jsonb columns cannot store"
+    end
+
+    # Builds the dotted location a refusal names — `specs[0].intent.behavior`. Array indexes
+    # render bracketed; a hash key renders after a dot and is escaped like any client text,
+    # because a key carrying a NUL would otherwise put one into the very message refusing it.
+    def path_segment(parent, key)
+      return "#{parent}[#{key}]" if key.is_a?(Integer)
+
+      key = nul_safe(key.to_s)
+      parent ? "#{parent}.#{key}" : key
+    end
+
+    # Renders every NUL in client text as the literal six characters, so a message quoting it
+    # survives the `jsonb` write the rejection row is stored through. Identity for text without a
+    # NUL — which is every message this endpoint has ever produced — so no existing refusal
+    # changes by a byte.
+    def nul_safe(text)
+      text.gsub(NUL, NUL_AS_TEXT)
+    end
 
     def validate_commit_sha
       value = @body["commit_sha"]
@@ -300,9 +417,11 @@ module Ingest
     end
 
     # Names the offending spec by its own coordinates, falling back to the index alone when the
-    # entry is malformed enough not to have any.
+    # entry is malformed enough not to have any. The coordinates are client text, so they pass
+    # through {#nul_safe}: a NUL arriving here must not ride into a message and make the
+    # rejection row it is stored through unwritable (see {#validate_no_nul_characters}).
     def label(spec, index)
-      location = spec.is_a?(Hash) ? [spec["file_path"], spec["line_number"]].compact.join(":") : nil
+      location = spec.is_a?(Hash) ? nul_safe([spec["file_path"], spec["line_number"]].compact.join(":")) : nil
 
       location.presence ? "specs[#{index}] #{location}" : "specs[#{index}]"
     end
