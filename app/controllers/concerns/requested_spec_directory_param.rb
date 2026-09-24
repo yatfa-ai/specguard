@@ -17,7 +17,15 @@
 # and answer a question nobody asked, under a caption naming one directory. A silent wrong answer
 # needs the guard more than a crash does, not less. Anything that is not a String is treated as no
 # ask, which is the same answer an absent param gets — the page renders exactly what it rendered
-# before the parameter existed. All three shapes are pinned; see
+# before the parameter existed.
+#
+# A String that carries a NUL is the shape the String half alone lets through: a `%00` in the path
+# parses to a String and answers `.presence` like any other, but Postgres cannot hold a NUL in a
+# text value, so no row could ever match the ask — and handing it to the equality comparison against
+# `DIRECTORY_EXPRESSION` it reaches raises `ArgumentError` before anything answers. It is treated as
+# no ask, the same answer the shapes above get.
+#
+# All four shapes are pinned; see
 # `spec/support/shared_examples/malformed_spec_directory_param.rb`.
 #
 # `.presence` SECOND, which is what makes `?spec_directory=` mean "no ask" rather than a comparison
@@ -41,6 +49,6 @@ module RequestedSpecDirectoryParam
     return @requested_spec_directory if defined?(@requested_spec_directory)
 
     raw = params[:spec_directory]
-    @requested_spec_directory = raw.is_a?(String) ? raw.presence : nil
+    @requested_spec_directory = raw.is_a?(String) && !raw.include?("\u0000") ? raw.presence : nil
   end
 end

@@ -7,6 +7,10 @@
 # `?commit_sha[][a]=b` is an Array of them. None is a String, and the single guard they all land on
 # is `RequestedCommitShaParam#requested_commit_sha`.
 #
+# A String that carries a NUL is the shape that list cannot see: `?commit_sha=ma%00in` parses to a
+# String and passes both halves of the guard, but Postgres cannot hold a NUL in a text value, so no
+# row could ever match the ask — it is treated as no ask, like the shapes above.
+#
 # Its own file rather than a widening of `malformed_spec_file_param.rb`, and one file per parameter
 # is the point of the split, on the reasoning that file states in full: its list is the answer to
 # "which shapes does `?spec_file=` tolerate", and folding a second parameter into it would make one
@@ -37,7 +41,7 @@
 #
 # The host method is run as an ordinary example-group method, so its `let`s, its `before` hooks and
 # its own fixture helpers are all in scope. It must assert the NO-ASK answer specifically, not merely
-# a 200: a guard that swallowed every value would also answer 200 on all three shapes, and only the
+# a 200: a guard that swallowed every value would also answer 200 on all four shapes, and only the
 # positive-path example next to it — the one that proves `?commit_sha=<sha>` IS honoured — separates
 # the two. Keep that example beside the host group.
 #
@@ -50,9 +54,10 @@ RSpec.shared_examples "a surface that treats a malformed commit-sha parameter as
   [
     ["an array", { commit_sha: %w[a1b2c3d4e5f6] }],
     ["a nested hash", { commit_sha: { a: "b" } }],
-    ["an array of hashes", { commit_sha: [{ a: "b" }] }]
+    ["an array of hashes", { commit_sha: [{ a: "b" }] }],
+    ["a string carrying a NUL", { commit_sha: "a1b2c3\u0000d4e5f6" }]
   ].each do |shape, query|
-    # @intent: { entity: "RequestedCommitShaParam", action: "treat non-string commit_sha as no ask", behavior: "a commit_sha parameter in a non-String shape answers 200 anchored to the default run rather than 500, matching an absent parameter", layer: "request" }
+    # @intent: { entity: "RequestedCommitShaParam", action: "treat non-string and NUL-carrying commit_sha as no ask", behavior: "a commit_sha parameter in a non-String shape or carrying a NUL answers 200 anchored to the default run rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when commit_sha arrives as #{shape}" do
       expect_commit_sha_param_treated_as_no_ask(query)
     end

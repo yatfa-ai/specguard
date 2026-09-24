@@ -24,7 +24,15 @@
 # rollup, every drill-in and both growth windows against it, under a `run_anchor` naming one sha the
 # client asked for. Anything that is not a String is treated as no ask, which is the same answer an
 # absent param gets: the endpoint anchors on the repository's newest run exactly as it did before
-# the parameter existed. All three shapes are pinned; see
+# the parameter existed.
+#
+# A String that carries a NUL is the shape the String half alone lets through: `?commit_sha=ma%00in`
+# parses to a String and answers `.presence` like any other, but Postgres cannot hold a NUL in a
+# text value, so no row could ever match the ask — and handing it to the `where(commit_sha: …)` it
+# reaches raises `ArgumentError` before anything answers. It is treated as no ask, the same answer
+# the shapes above get.
+#
+# All four shapes are pinned; see
 # `spec/support/shared_examples/malformed_commit_sha_param.rb`.
 #
 # `.presence` SECOND, which is what makes `?commit_sha=` mean "no ask" rather than
@@ -54,6 +62,6 @@ module RequestedCommitShaParam
     return @requested_commit_sha if defined?(@requested_commit_sha)
 
     raw = params[:commit_sha]
-    @requested_commit_sha = raw.is_a?(String) ? raw.presence : nil
+    @requested_commit_sha = raw.is_a?(String) && !raw.include?("\u0000") ? raw.presence : nil
   end
 end

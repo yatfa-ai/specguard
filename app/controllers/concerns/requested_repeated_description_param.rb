@@ -18,7 +18,15 @@
 # quietly become an `IN` list and answer about several descriptions under a caption naming one. A
 # silent wrong answer needs the guard more than a crash does. Anything that is not a String is
 # treated as no ask, which is the same answer an absent param gets — the page renders exactly what
-# it rendered before the parameter existed. All three shapes are pinned; see
+# it rendered before the parameter existed.
+#
+# A String that carries a NUL is the shape the String half alone lets through: a `%00` in the
+# description parses to a String and answers `.presence` like any other, but Postgres cannot hold a
+# NUL in a text value, so no row could ever match the ask — and handing it to the `where(name: …)`
+# it reaches raises `ArgumentError` before anything answers. It is treated as no ask, the same
+# answer the shapes above get.
+#
+# All four shapes are pinned; see
 # `spec/support/shared_examples/malformed_repeated_description_param.rb`.
 #
 # `.presence` SECOND, and it is load-bearing at THIS grain in a way it is not at the file one.
@@ -46,6 +54,6 @@ module RequestedRepeatedDescriptionParam
     return @requested_repeated_description if defined?(@requested_repeated_description)
 
     raw = params[:repeated_description]
-    @requested_repeated_description = raw.is_a?(String) ? raw.presence : nil
+    @requested_repeated_description = raw.is_a?(String) && !raw.include?("\u0000") ? raw.presence : nil
   end
 end

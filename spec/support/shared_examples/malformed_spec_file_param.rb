@@ -7,6 +7,10 @@
 # `?spec_file[][a]=b` is an Array of them. None is a String, and the single guard they all land on
 # is `RequestedSpecFileParam#requested_spec_file`.
 #
+# A String that carries a NUL is the shape that list cannot see: `?spec_file=spec%2Fmodels%2Forder%00_spec.rb`
+# parses to a String and passes both halves of the guard, but Postgres cannot hold a NUL in a text
+# value, so no row could ever match the ask — it is treated as no ask, like the shapes above.
+#
 # Its own file rather than a widening of `malformed_branch_param.rb`, and one file per parameter is
 # the point of the split. That one's doc comment governs *the branch parameter on every surface* —
 # its list is the answer to "which shapes does `?branch=` tolerate", and folding a second parameter
@@ -34,16 +38,17 @@
 #
 # The host method is run as an ordinary example-group method, so its `let`s, its `before` hooks and
 # its own fixture helpers are all in scope. It must assert the NO-ASK answer specifically, not
-# merely a 200: a guard that swallowed every value would also answer 200 on all three shapes, and
+# merely a 200: a guard that swallowed every value would also answer 200 on all four shapes, and
 # only the positive-path example next to it — the one that proves `?spec_file=<path>` IS honoured —
 # separates the two. Keep that example beside the host group.
 RSpec.shared_examples "a surface that treats a malformed spec-file parameter as no ask" do
   [
     ["an array", { spec_file: ["spec/models/order_spec.rb"] }],
     ["a nested hash", { spec_file: { a: "b" } }],
-    ["an array of hashes", { spec_file: [{ a: "b" }] }]
+    ["an array of hashes", { spec_file: [{ a: "b" }] }],
+    ["a string carrying a NUL", { spec_file: "spec/models/order\u0000_spec.rb" }]
   ].each do |shape, query|
-    # @intent: { entity: "RequestedSpecFileParam", action: "treat non-string spec_file as no ask", behavior: "a spec_file parameter in a non-String shape answers 200 with the unscoped answer rather than 500, matching an absent parameter", layer: "request" }
+    # @intent: { entity: "RequestedSpecFileParam", action: "treat non-string and NUL-carrying spec_file as no ask", behavior: "a spec_file parameter in a non-String shape or carrying a NUL answers 200 with the unscoped answer rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when spec_file arrives as #{shape}" do
       expect_spec_file_param_treated_as_no_ask(query)
     end

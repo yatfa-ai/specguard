@@ -1120,6 +1120,28 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       it_behaves_like "a surface that treats a malformed branch parameter as no ask"
     end
 
+    # The counterweight to the NUL half of the guard, and the pin that separates the real guard from
+    # a check done with the wrong escaping. The six literal characters backslash-u-0-0-0-0 —
+    # single-quoted here, so Ruby delivers them as text rather than as a NUL — are ordinary
+    # characters in a branch name as far as Postgres is concerned, so the ask is honoured
+    # byte-unchanged: no branch by that name exists, and the page says so in the fallback notice.
+    # An over-broad guard — `include?("\\u0000")` or a `/\\u0000/` match, both of which read the
+    # literal backslash spelling and would swallow this ask — answers with the unfiltered panel and
+    # no notice, which is exactly what this example fails on. It must stay green against no fix at
+    # all as well as against the shipped one.
+    # @intent: {"entity": "Repository", "action": "honour literal NUL-spelling text as an ask", "behavior": "asking ?branch=ma followed by the literal six characters backslash-u-0-0-0-0 renders the fallback notice naming that branch, proving the ask was honoured rather than swallowed as a NUL", "layer": "request"}
+    it "honours a branch name carrying the literal six characters \\u0000 as an ordinary ask" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository, branch: 'ma\u0000in')
+
+      expect(response).to have_http_status(:ok)
+      expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
+        "SpecGuard has no runs on ma\\u0000in, so this panel is drawn on feature/x",
+        normalize_ws: true
+      )
+    end
+
     # The anonymous runs are not a branch and are not offered as one — pooling them is the failure
     # the "No branch to plot a history on" state exists to refuse. What the selector adds is the way
     # OUT of that state: the panel names the branch that does have a history.

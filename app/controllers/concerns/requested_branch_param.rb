@@ -15,7 +15,14 @@
 # `params[:branch].presence` turns a malformed query string into a 500 on an authenticated GET, on
 # a URL anyone can type into the bar. Anything that is not a String is treated as no ask, which is
 # the same answer an absent param gets: the API reports `branch_scope: "all_branches"` and the page
-# renders exactly what it rendered before the parameter existed. Both surfaces pin all three shapes
+# renders exactly what it rendered before the parameter existed.
+#
+# A String that carries a NUL is the shape the String half alone lets through: `?branch=ma%00in`
+# parses to a String and answers `.presence` like any other, but Postgres cannot hold a NUL in a
+# text value, so no row could ever match the ask and the `where` it reaches raises before anything
+# answers — it is treated as no ask, the same answer the shapes above get.
+#
+# Both surfaces pin all four shapes
 # — see `spec/support/shared_examples/malformed_branch_param.rb`.
 #
 # `.presence` SECOND, which is what makes `?branch=` mean "no ask" rather than `WHERE branch = ''`
@@ -44,6 +51,6 @@ module RequestedBranchParam
     return @requested_branch if defined?(@requested_branch)
 
     raw = params[:branch]
-    @requested_branch = raw.is_a?(String) ? raw.presence : nil
+    @requested_branch = raw.is_a?(String) && !raw.include?("\u0000") ? raw.presence : nil
   end
 end
