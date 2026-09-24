@@ -132,7 +132,7 @@ module Ingest
 
     def validate_duration_seconds
       value = @body["duration_seconds"]
-      return if value.nil? || (value.is_a?(Numeric) && !value.negative?)
+      return if value.nil? || (value.is_a?(Numeric) && !value.negative? && value.to_f.finite?)
 
       @errors << "duration_seconds must be a non-negative number when present"
     end
@@ -230,9 +230,10 @@ module Ingest
     end
 
     # The per-example sibling of {#validate_duration_seconds}, and deliberately the same rule: a
-    # negative duration is refused at this grain for exactly the reason it is refused at the run
-    # grain, and nil stays ordinary — the client sends `result&.run_time`, so an example that never
-    # ran has no timing and `Ingest::ObservationRecorder` records that nil as a faithful gap.
+    # negative or non-finite duration is refused at this grain for exactly the reason it is
+    # refused at the run grain, and nil stays ordinary — the client sends `result&.run_time`, so
+    # an example that never ran has no timing and `Ingest::ObservationRecorder` records that nil
+    # as a faithful gap.
     #
     # Typed at all — unlike `outcome`, which `SpecObservation` states is deliberately unvalidated —
     # because the two fields are consumed differently. `outcome` is free text echoed back verbatim;
@@ -244,9 +245,16 @@ module Ingest
     # answer 500 from inside `Ingest::RunRecorder`'s transaction where this endpoint promises a
     # per-spec 400. This validator is the only gate: the model declares no `validates`, the schema
     # carries no check constraint, and `upsert_all` runs no validations regardless.
+    #
+    # Finiteness is judged on the same float the column stores, never on the parsed value: the
+    # plain JSON literal `1e400` parses to `Float::INFINITY`, and a ~400-digit integer literal
+    # parses to a bignum whose own `finite?` is true while its `to_f` — the cast `upsert_all`
+    # applies — is Infinity. Either would persist as a legal float8 `'Infinity'` and raise
+    # `FloatDomainError` in every reader that formats the value (`TestRun.humanized_seconds`),
+    # so the gate is `value.to_f.finite?`.
     def validate_duration(spec, index)
       value = spec["duration"]
-      return if value.nil? || (value.is_a?(Numeric) && !value.negative?)
+      return if value.nil? || (value.is_a?(Numeric) && !value.negative? && value.to_f.finite?)
 
       @errors << "#{label(spec, index)}: duration must be a non-negative number when present"
     end
