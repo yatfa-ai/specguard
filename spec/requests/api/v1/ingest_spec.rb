@@ -17,6 +17,15 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
            .merge(headers)
   end
 
+  # A non-finite duration cannot be built as a Ruby value — `Float::INFINITY.to_json` raises — so
+  # the fixture is serialized with a placeholder string and the raw JSON literal substituted in,
+  # which is byte-for-byte what a producer sends. `1e400` parses to `Float::INFINITY`; an integer
+  # literal of 400+ digits parses to a bignum whose own `finite?` is true and whose `to_f` — the
+  # cast the columns apply — is Infinity.
+  def body_with_raw_number(body_hash, placeholder, literal)
+    body_hash.to_json.sub(%("#{placeholder}"), literal)
+  end
+
   describe "a well-formed run" do
     let(:body) do
       ingest_payload(
@@ -1095,6 +1104,39 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
           [["spec/a_spec.rb", 0.42], ["spec/b_spec.rb", 0.0], ["spec/c_spec.rb", 7.0], ["spec/d_spec.rb", nil]]
         )
       end
+
+      # Non-finite arrives in plain JSON, no exotic literal required: `1e400` parses to
+      # `Float::INFINITY`, which the type+sign rule admits, and it would persist as a legal float8
+      # `'Infinity'` — then 500 every page that formats it through `TestRun.humanized_seconds`.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject an infinite duration", behavior: "a per-example duration whose JSON literal overflows the float column, such as 1e400, is refused with the spec named and nothing recorded", layer: "request" }
+      it "rejects a duration of 1e400, which parses to positive infinity" do
+        ingest(body_with_raw_number(ingest_payload(specs: [unannotated_spec(duration: "__RAW__")]), "__RAW__", "1e400"))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("spec/models/user_spec.rb:12: duration must be a non-negative number")
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The falsifier for a `value.finite?`-only check: the parsed Integer IS finite. Only the
+      # float the column will store — its `to_f` — overflows, which is why the rule is written on
+      # the stored float.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject an overflow-large duration", behavior: "a per-example duration spelled as a 400+-digit integer is refused because the float the column stores overflows even though the parsed Integer is finite", layer: "request" }
+      it "rejects a duration spelled as an integer too large for a float" do
+        ingest(body_with_raw_number(ingest_payload(specs: [unannotated_spec(duration: "__RAW__")]), "__RAW__", "1#{'0' * 400}"))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("spec/models/user_spec.rb:12: duration must be a non-negative number")
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The counterweight: large-but-finite is a real measurement and must keep flowing.
+      # @intent: { entity: "SpecObservation", action: "accept a large finite duration", behavior: "a duration of 1e300 is finite in the column's float and is recorded unchanged", layer: "request" }
+      it "still accepts a large-but-finite duration" do
+        ingest(ingest_payload(specs: [unannotated_spec(duration: 1e300)]))
+
+        expect(response).to have_http_status(:accepted)
+        expect(SpecObservation.sole.duration_seconds).to eq(1e300)
+      end
     end
 
     # @intent: { entity: "POST /api/v1/ingest", action: "reject a negative run duration", behavior: "a negative duration_seconds on the envelope is refused with the field named", layer: "request" }
@@ -1103,6 +1145,39 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["message"]).to include("duration_seconds")
+    end
+
+    # Same non-finite spellings at the run grain, one validator up: `1e400` parses to
+    # `Float::INFINITY` and a 400+-digit integer to a bignum whose `to_f` overflows — either
+    # persists as float8 `'Infinity'` on `test_runs` and 500s every page that formats it through
+    # `TestRun.humanized_seconds`, while the producer is told 202.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject an infinite run duration", behavior: "an envelope duration_seconds whose JSON literal overflows the float column, such as 1e400, is refused with the field named and no run recorded", layer: "request" }
+    it "rejects a duration_seconds of 1e400, which parses to positive infinity" do
+      ingest(body_with_raw_number(ingest_payload(duration_seconds: "__RAW__"), "__RAW__", "1e400"))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("duration_seconds must be a non-negative number")
+      expect(TestRun.count).to eq(0)
+    end
+
+    # The bignum spelling is the falsifier for a `value.finite?`-only check: the parsed Integer
+    # IS finite, and only the float the column will store is not.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject an overflow-large run duration", behavior: "an envelope duration_seconds spelled as a 400+-digit integer is refused because the float the column stores overflows even though the parsed Integer is finite", layer: "request" }
+    it "rejects a duration_seconds spelled as an integer too large for a float" do
+      ingest(body_with_raw_number(ingest_payload(duration_seconds: "__RAW__"), "__RAW__", "1#{'0' * 400}"))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("duration_seconds must be a non-negative number")
+      expect(TestRun.count).to eq(0)
+    end
+
+    # The counterweight: large-but-finite is a real measurement and must keep flowing.
+    # @intent: { entity: "TestRun", action: "accept a large finite run duration", behavior: "an envelope duration_seconds of 1e300 is finite in the column's float and is recorded unchanged", layer: "request" }
+    it "still accepts a large-but-finite duration_seconds" do
+      ingest(ingest_payload(duration_seconds: 1e300))
+
+      expect(response).to have_http_status(:accepted)
+      expect(TestRun.sole.duration_seconds).to eq(1e300)
     end
 
     # The same rule as `ci_run_id` and `shard_id` below, and the coercion costs more here, not
