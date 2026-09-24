@@ -123,6 +123,17 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["message"]).to include("has already been taken")
     end
+
+    # SPGD-1471 — the uniqueness SELECT raised on a NUL before `format` could refuse the new
+    # name, 500ing the rename; the validation now skips that query for a NUL-bearing name and the
+    # ordinary 400 renders, with the stored name untouched.
+    # @intent: { entity: "repository", action: "refuse a NUL-bearing rename", behavior: "a new github_full_name containing a NUL answers 400 with the must look like org/repo message and the stored name is unchanged", layer: "request" }
+    it "refuses a new name containing a NUL byte" do
+      expect { rename("acme/x\u0000y") }.not_to(change { repository.reload.github_full_name })
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("must look like org/repo")
+    end
   end
 
   # The 403 `#registrable` owns, with the sentence naming the fix neither other refusal does.

@@ -440,6 +440,24 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).to include("Not connected to the SpecGuard GitHub App")
     end
 
+    # SPGD-1471 — a NUL in one submitted name must not take the whole batch down with a 500.
+    # `prepare` runs the record's own rules BEFORE GitHub is asked anything, and `valid?` used to
+    # RAISE there: validators run in declaration order, so the uniqueness SELECT hit the adapter's
+    # null-byte check before `format` could refuse the name. The validation skips that query for a
+    # NUL-bearing name, so it is skipped as `:invalid` per name while the clean sibling registers.
+    # @intent: {"entity": "Repository", "action": "skip a NUL name in a batch", "behavior": "A batch holding one NUL-bearing name and one clean sibling answers 200, skips the NUL name as Not a valid repository name and registers the clean sibling anyway.", "layer": "request"}
+    it "skips a NUL-bearing name as invalid while registering its clean sibling" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      expect { submit(["acme/x\u0000y", "acme/api"]) }.to change(Repository, :count).by(1)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("Registered 1 repository.")
+      expect(response.body).to include("Skipped 1.")
+      expect(response.body).to include("Not a valid repository name (1)")
+      expect(@user.repositories.pluck(:github_full_name)).to eq(%w[acme/api])
+    end
+
     # A repository GitHub has never heard of gets the very same heading, and the summary says the
     # one thing it can honestly say. An installation credential is answered 404 for everything
     # outside the installation, so "nobody selected it" and "it does not exist" arrive here

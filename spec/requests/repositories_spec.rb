@@ -30,6 +30,19 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).to include("must look like org/repo")
   end
 
+  # SPGD-1471 — the uniqueness SELECT raised on a NUL before `format` could refuse the name,
+  # turning this submission into an HTML 500; the validation skips that query for a NUL-bearing
+  # name and the ordinary 422 renders.
+  # @intent: {"entity": "Repository", "action": "reject NUL name", "behavior": "posting a github_full_name containing a NUL answers 422 unprocessable content with the must look like org/repo message and creates no repository row", "layer": "request"}
+  it "re-renders the form when the name contains a NUL byte" do
+    expect {
+      post repositories_path, params: { repository: { github_full_name: "acme/x\u0000y" } }
+    }.not_to change(Repository, :count)
+
+    expect(response).to have_http_status(:unprocessable_content)
+    expect(response.body).to include("must look like org/repo")
+  end
+
   # @intent: {"entity": "ApiKey", "action": "reveal token once", "behavior": "the reveal page shows the raw sgk_ token whose digest is what was stored, a plain reload never shows it again, and the persistent panel keeps only the agent prompt naming the CI secret SPECGUARD_API_KEY", "layer": "request"}
   it "shows a newly created API key exactly once" do
     repository = register_repository
@@ -5058,6 +5071,20 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The rejected input belongs in the form field only. The breadcrumb and title identify
       # the record, so they must still name the repository as it is actually stored.
       expect(response.body).to include(Builders::DEFAULT_GITHUB_FULL_NAME)
+    end
+
+    # SPGD-1471 — the uniqueness SELECT raised on a NUL before `format` could refuse the new
+    # name, 500ing the rename; the validation skips that query for a NUL-bearing name and the
+    # ordinary 422 renders, with the stored name untouched.
+    # @intent: {"entity": "Repository", "action": "reject NUL rename", "behavior": "patching a github_full_name containing a NUL answers 422 with the must look like org/repo message and leaves the stored name unchanged", "layer": "request"}
+    it "re-renders the edit form when the new name contains a NUL byte" do
+      repository = create_repository(user: @user)
+
+      patch repository_path(repository), params: { repository: { github_full_name: "acme/x\u0000y" } }
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("must look like org/repo")
+      expect(repository.reload.github_full_name).to eq(Builders::DEFAULT_GITHUB_FULL_NAME)
     end
 
     # @intent: {"entity": "Repository", "action": "reject taken name", "behavior": "patching a name another user already owns answers 422 rather than raising, and leaves the stored name unchanged", "layer": "request"}
