@@ -1051,6 +1051,128 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       end
     end
 
+    # A NUL (`\u0000`) survives JSON parsing and passes every field validator — to Ruby it is a
+    # perfectly ordinary character — but Postgres refuses to store one in `text` or `jsonb`. Before
+    # the body-wide walk below, the failure surfaced as a 500 from inside `Ingest::RunRecorder`'s
+    # transaction, with no run row, no observation and no `IngestRejection` row: the client saw a
+    # platform fault and replayed a line that could never land. Worse, the refusal path itself lost
+    # its row: `label` interpolates the raw `file_path`, so a refusal whose message quoted a NUL
+    # made the rejection's own `jsonb` write fail — behind a 400 that looked correct. These
+    # examples pin the row and the stored text, not only the status, because that second arm is
+    # invisible to a status-only assertion.
+    #
+    # Each fixture is built through `to_json`, which encodes the NUL as the `\u0000` escape the
+    # wire carries and Rails decodes back to the character — the same path a real producer takes.
+    describe "a NUL character in the body" do
+      # The envelope arm, and the arm that answers "does the whole body really get walked?": the
+      # offending field is no spec field at all, so only a body-level check can catch it.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a NUL in the envelope", behavior: "a NUL inside commit_sha answers a 400 naming the location, with a rejection row written and no run or observation rows", layer: "request" }
+      it "answers 400 for a NUL in an envelope field, writing the rejection row and no run rows" do
+        expect { ingest(ingest_payload(commit_sha: "a1b2\u0000c3d", specs: [unannotated_spec])) }
+          .to change(IngestRejection, :count).by(1)
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("commit_sha")
+        expect(TestRun.count).to eq(0)
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The per-spec arm. `id` and `spec_file_path` are held clean on purpose: each defaults to a
+      # value derived from `file_path`, and letting them carry the NUL too would muddy "one error
+      # per offending location" with three offenders where the example pins one.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a NUL in a spec field", behavior: "a NUL inside a spec's file_path answers a 400 naming the spec by path, with the rejection recorded", layer: "request" }
+      it "answers 400 for a NUL in a spec field, naming the spec by path" do
+        spec = unannotated_spec(file_path: "spec/models/user\u0000_spec.rb",
+                                spec_file_path: "spec/models/user_spec.rb",
+                                id: "./spec/models/user_spec.rb[1:12]")
+
+        expect { ingest(ingest_payload(specs: [spec])) }
+          .to change(IngestRejection, :count).by(1)
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("specs[0].file_path")
+        expect(TestRun.count).to eq(0)
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The nested arm: the NUL rides two levels below the spec, inside `intent`, which is where
+      # the shipped formatter puts an example's own description text.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a NUL inside an intent", behavior: "a NUL inside intent.behavior answers a 400 naming the nested path, with the rejection recorded", layer: "request" }
+      it "answers 400 for a NUL in an intent field, naming the nested path" do
+        spec = annotated_spec
+        spec[:intent][:behavior] = "locks the line items\u0000"
+
+        expect { ingest(ingest_payload(specs: [spec])) }
+          .to change(IngestRejection, :count).by(1)
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("specs[0].intent.behavior")
+        expect(TestRun.count).to eq(0)
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The row this describe exists for: today the NUL rides into the message through `label`,
+      # the rejection's own `jsonb` write fails, and a 400 that looks correct records nothing.
+      # `line_number: -1` makes the spec refused for another reason as well, the shape the fix
+      # was scoped against. The assertions read the STORED row — a status-only assertion passes
+      # over exactly the loss this pins.
+      # @intent: { entity: "IngestRejection", action: "record a refusal carrying a NUL", behavior: "a spec refused for another reason whose file_path carries a NUL still writes exactly one rejection row, whose stored details render the NUL escaped rather than raw", layer: "request" }
+      it "records the refusal with the NUL escaped when the spec is refused for another reason too" do
+        spec = unannotated_spec(file_path: "spec/models/user\u0000_spec.rb", line_number: -1)
+
+        expect { ingest(ingest_payload(specs: [spec])) }
+          .to change(IngestRejection, :count).by(1)
+
+        expect(response).to have_http_status(:bad_request)
+        stored = IngestRejection.last.details.join("\n")
+        expect(stored).to include("\\u0000")
+        expect(stored).not_to include("\u0000")
+      end
+
+      # "One error per offending location": two NULs in two fields produce two entries, each
+      # naming its own path, so a client fixing the payload sees the whole list at once — the
+      # collection rule every validator in this file already follows.
+      # @intent: { entity: "POST /api/v1/ingest", action: "collect one NUL error per location", behavior: "NULs in two different fields are refused as two collected errors, each naming its own path", layer: "request" }
+      it "collects one error per offending location" do
+        ingest(ingest_payload(commit_sha: "a1b2\u0000",
+                              specs: [unannotated_spec(name: "User is valid\u0000")]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["details"]).to contain_exactly(
+          a_string_starting_with("commit_sha:"),
+          a_string_starting_with("specs[0].name:")
+        )
+      end
+
+      # A hash key is client text like any value, and the path that names it is built from it —
+      # so the escape has to apply to the key itself, or the message refusing the NUL would
+      # carry one. The field is one the envelope has never heard of, which is the other thing
+      # this example pins: a body walk covers fields added later without another slice.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a NUL in an unknown field's key", behavior: "a hash key carrying a NUL is refused with the key named in escaped form, and no raw NUL reaches the message", layer: "request" }
+      it "names an offending hash key without putting the NUL in the message" do
+        body = ingest_payload(specs: [unannotated_spec])
+        body["future\u0000field"] = "value"
+
+        ingest(body)
+
+        message = response.parsed_body["message"]
+        expect(response).to have_http_status(:bad_request)
+        expect(message).to include("future\\u0000field")
+        expect(message).not_to include("\u0000")
+      end
+
+      # The counterweight, pinning "refuse, don't coerce" from the other side: the literal six
+      # characters `\u0000` in a value are ordinary text Postgres stores happily, and the walk
+      # must not mistake the spelling for the character.
+      # @intent: { entity: "POST /api/v1/ingest", action: "accept the escaped spelling", behavior: "a value containing the literal six characters backslash-u-0-0-0-0 is accepted and stored verbatim", layer: "request" }
+      it "still accepts the literal six characters spelled out in a value" do
+        ingest(ingest_payload(specs: [unannotated_spec(name: "documents the \\u0000 escape")]))
+
+        expect(response).to have_http_status(:accepted)
+        expect(SpecObservation.sole.name).to eq("documents the \\u0000 escape")
+      end
+    end
+
     # @intent: { entity: "POST /api/v1/ingest", action: "reject an unknown status", behavior: "a spec status outside the allowed vocabulary is refused with the field named", layer: "request" }
     it "rejects an unknown status" do
       ingest(ingest_payload(specs: [annotated_spec.merge(status: "skipped")]))
