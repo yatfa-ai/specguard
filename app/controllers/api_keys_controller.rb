@@ -20,10 +20,18 @@ class ApiKeysController < ApplicationController
   # never persisted anywhere. Only the SHA-256 digest reaches the database.
   def create
     repository = current_repository(:keys_manage)
-    api_key = repository.api_keys.create!(name: api_key_name, created_by_user: current_user)
+    api_key = repository.api_keys.new(name: api_key_name, created_by_user: current_user)
 
-    reveal(api_key)
-    redirect_to reveal_path(repository), notice: "API key created. Copy it now — it is shown only once."
+    if api_key.save
+      reveal(api_key)
+      redirect_to reveal_path(repository), notice: "API key created. Copy it now — it is shown only once."
+    else
+      # A refused mint (a `name` carrying a NUL is the case the model guards) redirects back to the
+      # repository page with the model's sentences, the same idiom `AgentApiKeysController`'s else
+      # branch uses. Nothing was written, so there is no reveal flash to clean up.
+      redirect_to repository_path(repository),
+                  alert: api_key.errors.full_messages.to_sentence
+    end
   end
 
   # The recovery path for a key whose plaintext is gone: mint a new token onto the same row. There

@@ -233,4 +233,12 @@ RSpec.describe UserApiKey do
   it "requires a name, so several keys can be told apart on the revoke button" do
     expect(user.user_api_keys.new(name: nil)).not_to be_valid
   end
+
+  # @intent: { entity: "UserApiKey", action: "refuse a NUL in the name", behavior: "a key built with a NUL character in its name is invalid with an error on :name, so a mint is refused by validation instead of raising at INSERT (Postgres cannot store a NUL)", layer: "unit" }
+  it "refuses a name containing a NUL character" do
+    user_api_key = user.user_api_keys.new(name: "CI\u0000x")
+
+    expect(user_api_key).not_to be_valid
+    expect(user_api_key.errors).to include(:name)
+  end
 end

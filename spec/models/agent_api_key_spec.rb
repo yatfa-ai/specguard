@@ -24,6 +24,18 @@ RSpec.describe AgentApiKey do
       expect(key.errors).to include(:user)
     end
 
+    # A NUL in `name` is refused here rather than at INSERT, where Postgres raises on the
+    # character and the mint surfaces as a 500 — the same rule `Repository` states for
+    # `github_full_name`.
+    it "refuses a name containing a NUL character" do
+      user = create_user
+      key = AgentApiKey.new(user: user, repository_ids: [create_repository(user: user).id],
+                            name: "CI\u0000x")
+
+      expect(key).not_to be_valid
+      expect(key.errors).to include(:name)
+    end
+
     it "requires at least one repository" do
       key = AgentApiKey.new(name: "x", user: create_user, repository_ids: [])
 

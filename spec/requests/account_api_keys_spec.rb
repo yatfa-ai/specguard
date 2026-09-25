@@ -335,4 +335,19 @@ RSpec.describe "Account API keys", type: :request do
       expect(response.body).not_to match(/sgu_[A-Za-z0-9_-]{20,}/)
     end
   end
+
+  # SPGD-1476: a NUL in the name is refused by the model's format validator, so the mint
+  # redirects back with an alert and writes nothing instead of raising at INSERT (Postgres
+  # cannot store a NUL). The double-quoted literal is load-bearing — the single-quoted
+  # 'CI\u0000x' is six printable characters and must still mint.
+  # @intent: {"entity": "UserApiKey", "action": "refuse a NUL in the name", "behavior": "minting a key whose name carries a NUL redirects back to /account with an alert, writes no key, and sets no reveal flash", "layer": "request"}
+  it "redirects with an alert and writes nothing when the name carries a NUL" do
+    expect {
+      post account_api_keys_path, params: { user_api_key: { name: "CI\u0000x" } }
+    }.not_to change(UserApiKey, :count)
+
+    expect(response).to redirect_to(account_path)
+    expect(flash[:alert]).to be_present
+    expect(flash[:revealed_user_api_key]).to be_nil
+  end
 end
