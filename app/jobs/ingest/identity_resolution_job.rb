@@ -38,6 +38,29 @@ module Ingest
   # may have been deleted, which takes the run with it; there is nothing to resolve and nothing to
   # report.
   #
+  # == What runs after the resolve, and why it runs HERE
+  #
+  # A successful resolve is also what makes the repository's stored near-duplicate census stale:
+  # the census is a pure derivative of the identity data this job just moved. So the last thing a
+  # completed resolve does is request a census refresh (`NearDuplicateCensus.request_refresh!`),
+  # which raises the recompute marker and schedules `Ingest::NearDuplicateCensusJob` —
+  # asynchronous, for the same reason the resolve itself is: a minutes-scale census must never sit
+  # inside an ingest request or behind this job's own completion.
+  #
+  # It runs AFTER `resolve` returns, and only then, for a freshness reason and not a scheduling
+  # one. The census's inputs are the identities, the observations and the repository's newest run
+  # — none of which is settled until the resolver has finished its pages and its failure sweep. A
+  # refresh requested alongside the resolve would compute over half-matched identities and store a
+  # census no live computation would ever return, silently breaking the stored-equals-live
+  # property the serve path promises. If the resolve raises, no refresh is requested and the
+  # stored census keeps its previous stamp — the same heal-on-next-ingest mechanism the failure
+  # backlog above already uses.
+  #
+  # One request per shard is the shape (one POST is one shard, not one run); the marker's
+  # compare-and-clear debounce in `NearDuplicateCensus` and the census job's own per-repository
+  # concurrency limit are what collapse it to one census computation — that contract lives on
+  # `NearDuplicateCensus`, not here.
+  #
   # == Why one run's jobs run one at a time
   #
   # `Api::V1::IngestsController#enqueue_embeddings` enqueues one of these per POST, and one POST is
@@ -84,6 +107,10 @@ module Ingest
       return if run.nil?
 
       Ingest::IdentityResolver.resolve(run)
+
+      # The stored near-duplicate census is now stale by construction — see "What runs after the
+      # resolve" above for why this is after, and only after, the resolve.
+      NearDuplicateCensus.request_refresh!(run.repository_id)
     end
   end
 end

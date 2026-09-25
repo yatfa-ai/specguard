@@ -138,11 +138,13 @@ class RepositoryOverview
   include RequestedUnannotatedExamplesParam
 
   # `?near_duplicates=` read as a request for the repository's near-duplicate clusters — the
-  # second flag-style `Requested*Param` this object reads, and the one whose cost is the whole
-  # reason it exists. `NearDuplicateClusters` is linear but measured at seconds, not
-  # milliseconds — the class comment carries the table — so the ask is what confines the cost to
-  # the client that named it. See `RequestedNearDuplicatesParam`, which holds the reasoning in
-  # full, including why `?near_duplicates=false` is an ask like any other.
+  # second flag-style `Requested*Param` this object reads. Born in front of a measured, minutes-scale
+  # cost (`NearDuplicateClusters` is linear; its class comment carries the table), the flag outlived
+  # the cost that created it: since SPGD-1474 the census is computed once per ingest and served
+  # stored, so the ask now opens one stored row. The opt-in wire contract is unchanged — the ask
+  # is still what opens the block, and a no-ask still reads nothing. See
+  # `RequestedNearDuplicatesParam`, which holds the reasoning in full, including why
+  # `?near_duplicates=false` is an ask like any other.
   include RequestedNearDuplicatesParam
 
   # `?commit_sha=` read as a commit sha, to name WHICH RUN this endpoint describes — the only
@@ -401,12 +403,15 @@ class RepositoryOverview
       # See `serialized_directory_runtime_file_growth_window`.
       directory_runtime_file_growth_window: serialized_directory_runtime_file_growth_window,
       directory_runtime_file_growth: serialized_directory_runtime_file_growth,
-      # SERVED ON THE ASK AND NEVER WITHOUT IT — `NearDuplicateClusters` is linear but measured in
-      # seconds rather than milliseconds (seven queries at every size; its class comment carries the
-      # table), so this is the one block on this endpoint whose cost had to be opted into rather
-      # than bounded. `?near_duplicates=` is the ask, and a client that does not send it gets the
-      # key present and `null` — the no-ask spelling every gate on this endpoint uses — and pays
-      # not one query for it. See `serialized_near_duplicates`.
+      # SERVED ON THE ASK AND NEVER WITHOUT IT — and, since SPGD-1474, served STORED: the census is
+      # computed once per ingest and persisted, so what the ask opens is a read of one stored row
+      # rather than the minutes-scale computation it used to be (`NearDuplicateClusters` is linear
+      # but measured in seconds; its class comment carries the table, and the agent bridge's
+      # thirty-second deadline could never hold it — SPGD-1474 is the ticket that moved the
+      # computation to ingest). The opt-in ask itself is unchanged wire contract: `?near_duplicates=`
+      # is the ask, a client that does not send it gets the key present and `null` — the no-ask
+      # spelling every gate on this endpoint uses — and pays not one query for it. See
+      # `serialized_near_duplicates`.
       near_duplicates: serialized_near_duplicates,
       branches_window: serialized_branches_window,
       branches: serialized_branches
@@ -1600,98 +1605,58 @@ class RepositoryOverview
       recorded: readings.recorded }
   end
 
-  # THE SUITE-WIDE DUPLICATE CENSUS, served to whoever named it — the first block on this endpoint
-  # whose GRAIN is the repository rather than a run or a window of runs, and therefore the first one
-  # that had to be opted into on cost rather than bounded on rows. `NearDuplicateClusters` is linear
-  # but measured in seconds (its class comment carries the table), so `?near_duplicates=` is the ask
-  # and `nil` below is the no-ask answer: the key is present and `null`, and a client that did not
-  # ask pays not one query — pinned by a query-count assertion in this block's request spec, because
-  # the cost is the reason the gate exists.
+  # THE SUITE-WIDE DUPLICATE CENSUS, served STORED — the first block on this endpoint whose GRAIN
+  # is the repository rather than a run or a window of runs, and the one whose cost used to be the
+  # reason it had to be opted into at all. Since SPGD-1474 the census is computed ONCE PER INGEST
+  # ({Ingest::NearDuplicateCensusJob}, after identity resolution) and persisted on
+  # `near_duplicate_censuses`; this method reads what is stored and serves it verbatim. The
+  # minutes-scale computation that used to run here is gone from the request path — the agent
+  # bridge's thirty-second deadline could never hold it — and the opt-in ask stays as the wire
+  # contract: the key is present and `null` on a no-ask, exactly as before, and a client that did
+  # not ask pays not one query for the block.
   #
-  # == Why the disclosure rides the count and cannot be split from it
+  # == `nil` here has two meanings, and only one of them is this method's
   #
-  # `similarity_basis` and `similarity_floor` are served off the OBJECT'S OWN METHODS rather than
-  # restated here, so this endpoint cannot drift from what `NearDuplicateClusters` says about
-  # itself — and when `SIMILARITY` is re-derived for the shipped provider (open work the constant's
-  # own comment names), the endpoint reports the new figure without being touched. No spec in this
-  # slice may pin either as a literal; the sibling spec `near_duplicate_clusters_spec.rb` already
-  # establishes that discipline for the constants themselves. A cluster count rendered without the
-  # statement of what the similarity means is the *Vacuous Green* failure in a new spelling, which
-  # is why `#similarity_basis` is a method rather than a footnote — and why the two keys sit FIRST
-  # on this block, ahead of every figure they qualify.
+  # On a no-ask, `nil` is the no-ask spelling every gate on this endpoint uses. ON AN ASK, `nil`
+  # means the repository has NO STORED CENSUS YET — it has never ingested (its first ingest
+  # schedules the first computation), or it is being read in the window between this table
+  # shipping and its backfill landing. It is never a live computation and never zeros: zeros would
+  # render "not computed yet" as "computed, and nothing reads alike", which is the *Vacuous Green*
+  # failure this endpoint exists to prevent. A repository whose every test reads differently is
+  # NOT this state — its census is a stored row with an empty `clusters` array and real population
+  # counts, stamped `computed_at`, served as the finding it is.
   #
-  # == Raw figures only, never the object's prose
+  # == Why serving stored is honest rather than merely fast
   #
-  # `duration_label`, `coverage_label` and `identity_coverage_label` exist on the object and on
-  # every `Cluster` and `Member`, and NONE of them is served: they are human sentences built by
-  # `SpecObservation.humanized_duration` / `.coverage_fraction`, and a machine-readable client
-  # cannot act on a sentence without parsing it. The raw `total_seconds` floats and raw counts are
-  # served instead — the operands, never the wording, on this endpoint's standing rule.
+  # The census is a pure derivative of ingested data: its inputs — `spec_identities`,
+  # `spec_observations`, and the repository's newest run as the weighed run — change only at
+  # ingest, which is when the stored artifact is recomputed. Between ingests the stored census
+  # equals what a live computation would return, byte-identically, because the writer serialized
+  # the very object the live path used to build. A request arriving between a completed ingest and
+  # the finished recompute serves the PREVIOUS stored census with its own stamp — `computed_at`
+  # says when it was taken and `weighed_run_id` says which run its weights are from — so a stale
+  # answer is dated, never silent. That stamp is the one key this method adds to the contract, and
+  # it is why the mid-recompute window needs no client-side workaround.
   #
-  # == The membership/weight split, at the two grains the object reads them
+  # == The disclosure rides the count and cannot be split from it
   #
-  # `member_count` is texts in this REPOSITORY across every run; `example_count` is examples in the
-  # run `weighed_run_id` names and only that run. A three-example table-driven loop is ONE member
-  # and THREE examples, and the headline property of the whole object is that those are different
-  # numbers served side by side — a naive serializer that counted identity rows would flatten the
-  # figure the ranking is built on. The request spec pins the three-example case through this
-  # endpoint specifically.
+  # `similarity_basis` and `similarity_floor` travel with the stored figures rather than being
+  # restated here — they are read off the object at COMPUTE time and frozen into the payload, so
+  # this endpoint still cannot drift from what `NearDuplicateClusters` says about itself: when
+  # `SIMILARITY` is re-derived for the shipped provider (open work the constant's own comment
+  # names), the next ingest stores the new figure and the endpoint reports it without being
+  # touched. No spec may pin either as a literal; `near_duplicate_clusters_spec.rb` establishes
+  # that discipline for the constants themselves. A cluster count rendered without the statement
+  # of what the similarity means is the *Vacuous Green* failure in a new spelling, which is why
+  # the two keys sit FIRST on this block, ahead of every figure they qualify.
   #
-  # `NearDuplicateClusters.for(repository)` is called with `run:` defaulted, on the ticket's own
-  # constraint: the object's `validate_run!` RAISES `ArgumentError` on a run from another
-  # repository, deliberately — the caption half is keyed on `test_run_id` with no tenant predicate,
-  # so a foreign run would report another tenant's `recorded_count` beside this tenant's clusters.
-  # That is a caller's bug and is not rescued here. `nil` (never ingested) passes through cleanly
-  # as the `UNRUN` constant, so the block serves rather than raises for a repository with no run.
-  #
-  # No 404 on the empty answer: a repository whose every test reads differently is the SUCCESS
-  # state, and the object's own three-way `recorded?` / `clusterable?` / `any?` split is what keeps
-  # the three silences — nothing ingested, nothing embedded, nothing reads alike — distinguishable
-  # at the wire via `recorded_count`, `identity_count` and the cluster list.
+  # The rest of the block's shapes — raw figures, never the object's prose; `member_count` against
+  # `example_count` at their two grains — are `NearDuplicateCensus.snapshot_payload`'s to word,
+  # where they moved with the serialization. Nothing on the request path re-derives any of it.
   def serialized_near_duplicates
     return nil unless requested_near_duplicates?
 
-    clusters = NearDuplicateClusters.for(repository)
-
-    {
-      similarity_floor: clusters.similarity_floor,
-      similarity_basis: clusters.similarity_basis,
-      weighed_run_id: clusters.weighed_run_id,
-      cluster_count: clusters.cluster_count,
-      truncated: clusters.truncated?,
-      saturated_identity_count: clusters.saturated_identity_count,
-      unresolved_count: clusters.unresolved_count,
-      recorded_count: clusters.recorded_count,
-      identity_count: clusters.identity_count,
-      clustered_identity_count: clusters.clustered_identity_count,
-      clustered_timed_count: clusters.clustered_timed_count,
-      clustered_example_count: clusters.clustered_example_count,
-      clusters: clusters.clusters.map { |cluster| serialized_near_duplicate_cluster(cluster) }
-    }
-  end
-
-  # ONE cluster of tests that read alike, with the figures the ranking is built on — as numbers
-  # rather than as the sentences `NearDuplicateClusters::Cluster#duration_label` would build. Per
-  # the class comment's ⭐ sections, `member_count` and `example_count` are read at two different
-  # grains and served as two different numbers; `unobserved_members` discloses that the member
-  # list holds an identity the weighed run did not observe (deleted, renamed, not selected) rather
-  # than leaving it to be inferred from a small sum; `similarity_range` is the object's
-  # `[strongest, weakest]` pair, both already rounded by the method that owns the rounding, because
-  # membership is transitive while similarity is not and the gap between the two edges is the point.
-  def serialized_near_duplicate_cluster(cluster)
-    {
-      signal_source: cluster.signal_source,
-      member_count: cluster.member_count,
-      example_count: cluster.example_count,
-      total_seconds: cluster.total_seconds,
-      timed_count: cluster.timed_count,
-      similarity_range: cluster.similarity_range,
-      unobserved_members: cluster.unobserved_members?,
-      members: cluster.members.map do |member|
-        { text: member.text, file_path: member.file_path, line_number: member.line_number,
-          example_count: member.example_count, total_seconds: member.total_seconds }
-      end
-    }
+    NearDuplicateCensus.stored_block_for(repository)
   end
 
   def serialized_unannotated_examples(test_run)

@@ -10,20 +10,25 @@
 #
 # == ⭐ THE COST THIS FLAG STANDS IN FRONT OF, and why there is no second spelling of the ask
 #
-# The block this opens is the one read on this endpoint with a MEASURED linear cost: seven queries
-# at every size, 250 identities at 0.66s, 3,000 at 5.97s, extrapolating to tens of seconds at the
-# 20,000-identity design point — `NearDuplicateClusters`' own class comment carries the table and
-# the conclusion, *"not an object to hang off a synchronous page view at that size."* The opt-in
-# ask is the entire design: it confines that cost to the client that named it, which is why the
-# zero-query assertion in this block's request spec is a criterion rather than a nicety. (The
-# seconds were measured on the retired feature-hashing provider; the shape and the linearity
-# argument are unchanged, the absolute figures are indicative — the class comment says so too.)
+# The block this opens is the suite-wide near-duplicate census — which, since SPGD-1474, is
+# computed ONCE PER INGEST and served STORED. The flag was born in front of a measured, minutes-scale
+# cost: `NearDuplicateClusters` is linear in the suite, seven queries at every size, tens of seconds
+# extrapolated at the 20,000-identity design point — "not an object to hang off a synchronous page
+# view at that size", in its own class comment's words. SPGD-1474 moved that computation to the
+# ingest path (`Ingest::NearDuplicateCensusJob`, after identity resolution) and the stored artifact
+# it now opens costs one row read — so what this parameter still stands in front of is the
+# CONTRACT, not the milliseconds: the opt-in ask is unchanged wire behaviour, the no-ask path still
+# opens no block and reads no census row, and the zero-query assertion in this block's request spec
+# pins both directions (no ask: nothing; ask: the stored row, and not one `spec_identities` query —
+# the computation never touches the request path any more).
 #
 # There is nothing for the parameter to CARRY, for the same reason `?unannotated_examples=` has
 # nothing: it opens a POPULATION rather than a pick. The clustering is the repository's and there
-# is exactly one census to run, so there is no key to restate and no value to compare — the
-# predicate spelling here, `requested_near_duplicates?` rather than a `requested_*` reader, says
-# "at all" at every call site the way its sibling's does.
+# is exactly one stored census to serve — the census contract is parameterless from the consumer's
+# side (threshold, limit and the weighed run are the server's own constants and defaults), which is
+# what makes one stored artifact serve every consumer — so there is no key to restate and no value
+# to compare. The predicate spelling here, `requested_near_duplicates?` rather than a
+# `requested_*` reader, says "at all" at every call site the way its sibling's does.
 #
 # **THE VALUE IS NOT READ, AND THAT INCLUDES `false`.** `?near_duplicates=false` opens the block,
 # exactly as `?near_duplicates=true` and `?near_duplicates=x` do, because what is being tested is
@@ -34,12 +39,14 @@
 #
 # `is_a?(String)` FIRST: `?near_duplicates[]=x` parses to an Array, `?near_duplicates[a]=b` to
 # `ActionController::Parameters` and `?near_duplicates[][a]=b` to an Array of them. All three are
-# TRUTHY in Ruby, and on this parameter the hazard is the SILENT EXTRA ANSWER in its most
-# expensive form: an unguarded `params[:near_duplicates].present?` would open a multi-second,
-# seven-query census on a query string the client did not mean to send, on every request a broken
-# serializer makes. Anything that is not a String is treated as no ask — the same answer an absent
-# param gets, so the response is exactly what it was before the parameter existed. All three
-# shapes are pinned in `spec/support/shared_examples/malformed_near_duplicates_param.rb`.
+# TRUTHY in Ruby, and on this parameter the hazard is the SILENT EXTRA ANSWER: an unguarded
+# `params[:near_duplicates].present?` would open a block on a query string the client did not mean
+# to send, on every request a broken serializer makes. That block is a stored-row read since
+# SPGD-1474 rather than the minutes-scale census it guarded at birth, and the guard stays anyway —
+# the answer to a shape the client did not mean to send is the same no-answer it has always been,
+# whatever the block behind it costs. Anything that is not a String is treated as no ask — the same
+# answer an absent param gets, so the response is exactly what it was before the parameter existed.
+# All three shapes are pinned in `spec/support/shared_examples/malformed_near_duplicates_param.rb`.
 #
 # `.presence` SECOND, so `?near_duplicates=` — a browser's unfilled form field, a client building
 # a query string off a nil variable — does not buy the census either. An ask has to be affirmative

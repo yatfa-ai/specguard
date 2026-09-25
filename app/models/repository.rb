@@ -58,6 +58,11 @@ class Repository < ApplicationRecord
   # `IngestRejection::REPOSITORY_RETENTION_ROWS` at the write path, so this is at most fifty rows —
   # `delete_all` is one statement and the model carries no callback a destroy would run.
   has_many :ingest_rejections, dependent: :delete_all
+  # The stored near-duplicate census — ONE row (the unique `(repository_id)` index is the
+  # one-row-per-repository statement), so `has_one`. `dependent: :destroy` rather than
+  # `:delete_all` because there is exactly one row and no callback to skip; a repository that goes
+  # away takes its stored census with it, and the census job scheduled for it finds nothing.
+  has_one :near_duplicate_census, dependent: :destroy
   has_many :repository_memberships, dependent: :destroy
   # Everyone granted access who is *not* the owner. The owner is `user` and holds every permission
   # implicitly, so they never appear here.
