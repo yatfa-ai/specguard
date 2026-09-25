@@ -123,13 +123,21 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
     # does not have — and bumping the lock to light it is out of scope for a docs change.
     #
     # Both Ruby surfaces must name it — the replay paragraph and the SPECGUARD_OUTPUT_PATH row —
-    # hence a count, not a single include (the refusal example below counts its both-surfaces
-    # claims the same way): one lone mention could satisfy one surface while the other stayed
-    # behind.
-    expect(response.body.scan("--drain").length).to be >= 2,
-          "/docs/integrate names --drain #{response.body.scan('--drain').length} times; the Ruby " \
-          "replay paragraph and the SPECGUARD_OUTPUT_PATH row must both name the flag — the page " \
-          "is teaching a re-delivery that re-sends every accepted run"
+    # and each is asserted on its OWN element (Capybara.string, the scoped read
+    # integration_guide_spec.rb already uses). A whole-page count cannot seal this pair: the
+    # replay paragraph alone repeats --drain three times, so a "scan >= 2" stays green while the
+    # row drops the flag entirely — the exact drift this example exists to catch, and it was
+    # measured that way in review. (The refusal example's counts work only because each of its
+    # phrases occurs once per surface; --drain does not.)
+    page = Capybara.string(response.body)
+    row = page.find(:xpath, "//tr[td[normalize-space()='SPECGUARD_OUTPUT_PATH']]")
+    expect(row.text).to include("--drain"),
+          "the SPECGUARD_OUTPUT_PATH row no longer names --drain — the page no longer says how " \
+          "accepted lines leave the replay queue"
+    para = page.find(:xpath, "//p[contains(., 'bundle exec specguard-ingest')]")
+    expect(para.text).to include("specguard-ingest --drain"),
+          "the Ruby replay paragraph no longer names the --drain command — the page is back to " \
+          "teaching a re-delivery that re-sends every accepted run"
 
     # The consequence of replaying WITHOUT the flag: delivery does not consume the queue, so a
     # re-run re-sends the runs that already landed — and a line with no ci_run_id is not
