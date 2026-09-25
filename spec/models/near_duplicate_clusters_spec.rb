@@ -479,7 +479,8 @@ RSpec.describe NearDuplicateClusters do
 
   # SPGD-369 criterion 4. There is no `@intent` anywhere in this fixture — every identity is
   # name-derived, which is what a suite with zero annotation produces on the ingest path.
-  describe "a repository with no annotation at all" do    # @intent: { entity: "NearDuplicateClusters", action: "cluster unannotated suites", behavior: "a suite with zero annotation still clusters, because a test name is a signal in itself", layer: "unit" }
+  describe "a repository with no annotation at all" do
+    # @intent: { entity: "NearDuplicateClusters", action: "cluster unannotated suites", behavior: "a suite with zero annotation still clusters, because a test name is a signal in itself", layer: "unit" }
     it "clusters anyway, because a name is a signal" do
       identity(EXPIRED, line: 3)
       identity(OUTRIGHT, line: 9)

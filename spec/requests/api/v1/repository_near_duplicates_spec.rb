@@ -301,8 +301,6 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
     end
   end
 
-  # THE COST CLAIM, as a query-count criterion rather than a nicety: the opt-in ask is the wire
-  # contract, and the no-ask path opens no block and reads no census row.
   # THE TEST-PYRAMID QUESTION, AT THE WIRE. Two annotated tests whose intent triples read alike —
   # the calibrated one-word-apart shape — declared at DIFFERENT layers: one cluster, two distinct
   # declared layers, reported as cross-layer redundancy with the members grouped under the layer
