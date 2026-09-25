@@ -1170,6 +1170,20 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         )
       end
 
+      # The wrapper key is derived from the controller's name, so nothing stops a client from
+      # sending a field of that very name as ordinary data. The endpoint reads the body
+      # verbatim and walks it like any other field: exactly one error, at the path the
+      # client's own JSON contains — never a second location beside it.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a NUL under a client-sent ingest key", behavior: "a NUL inside a client's own top-level ingest key is refused with exactly one error naming ingest.note, and no second location beside it", layer: "request" }
+      it "refuses a NUL under a client-sent top-level ingest key with exactly one error" do
+        ingest(ingest_payload(specs: [unannotated_spec], ingest: { note: "x\u0000" }))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["details"]).to contain_exactly(
+          a_string_starting_with("ingest.note:")
+        )
+      end
+
       # A hash key is client text like any value, and the path that names it is built from it —
       # so the escape has to apply to the key itself, or the message refusing the NUL would
       # carry one. The field is one the envelope has never heard of, which is the other thing

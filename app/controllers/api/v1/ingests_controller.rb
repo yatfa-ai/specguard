@@ -8,6 +8,16 @@
 # One request is one *shard*, not necessarily one run: a sharded suite POSTs once per process, and
 # `Ingest::RunRecorder` is what folds those back into the single `TestRun` they came from.
 class Api::V1::IngestsController < Api::BaseController
+  # The JSON body this action receives is the client's contract, and what the validators read
+  # is exactly the body the client sent — nothing the framework adds to it belongs there.
+  # Declaring `wrap_parameters false` opts this controller out of Rails' automatic parameter
+  # wrapping, which would otherwise nest a second copy of the whole parsed body under a key
+  # derived from the controller's name. That copy would (a) be written out a second time by
+  # the `filtered_parameters` request log — doubling the logged size of this endpoint's
+  # request — and (b) hand every validator that names an offending location a second location
+  # the client's JSON does not contain, reporting each refusal twice.
+  wrap_parameters false
+
   # THIS ENDPOINT NEEDS A REPOSITORY, and says so rather than discovering it. `current_repository`
   # is passed straight into the recorders below on the strength of "authentication resolved one" —
   # a `sgu_` user key reaching that line would arrive as `nil` and be recorded as telemetry against

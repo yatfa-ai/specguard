@@ -23,11 +23,6 @@ module Ingest
     NUL = "\u0000"
     NUL_AS_TEXT = "\\u0000"
 
-    # The key Rails' ParamsWrapper nests a duplicate of the body under for this controller
-    # (`ingest`, after `Api::V1::IngestsController`). The NUL walk reads it to know what not to
-    # treat as a second client location — see {#walkable_body}.
-    PARAMS_WRAPPER_MIRROR_KEY = "ingest"
-
     attr_reader :errors
 
     def initialize(body)
@@ -128,11 +123,11 @@ module Ingest
     # another slice — ten per-field patches would repeat the shape this file's git history shows
     # keeps recurring. Errors are collected one per offending location, named by path
     # (`commit_sha`, `specs[0].file_path`, `specs[0].intent.behavior`); a hash key is client text
-    # like any value, so an offending key is named — escaped — in its own path. The walk reads
-    # {#walkable_body} rather than the raw body, because Rails' ParamsWrapper leaves a duplicate
-    # of the whole parsed body under its own key in `request_parameters`, and reporting that
-    # Rails-internal second location would double every refusal at a path the client's JSON does
-    # not contain.
+    # like any value, so an offending key is named — escaped — in its own path. The walk sees
+    # exactly the client's parsed body, because the controller declares `wrap_parameters false`.
+    # Without that declaration, Rails would nest a second copy of the whole body under a
+    # controller-derived key, and every NUL would be reported twice — once at the path the
+    # client sent and once at a path its JSON does not contain.
     #
     # The remaining validators are skipped once this one fires. Each of them can echo client text
     # into a message — {#label} by construction, and json_schemer quotes the offending value on
@@ -144,23 +139,7 @@ module Ingest
     # this file already states for `ci_run_id`, and stronger here, because a scrubbed example name
     # or file path is no longer the example the client ran.
     def validate_no_nul_characters
-      refuse_nuls(walkable_body)
-    end
-
-    # The body the walk covers. Rails' ParamsWrapper, which runs above this endpoint for JSON
-    # requests, merges a second copy of the whole parsed body under its wrapper key — same data,
-    # second location, under a key the client never sent (`ingest`, after the controller).
-    # Walking the copy would report every NUL twice, once at a path the client's own JSON does
-    # not contain, so when the copy is exactly that — a mirror of everything beside it — the
-    # walk skips it. The equality guard is what makes the skip safe rather than lossy: if the
-    # key is instead genuine client data that merely looks like a mirror, every byte inside it
-    # is also present at the top level, so nothing the client sent goes unwalked either way.
-    def walkable_body
-      mirror = @body[PARAMS_WRAPPER_MIRROR_KEY]
-      return @body.except(PARAMS_WRAPPER_MIRROR_KEY) if @body.size > 1 && mirror.is_a?(Hash) &&
-                                                          mirror == @body.except(PARAMS_WRAPPER_MIRROR_KEY)
-
-      @body
+      refuse_nuls(@body)
     end
 
     def refuse_nuls(node, path = nil)
