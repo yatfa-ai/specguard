@@ -90,6 +90,36 @@ RSpec.describe "the per-process fixture GitHub identity" do
     expect(fresh[:full_name]).not_to eq(Builders::DEFAULT_GITHUB_FULL_NAME)
   end
 
+  # A fresh Ruby process that loads the factories file TWICE, the way a support file named on the
+  # rspec command line gets loaded: rails_helper has already required it at boot, and RSpec then
+  # `load`s each CLI-named file again. `load`, deliberately, and not the `require` the
+  # fresh_process_identity helper uses: require is idempotent by itself and this example would
+  # pass even without the re-load guard on the constants. It prints both constants before and
+  # after the second load, so what is asserted is that a re-load MINTS NOTHING — not that loading
+  # works.
+  # @intent: { entity: "Builders::DEFAULT_GITHUB_UID", action: "load the factories file twice in one process", behavior: "a second load of the factories file mints no second identity — the uid and the default repository name are unchanged across the re-load, so naming a support file on the rspec command line cannot split the process in two", layer: "unit" }
+  it "keeps both fixture constants unchanged when the factories file is loaded twice in one process" do
+    script = <<~RUBY
+      require "bundler/setup"
+      require "rspec/core"
+      load "./spec/support/factories.rb"
+      before_uid = Builders::DEFAULT_GITHUB_UID
+      before_full_name = Builders::DEFAULT_GITHUB_FULL_NAME
+      load "./spec/support/factories.rb"
+      print [before_uid, Builders::DEFAULT_GITHUB_UID,
+             before_full_name, Builders::DEFAULT_GITHUB_FULL_NAME].join(" ")
+    RUBY
+
+    stdout, stderr, status = Open3.capture3(RbConfig.ruby, "-e", script, chdir: Rails.root.to_s)
+    raise "re-load process failed: #{status.exitstatus}\n#{stderr}" unless status.success?
+
+    values = stdout.split
+    raise "re-load process reported #{stdout.inspect}" unless values.size == 4
+
+    expect(values[1]).to eq(values[0]) # the uid survives the second load unchanged
+    expect(values[3]).to eq(values[2]) # the default repository name does too
+  end
+
   # @intent: { entity: "Builders::DEFAULT_GITHUB_FULL_NAME", action: "read from both minting seams", behavior: "a default mint carries the constant and both seam signatures name it, so the model-level and HTTP-level fixtures share one identity per process", layer: "unit" }
   it "reaches both repository-minting seams from the one constant" do
     # Behavioral half: a default mint carries the constant — which also proves the constant is
