@@ -106,6 +106,47 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
           "the replay queue cannot be written either"
   end
 
+  # @intent: {"entity": "GET /docs/integrate", "action": "document the --drain replay flag and the cost of replaying without it", "behavior": "the page names --drain on both Ruby replay surfaces (the no-key alert's replay paragraph and the SPECGUARD_OUTPUT_PATH row), states that draining is opt-in and removes only the lines that invocation got a 202 for, and states the consequence of replaying without it: the accepted runs are re-sent, and a line with no ci_run_id becomes a second, duplicate run", "layer": "request"}
+  it "documents --drain on the Ruby replay surfaces, with its accepted-lines-only scope and the duplicate-run consequence of replaying without it" do
+    get integration_guide_path
+
+    # Negative-first, because every positive token about replay on this page ("specguard-ingest",
+    # "log/test_results.jsonl", "re-delivers") is already true on the page that taught only the
+    # bare re-send command — which is exactly the drift this seals: specguard-ruby 0.3.24
+    # shipped --drain (SPGD-1450/1455/1456) and the page kept sending readers back to a gesture
+    # that re-sends everything already accepted, so a replayed keyless line became a second
+    # TestRun (Ingest::RunRecorder#create_run creates one per keyless POST).
+    #
+    # ⛔ Unlike every example above, --drain is deliberately a literal here, NEVER read from the
+    # bundled gem: Gemfile.lock pins specguard-ruby 0.3.2, which predates the flag (published in
+    # 0.3.24), so a gem-constant read would make this seal demand a flag the bundled dependency
+    # does not have — and bumping the lock to light it is out of scope for a docs change.
+    #
+    # Both Ruby surfaces must name it — the replay paragraph and the SPECGUARD_OUTPUT_PATH row —
+    # hence a count, not a single include (the refusal example below counts its both-surfaces
+    # claims the same way): one lone mention could satisfy one surface while the other stayed
+    # behind.
+    expect(response.body.scan("--drain").length).to be >= 2,
+          "/docs/integrate names --drain #{response.body.scan('--drain').length} times; the Ruby " \
+          "replay paragraph and the SPECGUARD_OUTPUT_PATH row must both name the flag — the page " \
+          "is teaching a re-delivery that re-sends every accepted run"
+
+    # The consequence of replaying WITHOUT the flag: delivery does not consume the queue, so a
+    # re-run re-sends the runs that already landed — and a line with no ci_run_id is not
+    # reconciled to the run it already created, it becomes a new one.
+    expect(response.body).to include("re-sends every line it reads"),
+          "/docs/integrate does not state that replaying without --drain re-sends the runs " \
+          "that already landed"
+    expect(response.body).to include("second, duplicate run"),
+          "/docs/integrate does not state that a replayed line with no ci_run_id becomes a " \
+          "duplicate run"
+
+    # The flag's scope, in the gem's own register: opt-in, and only the lines THAT invocation
+    # got a 202 for leave the queue — refused and undelivered lines stay for the next attempt.
+    expect(response.body).to include("only the lines that invocation got a 202 for"),
+          "/docs/integrate does not state --drain's accepted-lines-only scope"
+  end
+
   # @intent: {"entity": "GET /docs/integrate", "action": "state the keyless local sink's write-failure arm, not an unconditional promise", "behavior": "the page neither describes the keyless local write as unconditional (the old 'the run is written to a file' framing) nor omits the arm: when the local file cannot be written, the page states that the client prints one line naming the configured path (the clients' own warning wording) and that the test run is unaffected, while a successful write stays silent", "layer": "request"}
   it "does not promise the keyless local write unconditionally, and states its failure arm" do
     get integration_guide_path

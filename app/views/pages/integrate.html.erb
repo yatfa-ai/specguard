@@ -171,7 +171,15 @@
           A run that <em>had</em> a key but could not deliver — refused, timed out, network down —
           lands in a different file, the replay queue <code>log/test_results.jsonl</code>, and
           <code>bundle exec specguard-ingest log/test_results.jsonl</code> re-delivers it to the
-          endpoint afterwards — but only when the queue write itself succeeded. The fall-back is
+          endpoint afterwards — but only when the queue write itself succeeded. Replaying does not
+          empty the queue: without <code>--drain</code>, re-running the command
+          re-sends every line it reads, so runs that already landed are delivered again — and a
+          line with no
+          <code>ci_run_id</code> is not reconciled to the run it already created but becomes a
+          second, duplicate run. <code>--drain</code> is the opt-in follow-through:
+          <code>bundle exec specguard-ingest --drain log/test_results.jsonl</code> removes, after
+          the deliveries, only the lines that invocation got a 202 for — refused and undelivered
+          lines stay in the queue for the next attempt. The fall-back is
           best effort, not a guarantee: if the queue file cannot be written either — a full disk,
           a read-only checkout — the client warns that this run's telemetry was lost. The test
           run is unaffected either way; what is at stake is the telemetry, never the suite. (On
@@ -263,7 +271,11 @@
             <td class="px-3 py-2 text-app-content-secondary">
               The replay queue: where a run that <em>had</em> a key but could not deliver lands
               when the queue write itself succeeds — one run per line, for
-              <code>specguard-ingest</code> to re-deliver later. If the queue cannot be written
+              <code>specguard-ingest</code> to re-deliver later. Re-delivering with
+              <code>--drain</code> is how accepted lines leave the queue, and the queue is the
+              only file it will empty: pointed at the development record,
+              <code>specguard-ingest --drain</code> is refused — that record is a development
+              record, not a queue. If the queue cannot be written
               either, the run's telemetry is lost and there is nothing to replay.
             </td>
           </tr>
