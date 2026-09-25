@@ -103,6 +103,51 @@
 # The ordering is the summed wall clock every duration rollup in this application ranks by, `NULLS
 # LAST` included, because a group nobody timed must not head a list about what repetition costs.
 #
+# == The declared-layer cut, which reads the protocol's own second axis and invents nothing
+#
+# The intent protocol makes `layer` a REQUIRED enum (`unit | integration | request | system`,
+# `open-test-intent` PROTOCOL.md) and names it "the axis duplication lives across"; the ingest path
+# validates it at the door and stores it per example (`spec_observations.intent_layer`),
+# {Ingest::ObservationRecorder#intent_attributes} stating in as many words that it is THE DECLARED
+# LAYER, NEVER A DERIVED ONE. So the question the census exists for has a second half — *is the same
+# logic tested on more than one level, and what does each copy cost* — and the answer is not a new
+# detection engine but a cut of these clusters by a field that already landed at ingest:
+# {Cluster#layer_groups} reports each cluster's members grouped by the layer their examples
+# declared, {Cluster#layer_redundancy} says whether the cluster spans more than one declared layer
+# (cross-layer redundancy — the test-pyramid question) or is confined to one (a plain duplicate),
+# and `.layer_source` stamps the dimension's source for the whole block.
+#
+# Three rules bind the cut, and none of them is negotiable:
+#
+# * **Declared, never inferred.** The layer on a row is what an annotation said. A `layer: "request"`
+#   example under `spec/models/` reports `"request"`, full stop — no path or directory convention is
+#   consulted anywhere in this cut, because a column that mixed declarations with directory guesses
+#   could answer neither question. (A path-based mapping SUGGESTION is a different, owner-confirmed
+#   idea, and it has its own column to invent when someone builds it.)
+# * **Undeclared is a fact about the suite, reported rather than fabricated.** A member whose
+#   examples carry no annotation carries no layer; it sits in the `layer: null` group and is never
+#   assigned one, and it is never dropped from its cluster — the cluster's figures and its member
+#   list are the layer-free census exactly as they were.
+# * **The classification is a report field, not a verdict.** `cross_layer` / `same_layer` describe
+#   which layers the members DECLARED; nothing here says the redundancy should be deleted, exactly
+#   as "it presents, and does not judge" says above. A cluster whose members declared NO layer is
+#   neither — `layer_redundancy` is `nil` rather than a same-layer fiction over a suite that never
+#   spoke.
+#
+# The grain follows membership, not weight: a member's layers are read off every example that
+# resolved to it ({SpecObservation.declared_layers_by_identity}), so an identity the weighed run did
+# not observe keeps the layer its examples declared instead of being misfiled as undeclared. A
+# member whose own declarations disagree — the same text annotated at two layers, or a layer
+# corrected between runs — appears under EACH layer it declared, because collapsing the disagreement
+# to one value would be the guess the first rule forbids; that is also why its cluster reads
+# `cross_layer` on the strength of one member, which is simply true: that member is itself tested on
+# more than one level.
+#
+# The cut is computed where the census is computed — at the write paths that move its inputs, never
+# behind a request — and it travels INSIDE the stored artifact, so the served layer view is stamped
+# by the same `computed_at`/`weighed_run_id` pair as every figure beside it and can never disagree
+# with the clusters it annotates.
+#
 # == The three silences, each said rather than dropped
 #
 # `SUM` skips NULLs, so every cluster states how many of its own examples reported a timing and the
@@ -289,6 +334,31 @@ class NearDuplicateClusters
   # engine was feature hashing, and that sentence is now false in both halves.
   SIMILARITY_BASIS = "semantic similarity, not exact wording"
 
+  # What the declared-layer dimension of this census IS, stated on the object for the same reason
+  # `SIMILARITY_BASIS` is: a layer grouping served without the statement of where its layers come
+  # from is a confident classification over an unstated source — the reader could not tell declared
+  # intent from a path guess, which is exactly the distinction the cut's first rule exists to keep.
+  #
+  # The value is `nil` on the served block — not this constant — when NO clustered member declared a
+  # layer anywhere: a zero-annotation suite keeps the layer-free census, with the dimension stated
+  # as ABSENT rather than rendered as an empty fiction. `#layer_source` owns that branch.
+  LAYER_SOURCE = "declared via the intent protocol"
+
+  # The two states of {Cluster#layer_redundancy}, and the one that is deliberately NOT a constant.
+  # A cluster spanning two or more DISTINCT declared layers is cross-layer redundancy — the same
+  # behaviour covered on several levels, the test-pyramid question. A cluster confined to exactly
+  # one is same-layer redundancy — a plain duplicate on one level. A cluster whose members declared
+  # NO layer is neither, and is served `nil` rather than folded into either: inventing a
+  # same-layer verdict over members that never declared one would be the guess this cut exists to
+  # refuse. Snake-cased to sit beside `signal_source`'s values on the same wire.
+  CROSS_LAYER_REDUNDANCY = "cross_layer"
+  SAME_LAYER_REDUNDANCY = "same_layer"
+
+  # The shared empty for a member nothing declared a layer for — one frozen object rather than a
+  # fresh array per member, and truthiness (`any?`) rather than nil-checks downstream, so "no
+  # declaration" and "empty declaration set" cannot become two states.
+  EMPTY_DECLARED_LAYERS = [].freeze
+
   # What a repository that has never ingested weighs, which is nothing — and there is no run to ask
   # it of. Spelled here rather than by teaching `SpecObservation.identity_presence_in` to take a
   # nil: the run is this object's own precondition, and a read whose argument may be absent invites
@@ -311,11 +381,28 @@ class NearDuplicateClusters
                                                              neighbours: neighbours,
                                                              run_id: run&.id)
     clusters = Assembly.new(edges, neighbours: neighbours).clusters
+    declare_layers!(clusters)
 
     new(clusters: clusters, limit: limit, run: run,
         population: SpecIdentity.clusterable_population_in(repository),
         presence: run ? SpecObservation.identity_presence_in(run) : UNRUN)
   end
+
+  # The declared-layer cut, applied to the clusters the assembly just built: ONE indexed read of
+  # every member's declared layers, then each member carries its own. The figure-bearing half of
+  # the census is untouched by this — the same edges, the same components, the same weights arrive
+  # whether or not anything declared a layer, which is what keeps the layer-free census the
+  # layer-free census.
+  def self.declare_layers!(clusters)
+    layers = SpecObservation.declared_layers_by_identity(clusters.flat_map { |c| c.members.map(&:id) })
+
+    clusters.each do |cluster|
+      cluster.members.each do |member|
+        member.intent_layers = (layers[member.id] || EMPTY_DECLARED_LAYERS)
+      end
+    end
+  end
+  private_class_method :declare_layers!
 
   # The two halves of this object are tenant-safe by DIFFERENT means, and only one of them is
   # structural — which is why the argument is checked rather than trusted.
@@ -435,6 +522,22 @@ class NearDuplicateClusters
   # threshold it is showing rather than leaving a reader to assume one.
   def similarity_floor = SIMILARITY
 
+  # Where this census's layer dimension comes from — {LAYER_SOURCE} when at least one clustered
+  # member's examples declared a layer, `nil` when none did. Over `@all_clusters`, the same
+  # whole-census population `#cluster_count` and the `clustered_*` figures are counted over, never
+  # over the truncated page: on a repository whose only declaring members sit in clusters past the
+  # limit, the dimension is still present, because the dimension is the census's, not the page's.
+  #
+  # The nil IS the "stated absent" answer the layer-free suite is owed: a zero-annotation repository
+  # keeps its clusters and its figures untouched, and the served block says the layer source is
+  # nothing rather than rendering one `layer: null` group per cluster as though the axis had been
+  # read and come up empty everywhere at once. (The per-cluster groups still carry the undeclared
+  # members — a member is never dropped from its cluster — the STAMP is what says the axis itself
+  # never spoke.)
+  def layer_source
+    LAYER_SOURCE if @all_clusters.any? { |cluster| cluster.declared_layers.any? }
+  end
+
   # The weighed run recorded per-example rows AT ALL — the question that decides whether the surface
   # has anything to say, and the one an empty `clusters` cannot answer. False too for a repository
   # with no run to weigh against, which is the same silence arriving one step earlier. The
@@ -518,6 +621,60 @@ class NearDuplicateClusters
   # rather than an instance of the rule it enforces.
   def identity_coverage_label = "#{clustered_identity_count} of #{identity_count}"
 
+  # One layer's slice of a cluster: the declared layer — or `nil` for the undeclared members — and
+  # the members that declared it. A struct rather than a bare pair so the served group has one
+  # shape to name, and so a group is a thing methods can be asked of later without call sites
+  # growing `[0]`s.
+  #
+  # A member whose declarations disagree appears in MORE THAN ONE group — once per layer it
+  # declared — so the groups partition the members' DECLARATIONS, never the members: summing the
+  # groups' sizes can exceed `member_count` by exactly the members that speak with two voices, and
+  # that over-count is the finding (such a member is itself tested on more than one level), not an
+  # arithmetic bug.
+  LayerGroup = Struct.new(:layer, :members, keyword_init: true)
+
+  # The declared-layer cut over THIS cluster — the methods the class-comment section binds. All
+  # three are read off the members' `intent_layers`, which `.for` populated from declared
+  # annotations; none of them consults a path, a directory or any other proxy.
+  module LayerCut
+    # The DISTINCT layers this cluster's members declared, sorted so the groups and the
+    # classification below are deterministic in the cluster's contents rather than in ingestion
+    # order. Sorted ALPHABETICALLY, deliberately not in the protocol enum's pyramid order: the
+    # enum lives in the vendored JSON schema, and re-stating it here as a Ruby constant would be a
+    # second copy of the protocol free to drift from its publisher. Order is presentation — it
+    # assigns no value to any member — so alphabetical buys determinism without buying drift.
+    def declared_layers = members.flat_map(&:intent_layers).uniq.sort
+
+    # Whether this cluster is the test-pyramid question or a plain duplicate: `cross_layer` over
+    # two or more DISTINCT declared layers, `same_layer` over exactly one, and `nil` over none.
+    # The nil is load-bearing — see the constants' comment for why a cluster of undeclared members
+    # is neither state and must not be folded into `same_layer`.
+    def layer_redundancy
+      case declared_layers.size
+      when 0 then nil
+      when 1 then SAME_LAYER_REDUNDANCY
+      else CROSS_LAYER_REDUNDANCY
+      end
+    end
+
+    # The members grouped by declared layer, in `declared_layers`' order, with the undeclared
+    # members LAST as the `layer: null` group — after every declared layer, so a reader scanning
+    # the groups reads the declared copies first and the suite's silence afterwards, and so an
+    # all-undeclared cluster renders exactly one group whose layer is null rather than an empty
+    # list or a fiction.
+    def layer_groups
+      groups = declared_layers.map do |layer|
+        LayerGroup.new(layer: layer,
+                       members: members.select { |member| member.intent_layers.include?(layer) })
+      end
+
+      undeclared = members.reject(&:declared?)
+      groups << LayerGroup.new(layer: nil, members: undeclared) if undeclared.any?
+
+      groups
+    end
+  end
+
   # One group of tests that read alike, and what the examples under them cost in the weighed run.
   #
   # `member_count` and `example_count` are different numbers ON PURPOSE, and they are read at two
@@ -527,6 +684,8 @@ class NearDuplicateClusters
   Cluster = Struct.new(:signal_source, :members, :example_count, :total_seconds, :timed_count,
                        :strongest_similarity, :weakest_similarity, :saturated_member_count,
                        keyword_init: true) do
+    include LayerCut
+
     # How many distinct TEXTS this cluster holds, across the repository's whole history. Never the
     # number of tests it stands for: exact duplicates were collapsed onto one row by the unique key
     # before this object saw them.
@@ -591,11 +750,16 @@ class NearDuplicateClusters
     def sort_key = members.map(&:text).min.to_s
   end
 
-  # One identity inside a cluster: the text, where it was last seen, and what the examples that
-  # resolved to it cost in the weighed run.
+  # One identity inside a cluster: the text, where it was last seen, what the examples that
+  # resolved to it cost in the weighed run, and the intent layers those examples declared.
   Member = Struct.new(:id, :text, :signal_source, :file_path, :line_number, :example_count,
-                      :total_seconds, :timed_count, keyword_init: true) do
+                      :total_seconds, :timed_count, :intent_layers, keyword_init: true) do
     def timed? = !total_seconds.nil?
+
+    # This member's examples declared at least one intent layer. False for a member whose every
+    # example carries no annotation — the undeclared state, which is a fact about the suite and
+    # never a layer value.
+    def declared? = intent_layers.any?
 
     # The weighed run ran at least one example under this text. Not an error when it did not — an
     # identity outlives the runs that observed it, so a test that was deleted, renamed, or left out
@@ -642,7 +806,11 @@ class NearDuplicateClusters
         # rest are the same values arriving again.
         members_by_id[id] ||= Member.new(
           id: id, text: text, signal_source: source, file_path: path, line_number: line,
-          example_count: examples.to_i, total_seconds: total, timed_count: timed.to_i
+          example_count: examples.to_i, total_seconds: total, timed_count: timed.to_i,
+          # The declared layers are `.for`'s to fill — this struct is the edge read's shape and the
+          # edge read carries no annotation — but the EMPTY set, not nil, so a member is never a
+          # half-built thing with a declaration field that does not answer `any?`.
+          intent_layers: EMPTY_DECLARED_LAYERS
         )
         neighbour_counts[id] += 1
         similarity_by_id[id] << similarity.to_f

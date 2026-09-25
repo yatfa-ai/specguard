@@ -95,6 +95,7 @@ RSpec.describe NearDuplicateCensus do
       expected = {
         similarity_floor: live.similarity_floor,
         similarity_basis: live.similarity_basis,
+        layer_source: live.layer_source,
         cluster_count: live.cluster_count,
         truncated: live.truncated?,
         saturated_identity_count: live.saturated_identity_count,
@@ -116,6 +117,13 @@ RSpec.describe NearDuplicateCensus do
       expect(stored_cluster["example_count"]).to eq(live_cluster.example_count)
       expect(stored_cluster["total_seconds"]).to eq(live_cluster.total_seconds)
       expect(stored_cluster["similarity_range"]).to eq(live_cluster.similarity_range)
+      # The declared-layer cut rides the same equality: the stored cut is the live cut, group for
+      # group, because the writer serialized the very object the live path builds.
+      expect(stored_cluster["layer_redundancy"]).to eq(live_cluster.layer_redundancy)
+      expect(stored_cluster["layer_groups"].map { |group| group["layer"] })
+        .to eq(live_cluster.layer_groups.map(&:layer))
+      expect(stored_cluster["layer_groups"].map { |group| group["members"].pluck("text") })
+        .to eq(live_cluster.layer_groups.map { |group| group.members.map(&:text) })
     end
 
     # The stamps ride the same write as the figures — a census whose stamp could disagree with its
@@ -131,6 +139,48 @@ RSpec.describe NearDuplicateCensus do
       stored = described_class.find_by!(repository_id: repository.id)
       expect(stored.computed_at).to be_present
       expect(stored.weighed_run_id).to eq(repository.latest_test_run.id).and eq(run.id)
+    end
+
+    # THE DECLARED-LAYER CUT, END TO END over the ingest path: two annotated tests whose intent
+    # triples read alike — the calibrated pair shape, one word apart — declared at DIFFERENT
+    # layers, stored as one cross-layer cluster, with the layer source stamped at the head of the
+    # block. This is the wire-shaped proof that the cut rides the stored artifact rather than any
+    # serve-time computation.
+    # @intent: { entity: "NearDuplicateCensus", action: "store the declared-layer cut", behavior: "ingesting a pair declared at two layers stores one cross-layer cluster grouped by layer with the declared layer source stamped, all inside the stored payload", layer: "unit" }
+    it "stores the declared-layer cut inside the payload over a cross-layer pair" do
+      ingest([annotated_spec(file_path: "spec/models/checkout_spec.rb", line_number: 3,
+                             name: "Checkout rejects the expired card",
+                             entity: "Checkout", action: "rejects",
+                             behavior: "an expired card payment", layer: "unit"),
+              annotated_spec(file_path: "spec/requests/checkout_spec.rb", line_number: 9,
+                             name: "Checkout rejects the expired card outright",
+                             entity: "Checkout", action: "rejects",
+                             behavior: "an expired card payment outright", layer: "request")])
+      described_class.refresh!(repository)
+
+      stored = described_class.find_by!(repository_id: repository.id)
+      payload = stored.payload
+
+      expect(payload["layer_source"]).to eq(NearDuplicateClusters::LAYER_SOURCE)
+      cluster = payload["clusters"].sole
+      expect(cluster["layer_redundancy"]).to eq("cross_layer")
+      expect(cluster["layer_groups"].map { |group| group["layer"] }).to eq(%w[request unit])
+      request_group = cluster["layer_groups"].first
+      expect(request_group["members"].sole).to include(
+        "text" => "Checkout rejects an expired card payment outright",
+        "file_path" => "spec/requests/checkout_spec.rb"
+      )
+      unit_group = cluster["layer_groups"].last
+      expect(unit_group["members"].sole).to include(
+        "text" => "Checkout rejects an expired card payment",
+        "file_path" => "spec/models/checkout_spec.rb"
+      )
+
+      # And the served block is the stored block: the cut reaches the wire verbatim, stamped by
+      # the same merge that appends the census's own stamps.
+      served = stored.serialized
+      expect(served["layer_source"]).to eq(payload["layer_source"])
+      expect(served["clusters"].sole["layer_groups"]).to eq(cluster["layer_groups"])
     end
 
     # THE HONEST EMPTY RANKING IS A STORED ROW, NOT AN ABSENCE. A repository whose every test

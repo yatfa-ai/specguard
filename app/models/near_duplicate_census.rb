@@ -71,6 +71,25 @@
 # stamp disagrees with them. `payload` nil means never computed — a row created by the marker
 # before its first census ran — and `#serialized` refuses to serve it: nil payload is plumbing,
 # not an answer, and "not computed yet" must not render as zeros.
+#
+# == The declared-layer cut rides the same artifact, and that is what makes it honest
+#
+# Since SPGD-1475 the payload also carries the cut of the clusters by each member's DECLARED intent
+# layer — `layer_source` at the top and, per cluster, `layer_redundancy` and `layer_groups`; the
+# three rules that bind the cut are stated on `NearDuplicateClusters`'s own class-comment section
+# and are not restated here. What THIS class owns is the cut's placement: it is computed inside
+# `refresh!` — the same compute, from the same frozen inputs, one indexed read of
+# `spec_observations` over the clustered identities — and stored INSIDE the payload, so it serves
+# verbatim with the stamps that date it and can never disagree with the clusters it annotates.
+#
+# The alternative was available and declined: re-joining `intent_layer` at serve time would have
+# been a cheap indexed query, but it would have put the join BACK on the request path and, worse,
+# split the answer across two clocks. The stored clusters survive the observations they were
+# weighed on — a deleted run's members keep their rows as `unobserved_members`, their
+# `spec_observations` do not — so a serve-time layer join would have reported such members as
+# undeclared while the clusters beside them said otherwise: a manufactured inconsistency between
+# two halves of one block. Inside the payload, the layer view is exactly as old or as new as the
+# census it annotates, which is the only coherence a stamped artifact can promise.
 class NearDuplicateCensus < ApplicationRecord
   belongs_to :repository
 
@@ -163,14 +182,16 @@ class NearDuplicateCensus < ApplicationRecord
     # A stored payload is written once per refresh and read whole; it is never queried by content,
     # so it is a json column and not a graph of tables — and json rather than jsonb, because
     # jsonb normalizes key order and the block's disclosure contract states the written order
-    # (`similarity_floor` and `similarity_basis` first); see the column comment on the table's
-    # migration. Storing the raw PAIR read instead would grow this table with `identities × k`
+    # (`similarity_floor`, `similarity_basis` and `layer_source` first — the three disclosures
+    # ahead of every figure they qualify); see the column comment on the table's migration.
+    # Storing the raw PAIR read instead would grow this table with `identities × k`
     # rows per repository — the census's answer is the clusters, and the clusters are what is
     # kept.
     def snapshot_payload(clusters)
       {
         similarity_floor: clusters.similarity_floor,
         similarity_basis: clusters.similarity_basis,
+        layer_source: clusters.layer_source,
         cluster_count: clusters.cluster_count,
         truncated: clusters.truncated?,
         saturated_identity_count: clusters.saturated_identity_count,
@@ -202,11 +223,34 @@ class NearDuplicateCensus < ApplicationRecord
         timed_count: cluster.timed_count,
         similarity_range: cluster.similarity_range,
         unobserved_members: cluster.unobserved_members?,
-        members: cluster.members.map do |member|
-          { text: member.text, file_path: member.file_path, line_number: member.line_number,
-            example_count: member.example_count, total_seconds: member.total_seconds }
-        end
+        # THE DECLARED-LAYER CUT, read off the same object every figure above is read from. The
+        # classification sits beside the figures it qualifies and ahead of both member listings;
+        # the groups carry the members grouped by the layer their examples declared, with the
+        # undeclared LAST as the `layer: null` group — a fact about the suite, never a guessed
+        # layer, and a member never dropped from its cluster. `layer_redundancy` is `nil` when the
+        # cluster's members declared nothing — neither cross-layer nor a same-layer fiction. See
+        # `NearDuplicateClusters`'s class-comment section for the three rules that bind the cut.
+        layer_redundancy: cluster.layer_redundancy,
+        layer_groups: cluster.layer_groups.map { |group| layer_group_payload(group) },
+        members: cluster.members.map { |member| member_payload(member) }
       }
+    end
+
+    # ONE member, in the five fields every listing of it serves. The flat `members` list and the
+    # `layer_groups` entries both render members THROUGH THIS ONE METHOD — a second copy of the
+    # shape beside it would agree until somebody added a field and only one listing noticed, which
+    # is exactly the drift the single seam exists to make impossible.
+    def member_payload(member)
+      { text: member.text, file_path: member.file_path, line_number: member.line_number,
+        example_count: member.example_count, total_seconds: member.total_seconds }
+    end
+
+    # ONE layer's members, in the same shape the flat `members` list serves — the groups are the
+    # members RE-GROUPED, not a second, lighter summary, so a consumer reading a group's member is
+    # reading the same five fields the cluster's member list carries and the two can never disagree
+    # about what a member is.
+    def layer_group_payload(group)
+      { layer: group.layer, members: group.members.map { |member| member_payload(member) } }
     end
   end
 
@@ -216,9 +260,9 @@ class NearDuplicateCensus < ApplicationRecord
   # without when it was taken is a claim about a suite state nothing dates.
   #
   # THE ORDER IS THE WRITTEN ORDER, and it survives because the payload column is `json`, not
-  # `jsonb`: `snapshot_payload` writes `similarity_floor` and `similarity_basis` first — the
-  # disclosure contract the serve path's comment and the MCP README both state — and those two
-  # keys reach the consumer first, ahead of every figure they qualify, exactly as the live
+  # `jsonb`: `snapshot_payload` writes `similarity_floor`, `similarity_basis` and `layer_source`
+  # first — the disclosure contract the serve path's comment and the MCP README both state — and
+  # those keys reach the consumer first, ahead of every figure they qualify, exactly as the live
   # serialization used to assemble them. The two stamps merge at the END of the block: appended
   # keys ride behind the payload in one deterministic order (`weighed_run_id`, then
   # `computed_at`), never interleaved into the figures jsonb would have re-sorted.
