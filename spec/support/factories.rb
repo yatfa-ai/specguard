@@ -5,8 +5,11 @@ require "securerandom"
 # Deliberately plain builders rather than a factory gem — the domain models are few and simple
 # enough that a fixture DSL would be more machinery than they justify.
 module Builders
-  # The default GitHub uid: one identity per suite process. Evaluated once, when this file is
-  # loaded, so every default mint within a run describes the same person — and two suites running
+  # The default GitHub uid: one identity per suite process. Minted once per process, even if this
+  # file is loaded more than once — RSpec re-`load`s every support file named on the rspec command
+  # line a second time, after rails_helper has already required it at boot, and the
+  # `unless const_defined?` guard below turns that second evaluation into a no-op rather than a
+  # second mint — so every default mint within a run describes the same person — and two suites running
   # concurrently (the shared-lane test database is normal fleet operation, not an exotic harness)
   # describe different ones. A shared literal would have both suites inserting the same
   # unique-index value inside their uncommitted transactions, where each insert waits on the
@@ -14,7 +17,7 @@ module Builders
   # reads this same constant, so the pairing a signed-in spec and a built-user spec rely on holds
   # by construction — within a process, which is the only scope a run has. The pairing itself is
   # asserted, not trusted to two copies of a literal: spec/lib/builders_fixture_identity_spec.rb.
-  DEFAULT_GITHUB_UID = "1#{SecureRandom.hex(4)}".freeze
+  DEFAULT_GITHUB_UID = "1#{SecureRandom.hex(4)}".freeze unless const_defined?(:DEFAULT_GITHUB_UID, false)
 
   # The default `github_full_name`: one per suite process, for the same reason and by the same
   # mechanism as the uid above. It keeps the `org/repo` shape on purpose — `normalize_full_name`,
@@ -28,7 +31,7 @@ module Builders
   # seams (`create_repository`, `register_repository`) read this one constant, so the model-level
   # and HTTP-level fixtures share an identity the way the uid's two seams do. The property is
   # asserted, not trusted: spec/lib/builders_fixture_identity_spec.rb.
-  DEFAULT_GITHUB_FULL_NAME = "acme/billing-service-#{SecureRandom.hex(4)}".freeze
+  DEFAULT_GITHUB_FULL_NAME = "acme/billing-service-#{SecureRandom.hex(4)}".freeze unless const_defined?(:DEFAULT_GITHUB_FULL_NAME, false)
 
   # Connected to GitHub by default — the same default, for the same reason, as the permissive
   # `FakeGithubApi`: a spec about sharing or API keys needs a user who can register a repository,
