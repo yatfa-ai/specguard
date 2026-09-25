@@ -107,6 +107,123 @@ RSpec.describe "Deleting a test run", type: :request do
     end
   end
 
+  # SPGD-1474 (rework): deleting a run changes the stored near-duplicates census's inputs — it
+  # can move `repository.latest_test_run` (the run every weight figure is weighed on) and it
+  # destroys the per-example observations the figures join through — so the delete requests the
+  # census refresh exactly as the ingest path does. These examples hold the scenario the round-2
+  # review reproduced: a junk run (the same near-duplicate pair re-reported at inflated
+  # durations) becomes the weighed run, the delete removes it, and the stored census must
+  # re-weigh on the surviving run — never keep stamping a run that no longer exists, which on a
+  # quiet repository would last indefinitely and send a client following `weighed_run_id` to a
+  # 404.
+  #
+  # ⭐ THE PROVIDER IS LEXICAL HERE, on this file family's own rule (see
+  # `near_duplicate_clusters_spec.rb`): the suite-wide stub makes two differently-worded texts
+  # near-orthogonal however alike they read, so without a stand-in that puts the pair below on a
+  # cosine above the floor, the cluster whose weights move would not exist and these assertions
+  # would pass over an empty census.
+  describe "the stored near-duplicates census it invalidates" do
+    include_context "with lexical embeddings"
+
+    let(:expired) { "Checkout rejects an expired card" }
+    let(:outright) { "Checkout rejects an expired card outright" }
+
+    # Ingests the checkout pair through the real pipeline — rows and identities come off
+    # `Ingest::Payload`, never hand-written, the rule the near-duplicates request spec states —
+    # and stores its census through `refresh!`, the compute-and-store unit the census job runs.
+    # The fixture side stays OFF `request_refresh!`/the job on purpose: it leaves the job queue
+    # empty when the delete fires below, so the delete's OWN enqueue is assertable in isolation.
+    def ingest_pair(commit_sha:, duration:)
+      payload = Ingest::Payload.new(
+        { "commit_sha" => commit_sha, "branch" => "main", "duration_seconds" => 60.0,
+          "specs" => [
+            unannotated_spec(file_path: "spec/models/checkout_spec.rb", line_number: 3,
+                             id: "./spec/models/checkout_spec.rb[1:1]", name: expired,
+                             duration: duration),
+            unannotated_spec(file_path: "spec/models/checkout_spec.rb", line_number: 9,
+                             id: "./spec/models/checkout_spec.rb[2:1]", name: outright,
+                             duration: duration * 2)
+          ].map(&:deep_stringify_keys) }
+      )
+      raise "ingest fixture is not a valid payload: #{payload.errors.inspect}" unless payload.valid?
+
+      run = Ingest::RunRecorder.record(repository, payload.test_run_attributes, specs: payload.specs)
+      Ingest::IdentityResolver.resolve(run)
+      NearDuplicateCensus.refresh!(repository)
+      run
+    end
+
+    # @intent: {"entity": "TestRun", "action": "re-weigh the census on delete", "behavior": "deleting the weighed run schedules the census job, and draining it re-weighs the stored census onto the surviving run with figures equal to the live computation", "layer": "request"}
+    it "re-weighs the stored census onto the surviving run when the weighed run is deleted" do
+      good_run = ingest_pair(commit_sha: "feedfacecafe0001", duration: 0.2)
+      junk_run = ingest_pair(commit_sha: "feedfacecafe0002", duration: 9.0)
+      expect(NearDuplicateCensus.find_by!(repository_id: repository.id).weighed_run_id)
+        .to eq(junk_run.id)
+
+      # The delete itself schedules the recompute — the assertion that keeps this behaviour from
+      # degrading into "some later ingest happens to heal it".
+      expect { delete repository_run_path(repository, junk_run) }
+        .to have_enqueued_job(Ingest::NearDuplicateCensusJob).with(repository.id)
+
+      # ...and the job, run the way the worker would run it, moves the stored census onto the
+      # surviving run and back onto figures a live computation returns.
+      Ingest::NearDuplicateCensusJob.perform_now(repository.id)
+
+      stored = NearDuplicateCensus.find_by!(repository_id: repository.id)
+      live = NearDuplicateClusters.for(repository)
+
+      expect(TestRun.exists?(junk_run.id)).to be false
+      # A stamp naming a deleted run would send a client following it to the runs API to a 404.
+      expect(stored.weighed_run_id).to eq(good_run.id)
+      expect(stored.payload).to include(
+        "cluster_count" => live.cluster_count,
+        "clustered_example_count" => live.clustered_example_count,
+        "identity_count" => live.identity_count
+      )
+      stored_cluster = stored.payload["clusters"].sole
+      live_cluster = live.clusters.sole
+      expect(stored_cluster["member_count"]).to eq(live_cluster.member_count)
+      expect(stored_cluster["total_seconds"]).to eq(live_cluster.total_seconds)
+      # ...and the surviving run's weights are the small ones: the junk run's inflated figures
+      # are gone from the stored artifact, not just from the live computation.
+      expect(stored_cluster["total_seconds"]).to be_within(0.0001).of(0.6)
+    end
+
+    # Deleting the ONLY run leaves the census weighed on nothing: `latest_test_run` is nil, the
+    # live computation answers with no run, and the stored artifact must carry that shape — the
+    # nil weighed run, not a stamp naming a run that no longer exists. The cluster itself
+    # SURVIVES (the identities do — nullified, not destroyed — and they still read alike), but
+    # every weight figure in it goes unobserved: with no run there is no observation to weigh
+    # through, so `example_count` is 0, `total_seconds` is nil and `unobserved_members` states
+    # it. The population figures keep reporting the identities too: "no run observes them now",
+    # never "no identities exist".
+    # @intent: {"entity": "TestRun", "action": "re-weigh census on nothing", "behavior": "deleting the only run re-weighs the stored census onto nothing - nil weighed_run_id, the cluster kept but unobserved - matching the live computation over the same run-less inputs", "layer": "request"}
+    it "re-weighs the stored census on nothing when the deleted run was the only one" do
+      only_run = ingest_pair(commit_sha: "feedfacecafe0001", duration: 0.2)
+      expect(NearDuplicateCensus.find_by!(repository_id: repository.id).weighed_run_id)
+        .to eq(only_run.id)
+
+      delete repository_run_path(repository, only_run)
+      Ingest::NearDuplicateCensusJob.perform_now(repository.id)
+
+      stored = NearDuplicateCensus.find_by!(repository_id: repository.id)
+      live = NearDuplicateClusters.for(repository)
+
+      expect(stored.weighed_run_id).to be_nil
+      expect(stored.payload["identity_count"])
+        .to eq(live.identity_count).and eq(2)
+      # The cluster survives, weighed on nothing: the stored figures are the live computation's
+      # over the same run-less inputs — unobserved members, no wall clock, and the stamp of that
+      # fact on the cluster.
+      stored_cluster = stored.payload["clusters"].sole
+      live_cluster = live.clusters.sole
+      expect(stored_cluster["member_count"]).to eq(live_cluster.member_count).and eq(2)
+      expect(stored_cluster["example_count"]).to eq(live_cluster.example_count).and eq(0)
+      expect(stored_cluster["total_seconds"]).to be_nil
+      expect(stored_cluster["unobserved_members"]).to be(true)
+    end
+  end
+
   describe "who may fire it" do
     # @intent: {"entity": "TestRun", "action": "refuse without permission", "behavior": "a member holding view and keys.manage but not repo.delete gets 403 and the run survives", "layer": "request"}
     it "refuses a member without repo.delete with 403, and the run survives" do

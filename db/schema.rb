@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_17_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_25_002100) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -85,6 +85,17 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_17_120000) do
     t.integer "total_reasons_count", default: 0, null: false
     t.string "user_agent"
     t.index ["repository_id", "occurred_at", "id"], name: "index_ingest_rejections_on_repository_and_recency", order: { occurred_at: :desc, id: :desc }
+  end
+
+  create_table "near_duplicate_censuses", force: :cascade do |t|
+    t.datetime "computed_at"
+    t.datetime "created_at", null: false
+    t.json "payload"
+    t.datetime "refresh_wanted_at"
+    t.bigint "repository_id", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "weighed_run_id"
+    t.index ["repository_id"], name: "index_near_duplicate_censuses_on_repository_id", unique: true
   end
 
   create_table "pending_bulk_selections", force: :cascade do |t|
@@ -374,6 +385,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_17_120000) do
   add_foreign_key "github_installations", "users"
   add_foreign_key "github_registration_grants", "users"
   add_foreign_key "ingest_rejections", "repositories"
+  add_foreign_key "near_duplicate_censuses", "repositories"
   add_foreign_key "pending_bulk_selections", "users"
   add_foreign_key "repositories", "users"
   add_foreign_key "repository_memberships", "repositories"

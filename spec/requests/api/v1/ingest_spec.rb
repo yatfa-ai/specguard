@@ -817,13 +817,39 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
 
     # The other half of that rule, and the one that keeps it from being vacuous: a payload with
-    # nothing to represent schedules nothing and says so.
-    # @intent: { entity: "POST /api/v1/ingest", action: "report pending for nothing to embed", behavior: "a payload with no representable spec schedules no job and answers pending rather than queued", layer: "request" }
-    it "reports pending, and enqueues nothing, when there is no spec to embed" do
-      expect { ingest(ingest_payload(specs: [])) }
-        .not_to have_enqueued_job(Ingest::IdentityResolutionJob)
+    # nothing to represent schedules nothing and says so. What this branch OWNS instead is the
+    # census request: no resolution job will run to request it downstream, and the run recorded
+    # above is already the repository's newest — the weighed run a live computation would now
+    # name. Without the request here, the stored near-duplicate census would keep its previous
+    # `weighed_run_id` while a live computation over the same inputs moved on, which is the one
+    # property the serve path may never break.
+    # @intent: { entity: "POST /api/v1/ingest", action: "report pending for nothing to embed", behavior: "a payload with no representable spec schedules no resolution job, answers pending rather than queued, and requests the stored census refresh itself", layer: "request" }
+    it "reports pending, enqueues no resolution job, and requests the census refresh" do
+      ingest(ingest_payload(specs: []))
 
       expect(response.parsed_body["embedding_status"]).to eq("pending")
+      # Exactly one job leaves this branch, and it is the census one: no resolution job exists on
+      # this path, so the census request can only come from here.
+      expect(ActiveJob::Base.queue_adapter.enqueued_jobs.map { |entry| entry[:job] })
+        .to contain_exactly(Ingest::NearDuplicateCensusJob)
+    end
+
+    # The census request must name the run that JUST landed, not merely exist: after the job
+    # drains, the stored census's weighed run is this empty ingest's run — exactly what a live
+    # computation over the same frozen inputs would weigh on. This is the stored-equals-live
+    # property for the branch that has no resolution job to keep it.
+    # @intent: { entity: "POST /api/v1/ingest", action: "re-weigh the census on the pending branch", behavior: "after a specs-empty ingest and its census job, the stored census's weighed_run_id is the new run, so stored equals live without a resolution job", layer: "request" }
+    it "re-weighs the stored census onto the run an empty ingest recorded" do
+      ingest(ingest_payload(specs: []))
+      run_id = response.parsed_body["test_run_id"]
+
+      # The job the branch above scheduled, run the way the worker would run it — the sibling
+      # example already pinned that it was this class, enqueued with this repository.
+      Ingest::NearDuplicateCensusJob.perform_now(repository.id)
+
+      census = NearDuplicateCensus.find_by!(repository_id: repository.id)
+      expect(census.payload).to be_present
+      expect(census.weighed_run_id).to eq(run_id)
     end
 
     # @intent: { entity: "POST /api/v1/ingest", action: "count the population and the slice", behavior: "the response separates the whole-spec total from the annotated slice so both adoption figures are visible", layer: "request" }

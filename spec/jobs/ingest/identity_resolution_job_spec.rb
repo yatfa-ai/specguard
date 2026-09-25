@@ -29,8 +29,37 @@ RSpec.describe Ingest::IdentityResolutionJob do
     run = record([unannotated_spec])
     id = run.id
     repository.destroy!
+    allow(NearDuplicateCensus).to receive(:request_refresh!)
 
     expect { described_class.perform_now(id) }.not_to raise_error
+    expect(NearDuplicateCensus).not_to have_received(:request_refresh!)
+  end
+
+  # THE STORED-CENSUS HANDOFF (SPGD-1474). A completed resolve is what makes the repository's
+  # stored near-duplicate census stale, so a completed resolve requests its refresh — and a FAILED
+  # resolve does not, because the census's inputs are not settled: a refresh computed over
+  # half-matched identities would store a census no live computation would ever return. The
+  # compute itself is the census job's, out of band; this seam only raises the marker and
+  # schedules it.
+  # @intent: { entity: "Ingest::IdentityResolutionJob", action: "request census refresh", behavior: "a completed resolve requests a near-duplicate census refresh for the run repository, and a failed resolve requests none", layer: "unit" }
+  it "requests the census refresh only after the resolve completes" do
+    run = record([unannotated_spec])
+    allow(NearDuplicateCensus).to receive(:request_refresh!)
+
+    described_class.perform_now(run.id)
+
+    expect(NearDuplicateCensus).to have_received(:request_refresh!).with(run.repository_id)
+  end
+
+  # @intent: { entity: "Ingest::IdentityResolutionJob", action: "withhold census refresh on failure", behavior: "a resolve that raises leaves the census refresh unrequested, so the stored census keeps its previous stamp until the next ingest", layer: "unit" }
+  it "requests no census refresh when the resolve raises" do
+    run = record([unannotated_spec])
+    allow(Ingest::IdentityResolver).to receive(:resolve).and_raise(ActiveRecord::RecordInvalid)
+    allow(NearDuplicateCensus).to receive(:request_refresh!)
+
+    expect { described_class.perform_now(run.id) }.to raise_error(ActiveRecord::RecordInvalid)
+
+    expect(NearDuplicateCensus).not_to have_received(:request_refresh!)
   end
 
   # @intent: { entity: "Ingest::IdentityResolutionJob", action: "delegate resolution", behavior: "performing hands the run record to Ingest::IdentityResolver.resolve unchanged", layer: "unit" }

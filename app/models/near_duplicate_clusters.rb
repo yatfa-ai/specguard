@@ -251,12 +251,20 @@ class NearDuplicateClusters
   # measured on a running application. See {SpecIdentity::VECTOR_OPERATOR_COST} and the literal
   # tenant bind at `.near_duplicate_pairs_in` for what makes the difference.
   #
-  # Extrapolated linearly, the 20,000-identity design point is tens of seconds. **So this is still
-  # not an object to hang off a synchronous page view at that size**, and the surfaces that consume
-  # it ship knowing so: the duplicate-clusters read (SPGD-115, completed 2026-09-06) is the opt-in
-  # `?near_duplicates=` ask, and {RequestedNearDuplicatesParam} quotes this very conclusion at its
-  # own flag. The sentence above about a census is a statement about the shape of the work, not a
-  # claim that a suite of any size renders instantly.
+  # Extrapolated linearly, the 20,000-identity design point is tens of seconds. **So this is not
+  # an object to hang off a synchronous page view at that size** — and since SPGD-1474 nothing
+  # does: the census is computed once per write that moves its inputs — at ingest
+  # (`Ingest::NearDuplicateCensusJob`, after identity resolution settles the identities) and on run
+  # deletion (`RunsController#destroy` requests the same recompute when the deleted run moved the
+  # weighed run) — persisted on `near_duplicate_censuses`, and served STORED
+  # from `RepositoryOverview#serialized_near_duplicates`, so the ask that used to pay this cost now
+  # reads one row. The opt-in `?near_duplicates=` ask that confined the cost to the client that
+  # named it (SPGD-115, completed 2026-09-06) survives as the wire contract, and
+  # {RequestedNearDuplicatesParam} still stands at the flag. The sentence above about a census is a
+  # statement about the shape of the work, not a claim that a suite of any size renders instantly —
+  # the difference is that the waiting now happens on the write paths, where the next run was going
+  # to be processed anyway, and a request arriving mid-compute is served the previous stored census
+  # with its stamp rather than asked to wait.
   #
   # The residual is a per-probe constant of roughly 2ms, and it is not the plan's fault: HNSW draws
   # its candidates from the whole index and applies `repository_id` afterwards, so a tenant that is
