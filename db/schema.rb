@@ -90,7 +90,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_25_002100) do
   create_table "near_duplicate_censuses", force: :cascade do |t|
     t.datetime "computed_at"
     t.datetime "created_at", null: false
-    t.jsonb "payload"
+    t.json "payload"
     t.datetime "refresh_wanted_at"
     t.bigint "repository_id", null: false
     t.datetime "updated_at", null: false

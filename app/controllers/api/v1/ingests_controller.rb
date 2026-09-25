@@ -131,8 +131,24 @@ class Api::V1::IngestsController < Api::BaseController
   # intent or a name. `Ingest::Payload#validate_name` refuses that spec, so in practice this is the
   # empty run — a client POSTing `specs: []`. Saying `"queued"` for it would be the same lie in
   # miniature.
+  #
+  # THE PENDING BRANCH STILL OWNS A CENSUS REQUEST. The stored near-duplicate census is requested
+  # by {Ingest::IdentityResolutionJob} after its resolve — but on THIS branch no such job exists,
+  # while the run recorded above still is the repository's newest, i.e. exactly the weighed run a
+  # live computation would now name. Letting the branch return without a request would leave the
+  # stored census stamped with the PREVIOUS run until some later non-empty ingest healed it — a
+  # stored artifact that a live computation over the same frozen inputs would answer differently,
+  # which is the one property this endpoint's serve path may never break. The inputs are already
+  # settled HERE (nothing asynchronous is pending), so this branch is the same moment the
+  # resolution job would have requested from; the marker's debounce and the census job's
+  # per-repository limit are what make an interleaving with a concurrent sharded delivery safe —
+  # whichever request lands last re-raises the marker and one compute re-weighs over the settled
+  # state.
   def enqueue_embeddings(test_run, specs)
-    return "pending" unless specs.any? { |spec| Ingest::SpecSignal.for(spec).present? }
+    unless specs.any? { |spec| Ingest::SpecSignal.for(spec).present? }
+      NearDuplicateCensus.request_refresh!(test_run.repository_id)
+      return "pending"
+    end
 
     Ingest::IdentityResolutionJob.perform_later(test_run.id)
     "queued"

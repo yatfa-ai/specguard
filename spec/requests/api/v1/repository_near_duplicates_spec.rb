@@ -142,21 +142,25 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       expect(cluster["similarity_range"]).to eq([0.89, 0.89])
     end
 
-    # @intent: { entity: "near_duplicates", action: "pin the key set", behavior: "the block serves only machine fields at every level - floor, basis, run id, computed-at stamp, counts and rows - and no prose label such as a duration or coverage sentence appears anywhere in the JSON", layer: "request" }
+    # @intent: { entity: "near_duplicates", action: "pin the key set", behavior: "the block serves only machine fields at every level - floor and basis first as the disclosure contract states, the stored figures in the written order, the two stamps appended last - and no prose label such as a duration or coverage sentence appears anywhere in the JSON", layer: "request" }
     it "serves exactly the keys this contract pins, and never the object's prose" do
       served = block(query: ask)
 
+      # ORDER, not just membership: the payload column is `json` precisely so the written order
+      # survives storage — `similarity_floor` and `similarity_basis` sit FIRST, ahead of every
+      # figure they qualify, and the two stamps merge at the end. A jsonb column would have
+      # normalized all of this away, which is exactly why it is not one; this pin is what keeps
+      # the column choice honest.
       expect(served.keys)
-        .to contain_exactly("similarity_floor", "similarity_basis", "weighed_run_id",
-                            "computed_at", "cluster_count", "truncated",
-                            "saturated_identity_count", "unresolved_count", "recorded_count",
-                            "identity_count", "clustered_identity_count", "clustered_timed_count",
-                            "clustered_example_count", "clusters")
+        .to eq(["similarity_floor", "similarity_basis", "cluster_count", "truncated",
+                "saturated_identity_count", "unresolved_count", "recorded_count",
+                "identity_count", "clustered_identity_count", "clustered_timed_count",
+                "clustered_example_count", "clusters", "weighed_run_id", "computed_at"])
       expect(served["clusters"].sole.keys)
-        .to contain_exactly("signal_source", "member_count", "example_count", "total_seconds",
-                            "timed_count", "similarity_range", "unobserved_members", "members")
+        .to eq(["signal_source", "member_count", "example_count", "total_seconds",
+                "timed_count", "similarity_range", "unobserved_members", "members"])
       expect(served["clusters"].sole["members"].first.keys)
-        .to contain_exactly("text", "file_path", "line_number", "example_count", "total_seconds")
+        .to eq(["text", "file_path", "line_number", "example_count", "total_seconds"])
       # `duration_label`, `coverage_label` and `identity_coverage_label` are each one call away on
       # the object and none is served: human sentences a machine client cannot act on.
       expect(served.to_json).not_to match(/\d\.\d+s|not reported|of \d/)

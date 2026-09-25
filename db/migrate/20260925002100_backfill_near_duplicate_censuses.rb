@@ -45,9 +45,21 @@ class BackfillNearDuplicateCensuses < ActiveRecord::Migration[8.1]
   # and a row whose repository has vanished between the SELECT and the enqueue is impossible:
   # both statements read the same transaction snapshot. A repository with no runs is excluded at
   # the source, on this file's header's reasoning.
+  #
+  # The request goes through {NearDuplicateCensus.request_refresh!}, NOT a bare
+  # `NearDuplicateCensusJob.perform_later`: the job honours a MARKER — its loop exits when no
+  # census row exists or no marker is raised, which is exactly the state of every row this
+  # migration runs against, because the table was created one migration earlier and is empty.
+  # A bare enqueue would schedule a fleet's worth of jobs that each computed nothing, and every
+  # existing repository would read `near_duplicates: null` until its next ingest — the served
+  # regression this migration exists to close, re-opened by its own enqueue.
+  # `request_refresh!` writes the marker (creating the row) BEFORE the job is scheduled — its
+  # own comment states that ordering as the invariant the job's reader depends on — so each
+  # backfilled job finds a wanted marker, computes over the data as it stands, and stores the
+  # stamped artifact the request path serves.
   def up
     Repository.joins(:test_runs).distinct.find_each do |repository|
-      Ingest::NearDuplicateCensusJob.perform_later(repository.id)
+      NearDuplicateCensus.request_refresh!(repository.id)
     end
   end
 

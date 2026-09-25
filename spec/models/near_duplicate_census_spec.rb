@@ -81,7 +81,7 @@ RSpec.describe NearDuplicateCensus do
     # THE CONTRACT THE WHOLE TICKET RESTS ON: the stored artifact is what `NearDuplicateClusters`
     # computes for the same data — read field by field off the LIVE object, never re-derived, so
     # the serve path can promise stored-equals-live rather than hope for it. (The stored payload
-    # reads back with string keys — jsonb round-trips — so the expectation stringifies its own.)
+    # reads back with string keys — json round-trips — so the expectation stringifies its own.)
     # @intent: { entity: "NearDuplicateCensus", action: "store the live computation", behavior: "refreshing stores a payload whose every summary figure equals the live NearDuplicateClusters computation over the same data", layer: "unit" }
     it "stores exactly what the live computation returns for the same data" do
       near_duplicate_pair

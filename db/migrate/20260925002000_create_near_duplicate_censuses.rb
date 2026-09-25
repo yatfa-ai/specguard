@@ -22,7 +22,7 @@
 #
 # **Storing clusters, not raw pairs, is a bound on this table's growth.** The pair read returns up
 # to `identities × k` edges — two million at the design point — and they are an intermediate: the
-# census's answer is the handful of clusters they assemble into. A `payload` jsonb holding the
+# census's answer is the handful of clusters they assemble into. A `payload` json holding the
 # serialized clusters stores the ANSWER at the size the wire response already was, and serving is
 # a read of that column, not a re-assembly.
 #
@@ -74,9 +74,17 @@ class CreateNearDuplicateCensuses < ActiveRecord::Migration[8.1]
       t.datetime :computed_at
 
       # THE STORED CENSUS — the serialized clusters and their summary figures, exactly as the
-      # request path used to assemble them live. JSONB because it is written once per ingest and
-      # read whole; never queried by content, so no index serves it.
-      t.jsonb :payload
+      # request path used to assemble them live. `json`, not `jsonb`, ON PURPOSE, and not for
+      # size or indexing: jsonb NORMALIZES its keys (sorted by length, then bytewise, duplicates
+      # dropped), so the written order of `snapshot_payload` — `similarity_floor` and
+      # `similarity_basis` first, ahead of every figure they qualify — would be silently
+      # re-sorted into a different order on the way out. The served block's disclosure contract
+      # states that order (see `RepositoryOverview#serialized_near_duplicates` and the MCP
+      # tool's README), so the column must preserve what the writer wrote, which is exactly
+      # what `json` is: the text as sent, read back in the order it was written. It is written
+      # once per ingest and read whole, never queried by content, so jsonb's containment and
+      # indexing machinery buys nothing here.
+      t.json :payload
 
       # THE RECOMPUTE MARKER. Set by the ingest half, cleared by the job that honoured it — the
       # debounce and the freshness contract in one column. See `request_refresh!` on the model.

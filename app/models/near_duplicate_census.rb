@@ -155,9 +155,12 @@ class NearDuplicateCensus < ApplicationRecord
     # the figures and the run they were weighed on cannot be stored apart.
     #
     # A stored payload is written once per ingest and read whole; it is never queried by content,
-    # so it is a jsonb column and not a graph of tables. Storing the raw PAIR read instead would
-    # grow this table with `identities × k` rows per repository — the census's answer is the
-    # clusters, and the clusters are what is kept.
+    # so it is a json column and not a graph of tables — and json rather than jsonb, because
+    # jsonb normalizes key order and the block's disclosure contract states the written order
+    # (`similarity_floor` and `similarity_basis` first); see the column comment on the table's
+    # migration. Storing the raw PAIR read instead would grow this table with `identities × k`
+    # rows per repository — the census's answer is the clusters, and the clusters are what is
+    # kept.
     def snapshot_payload(clusters)
       {
         similarity_floor: clusters.similarity_floor,
@@ -205,6 +208,14 @@ class NearDuplicateCensus < ApplicationRecord
   # the top level beside the figures, which is the contract the block has always had for
   # `weighed_run_id`; `computed_at` joins it as the freshness half, because a census answer
   # without when it was taken is a claim about a suite state nothing dates.
+  #
+  # THE ORDER IS THE WRITTEN ORDER, and it survives because the payload column is `json`, not
+  # `jsonb`: `snapshot_payload` writes `similarity_floor` and `similarity_basis` first — the
+  # disclosure contract the serve path's comment and the MCP README both state — and those two
+  # keys reach the consumer first, ahead of every figure they qualify, exactly as the live
+  # serialization used to assemble them. The two stamps merge at the END of the block: appended
+  # keys ride behind the payload in one deterministic order (`weighed_run_id`, then
+  # `computed_at`), never interleaved into the figures jsonb would have re-sorted.
   #
   # Refuses a never-computed row: `payload` nil is marker plumbing (see the class comment), and
   # serving it would render `null` figures as if they were a census of nothing.
