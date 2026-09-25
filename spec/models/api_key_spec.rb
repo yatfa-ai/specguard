@@ -5,6 +5,14 @@ require "rails_helper"
 RSpec.describe ApiKey do
   let(:repository) { create_repository }
 
+  # @intent: { entity: "ApiKey", action: "refuse a NUL in the name", behavior: "a key built with a NUL character in its name is invalid with an error on :name, so a mint is refused by validation instead of raising at INSERT (Postgres cannot store a NUL)", layer: "unit" }
+  it "refuses a name containing a NUL character" do
+    api_key = repository.api_keys.new(name: "CI\u0000x")
+
+    expect(api_key).not_to be_valid
+    expect(api_key.errors).to include(:name)
+  end
+
   # @intent: { entity: "ApiKey", action: "store a token", behavior: "only the SHA-256 digest reaches the database, so the raw sgk_ value exists solely in memory after creation", layer: "unit" }
   it "never persists the raw token — only its SHA-256 digest" do
     api_key = repository.api_keys.create!

@@ -55,6 +55,21 @@ RSpec.describe "Repository API keys (web)", type: :request do
 
       expect(response).to have_http_status(:not_found)
     end
+
+    # SPGD-1476: a NUL in the name is refused by the model's format validator, so the mint
+    # redirects back with an alert and writes nothing instead of raising at INSERT (Postgres
+    # cannot store a NUL). The double-quoted literal is load-bearing — the single-quoted
+    # 'CI\u0000x' is six printable characters and must still mint.
+    # @intent: {"entity": "POST /repositories/:id/api_keys", "action": "refuse a NUL in the name", "behavior": "minting a key whose name carries a NUL redirects back to the repository page with an alert, writes no key, and reveals no token", "layer": "request"}
+    it "redirects with an alert and writes nothing when the name carries a NUL" do
+      expect {
+        post repository_api_keys_path(repository), params: { api_key: { name: "CI\u0000x" } }
+      }.not_to change(ApiKey, :count)
+
+      expect(response).to redirect_to(repository_path(repository))
+      expect(flash[:alert]).to be_present
+      expect(flash[:revealed_api_key]).to be_nil
+    end
   end
 
   describe "revoking (DELETE /repositories/:id/api_keys/:key_id)" do

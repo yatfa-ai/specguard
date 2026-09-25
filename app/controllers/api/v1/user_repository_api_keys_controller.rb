@@ -76,9 +76,16 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
   # The name is optional and defaults to the same constant the other three minting paths read
   # (`ApiKeysController`, `UserRepositoriesController#create`, `BulkRegistration`), so a key minted
   # by an agent and one minted in a browser are named by one rule rather than two conventions.
+  # A refused mint (a `name` carrying a NUL is the case the model guards) answers this API's own
+  # 400 JSON through `render_bad_request`, the same funnel `UserRepositoriesController` and the
+  # members controller mint-side refusals take — a raise at INSERT would surface as an HTML 500
+  # and break the JSON-error contract, so `new` + `save` keeps the refusal inside the API's own
+  # response shape.
   def create
     repository = current_repository(:keys_manage)
-    api_key = repository.api_keys.create!(name: key_name, created_by_user: attributed_user)
+    api_key = repository.api_keys.new(name: key_name, created_by_user: attributed_user)
+
+    return render_bad_request(api_key.errors.full_messages) unless api_key.save
 
     render json: minted_body(api_key), status: :created
   end

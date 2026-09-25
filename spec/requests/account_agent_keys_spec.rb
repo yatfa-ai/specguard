@@ -86,6 +86,23 @@ RSpec.describe "Account agent keys", type: :request do
     expect(response.body).to include("cannot open")
   end
 
+  # SPGD-1476: a NUL in the name is refused by the model's format validator, so the mint takes the
+  # same else branch as the grant refusals above — redirect with an alert — and writes nothing,
+  # instead of raising at INSERT (Postgres cannot store a NUL). The double-quoted literal is
+  # load-bearing: a single-quoted '\u0000' is six printable characters and must still mint.
+  # @intent: { entity: "AgentApiKey", action: "refuse a NUL in the name", behavior: "minting a key whose name carries a NUL redirects back to /account with an alert and writes no key", layer: "request" }
+  it "redirects with an alert and writes nothing when the name carries a NUL" do
+    repository = mint_grant
+
+    expect {
+      post account_agent_keys_path, params: { agent_api_key: { name: "Fleet\u0000agent",
+                                                               repository_ids: [repository.id] } }
+    }.not_to change(AgentApiKey, :count)
+
+    expect(response).to redirect_to(account_path(anchor: "agent-keys"))
+    expect(flash[:alert]).to be_present
+  end
+
   # REVOCATION IS A RETIREMENT: the token stops authenticating over the API, the row stays so the
   # still-presenting token remains attributable, and the account page keeps showing it.
   # @intent: { entity: "AgentApiKey", action: "revoke from the account page", behavior: "DELETE retires the key so its token answers 401 while the row and the page listing remain", layer: "request" }

@@ -27,24 +27,32 @@ class UserApiKeysController < ApplicationController
   # Reveal-once: the raw token rides the flash for exactly the redirect that follows, and is never
   # persisted anywhere. Only the SHA-256 digest reaches the database.
   def create
-    user_api_key = current_user.user_api_keys.create!(name: user_api_key_name)
+    user_api_key = current_user.user_api_keys.new(name: user_api_key_name)
 
-    # This surface's OWN pair of flash keys — deliberately NAMED APART from the pair
-    # `ApiKeysController#reveal` writes, while staying one mechanism (see `AccountsController#show`).
-    # Two mailboxes, one postal service: a flash is delivered to whatever request arrives NEXT,
-    # and while the two surfaces shared one namespace, an intervening `repositories#show` read this
-    # surface's mint off the flash and rendered a fresh `sgu_` token in a panel that labelled it
-    # that repository's CI key, beside curls it would 401 against. Distinct names confine each
-    # surface's reveal to its own reader. What they cannot confine is the transport itself: an
-    # intervening request still consumes the flash and leaves the token rendering nowhere (revoke
-    # and re-mint) — the reveal-once mechanism's own cost, unchanged here. `revealed_user_api_key`
-    # stays a BARE token because the copy-text Stimulus controller copies that element's text
-    # verbatim, which is why the name travels separately.
-    flash[:revealed_user_api_key] = user_api_key.raw_token
-    flash[:revealed_user_api_key_name] = user_api_key.name
+    if user_api_key.save
+      # This surface's OWN pair of flash keys — deliberately NAMED APART from the pair
+      # `ApiKeysController#reveal` writes, while staying one mechanism (see `AccountsController#show`).
+      # Two mailboxes, one postal service: a flash is delivered to whatever request arrives NEXT,
+      # and while the two surfaces shared one namespace, an intervening `repositories#show` read this
+      # surface's mint off the flash and rendered a fresh `sgu_` token in a panel that labelled it
+      # that repository's CI key, beside curls it would 401 against. Distinct names confine each
+      # surface's reveal to its own reader. What they cannot confine is the transport itself: an
+      # intervening request still consumes the flash and leaves the token rendering nowhere (revoke
+      # and re-mint) — the reveal-once mechanism's own cost, unchanged here. `revealed_user_api_key`
+      # stays a BARE token because the copy-text Stimulus controller copies that element's text
+      # verbatim, which is why the name travels separately.
+      flash[:revealed_user_api_key] = user_api_key.raw_token
+      flash[:revealed_user_api_key_name] = user_api_key.name
 
-    redirect_to account_path(anchor: REVEAL_ANCHOR),
-                notice: "API key created. Copy it now — it is shown only once."
+      redirect_to account_path(anchor: REVEAL_ANCHOR),
+                  notice: "API key created. Copy it now — it is shown only once."
+    else
+      # A refused mint (a `name` carrying a NUL is the case the model guards) redirects back to
+      # /account with the model's sentence, matching `AgentApiKeysController`'s else branch on the
+      # same page. Nothing was written, so there is no reveal flash to clean up.
+      redirect_to account_path,
+                  alert: user_api_key.errors.full_messages.to_sentence
+    end
   end
 
   # Retires ONE key. Every other key this person holds keeps working: resolution is a lookup of one

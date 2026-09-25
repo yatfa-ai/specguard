@@ -55,7 +55,14 @@ class ApiKey < ApplicationRecord
   before_validation :assign_token, on: :create
 
   validates :token_digest, presence: true, uniqueness: true
-  validates :name, presence: true
+  # A NUL in `name` is refused, not scrubbed: Postgres cannot store that character, so a row that
+  # passed validation would die at INSERT with `ArgumentError: string contains null byte` and the
+  # mint would surface as a 500 with nothing written. The same refuse-don't-coerce rule
+  # `Ingest::Payload` states and `Repository` follows for `github_full_name` (see its `NUL`
+  # comment). There is no uniqueness validator on `name`, so — unlike `Repository` — no validator
+  # can run a query with the NUL before this one answers.
+  validates :name, presence: true,
+                   format: { without: /\u0000/, message: "must not contain a NUL character" }
 
   def self.digest(token)
     OpenSSL::Digest::SHA256.hexdigest(token.to_s)

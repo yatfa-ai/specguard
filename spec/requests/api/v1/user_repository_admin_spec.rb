@@ -122,6 +122,31 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
       expect(response.parsed_body.dig("api_key", "name")).to eq(ApiKey::DEFAULT_NAME)
     end
 
+    # SPGD-1476: a NUL in the name is refused by the model's format validator, so the mint
+    # answers this API's own 400 JSON and writes nothing instead of raising at INSERT (Postgres
+    # cannot store a NUL). The double-quoted literal is load-bearing — a single-quoted
+    # 'CI\u0000x' is six printable characters and must still mint, which the next example pins.
+    # @intent: { entity: "api key", action: "refuse a NUL in the name", behavior: "minting a key whose name carries a NUL answers 400 bad_request JSON with no key written, instead of raising at INSERT", layer: "request" }
+    it "answers 400 bad_request and writes nothing when the name carries a NUL" do
+      expect {
+        post mint_path, params: { name: "CI\u0000x" }, headers: bearer(owner_key.raw_token)
+      }.not_to change(ApiKey, :count)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body).to include("error" => "bad_request")
+    end
+
+    # Counterweight: the escape as TEXT is not the character. 'CI\u0000x' (single-quoted, six
+    # printable characters, no NUL anywhere in it) mints exactly as before and is stored
+    # byte-unchanged — the guard matches the NUL character, never its escape text.
+    # @intent: { entity: "api key", action: "mint a name whose NUL escape is text", behavior: "the six printable characters CI backslash u0000x (no NUL in them) still mint with 201 and store byte-unchanged, so the guard matches the character and not its escape text", layer: "request" }
+    it "still mints a name whose \\u0000 escape is mere text" do
+      post mint_path, params: { name: 'CI\u0000x' }, headers: bearer(owner_key.raw_token)
+
+      expect(response).to have_http_status(:created)
+      expect(repository.api_keys.last.name).to eq('CI\u0000x')
+    end
+
     # @intent: { entity: "api key", action: "mint for a member", behavior: "a member granted keys.manage mints successfully and the new key is attributed to that member", layer: "request" }
     it "mints for a member granted keys.manage, attributed to them" do
       create_membership(repository: repository, user: member, permissions: %w[view keys.manage])
