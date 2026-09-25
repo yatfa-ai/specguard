@@ -1776,6 +1776,50 @@ class SpecObservation < ApplicationRecord
     { recorded_count: counts[0].to_i, unresolved_count: counts[1].to_i }
   end
 
+  # The DECLARED INTENT LAYERS of the examples that resolved to each of the named identities — the
+  # read {NearDuplicateClusters}'s declared-layer cut is built on, and the reason that cut is a
+  # report over stored declarations rather than a detector.
+  #
+  # `intent_layer` is the protocol's `layer`, validated at the door (`Ingest::Payload#validate_intent`
+  # against the four-token enum) and stored per example exactly as declared —
+  # {Ingest::ObservationRecorder#intent_attributes} is explicit that nothing infers it, and the
+  # motivating case is on record there: a `layer: "request"` example living under `spec/models/`
+  # stores `"request"`. This read adds nothing to that value and nothing to the codebase's shape:
+  # no path-based inference, no default, no fallback — a member whose examples carry no layer is
+  # ABSENT from the returned map, and absent is the undeclared state the census reports.
+  #
+  # == The grain is the identity's whole history, deliberately not one run's
+  #
+  # The census's weight figures are ONE run's and its membership spans every run; the layer is a
+  # declaration, not a measurement, so it follows membership rather than weight. An identity the
+  # weighed run did not observe — deleted, renamed, deselected — keeps the layer its examples
+  # declared, which is what keeps such a member out of the undeclared group it would be misfiled
+  # into if the read were scoped to the run. An identity whose declarations DISAGREE across its
+  # examples (the same text annotated at two layers, or a layer corrected between runs) comes back
+  # with every distinct value it declared, sorted: the census's rule for that member is to report it
+  # under each layer it declared, because collapsing a disagreement to one value would be the guess
+  # this read exists to make unnecessary.
+  #
+  # One indexed round trip over `index_spec_observations_on_spec_identity_id`, DISTINCT down to
+  # `(spec_identity_id, intent_layer)` — a cluster's handful of identities never carry more rows
+  # than their examples did, and the collapse happens in the database rather than in Ruby.
+  #
+  # @param identity_ids [Array<Integer>] the census cluster members to read. Empty in, empty out —
+  #   a repository with no clusters asks no question of this table.
+  # @return [Hash{Integer=>Array<String>}] identity id => its DISTINCT declared layers, sorted.
+  def self.declared_layers_by_identity(identity_ids)
+    return {} if identity_ids.empty?
+
+    where(spec_identity_id: identity_ids)
+      .where.not(intent_layer: nil)
+      .distinct
+      .order(:spec_identity_id, :intent_layer)
+      .pluck(:spec_identity_id, :intent_layer)
+      .each_with_object({}) do |(identity_id, layer), map|
+        (map[identity_id] ||= []) << layer
+      end
+  end
+
   # Step one of two: WHICH durable tests a repository-grain ranking is going to be about — the
   # slowest identities of ONE run, with the coverage of the population they were ranked out of
   # riding back beside them.

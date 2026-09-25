@@ -1652,7 +1652,14 @@ class RepositoryOverview
   # touched. No spec may pin either as a literal; `near_duplicate_clusters_spec.rb` establishes
   # that discipline for the constants themselves. A cluster count rendered without the statement
   # of what the similarity means is the *Vacuous Green* failure in a new spelling, which is why
-  # the two keys sit FIRST on this block, ahead of every figure they qualify.
+  # the disclosure keys sit FIRST on this block, ahead of every figure they qualify.
+  #
+  # The declared-layer cut rides the same rule and the same artifact (SPGD-1475): `layer_source`
+  # joins the two disclosure keys at the head of the block, and each cluster carries its
+  # `layer_redundancy` and `layer_groups` exactly as the compute stored them — declared via the
+  # intent protocol, never inferred, with `layer_source` `nil` on a suite that declared nothing.
+  # `NearDuplicateCensus`'s class comment owns why the cut lives inside the stored payload rather
+  # than being re-joined here.
   #
   # The rest of the block's shapes — raw figures, never the object's prose; `member_count` against
   # `example_count` at their two grains — are `NearDuplicateCensus.snapshot_payload`'s to word,

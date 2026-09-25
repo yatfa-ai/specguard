@@ -153,13 +153,14 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       # normalized all of this away, which is exactly why it is not one; this pin is what keeps
       # the column choice honest.
       expect(served.keys)
-        .to eq(["similarity_floor", "similarity_basis", "cluster_count", "truncated",
+        .to eq(["similarity_floor", "similarity_basis", "layer_source", "cluster_count", "truncated",
                 "saturated_identity_count", "unresolved_count", "recorded_count",
                 "identity_count", "clustered_identity_count", "clustered_timed_count",
                 "clustered_example_count", "clusters", "weighed_run_id", "computed_at"])
       expect(served["clusters"].sole.keys)
         .to eq(["signal_source", "member_count", "example_count", "total_seconds",
-                "timed_count", "similarity_range", "unobserved_members", "members"])
+                "timed_count", "similarity_range", "unobserved_members",
+                "layer_redundancy", "layer_groups", "members"])
       expect(served["clusters"].sole["members"].first.keys)
         .to eq(["text", "file_path", "line_number", "example_count", "total_seconds"])
       # `duration_label`, `coverage_label` and `identity_coverage_label` are each one call away on
@@ -222,6 +223,27 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       expect(served["saturated_identity_count"]).to eq(0)
     end
 
+    # THE LAYER-FREE SUITE, STATED AS ABSENT. This fixture annotates nothing, so no member
+    # declared a layer anywhere: the stamp is `null` — the dimension stated as absent, never
+    # rendered as a fiction — and each cluster still carries its layer shape, with every member
+    # in the `layer: null` group and no redundancy verdict over members that never spoke.
+    # @intent: { entity: "near_duplicates", action: "state the absent layer dimension", behavior: "a suite with no declared layers anywhere serves layer_source null and clusters whose members sit in one null layer group with no redundancy verdict", layer: "request" }
+    it "states the layer dimension as absent on a suite that declared nothing" do
+      served = block(query: ask)
+
+      expect(served["layer_source"]).to be_nil
+      cluster = served["clusters"].sole
+      expect(cluster["layer_redundancy"]).to be_nil
+      expect(cluster["layer_groups"].size).to eq(1)
+      undeclared_group = cluster["layer_groups"].sole
+      expect(undeclared_group["layer"]).to be_nil
+      # The members are RE-GROUPED, not replaced: the undeclared group holds both members, in the
+      # same five-field shape the flat list serves, so nothing was dropped from its cluster.
+      expect(undeclared_group["members"].pluck("text")).to contain_exactly(expired, outright)
+      expect(undeclared_group["members"].first.keys)
+        .to eq(["text", "file_path", "line_number", "example_count", "total_seconds"])
+    end
+
     # THE FRESHNESS WINDOW, at the wire. A second ingest lands and the stored census is stale, but
     # its recompute has not run yet (the resolution job raised the marker; the census job has not
     # honoured it). The request serves the PREVIOUS stored census with ITS OWN stamp — never a
@@ -276,6 +298,55 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
 
       expect(queries_against("spec_identities") { get_repository(query: ask) }).to be_empty
       expect(queries_against("near_duplicate_censuses") { get_repository(query: ask) }).to be_present
+    end
+  end
+
+  # THE TEST-PYRAMID QUESTION, AT THE WIRE. Two annotated tests whose intent triples read alike —
+  # the calibrated one-word-apart shape — declared at DIFFERENT layers: one cluster, two distinct
+  # declared layers, reported as cross-layer redundancy with the members grouped under the layer
+  # each declared. The declaration rides the ingest path (validated at the door, stored per
+  # example), so everything served here is the stored artifact's own cut. The repository is this
+  # describe's own, because the headline fixture above already clusters name-derived texts and the
+  # census here must hold exactly one cluster.
+  describe "a repository whose duplicates span declared layers" do
+    let(:cross_layer_repository) { separate_repository("acme/cross-layer") }
+    let(:cross_layer_key) { cross_layer_repository.api_keys.create! }
+
+    before do
+      ingest(cross_layer_repository,
+             [annotated_spec(file_path: "spec/models/checkout_spec.rb", line_number: 3,
+                             entity: "Checkout", action: "rejects",
+                             behavior: "an expired card payment", layer: "unit"),
+              annotated_spec(file_path: "spec/requests/checkout_spec.rb", line_number: 9,
+                             entity: "Checkout", action: "rejects",
+                             behavior: "an expired card payment outright", layer: "request")])
+    end
+
+    # @intent: { entity: "near_duplicates", action: "serve the cross-layer cut", behavior: "a cluster spanning two declared layers serves cross_layer redundancy with members grouped by declared layer and the declared layer source stamped first", layer: "request" }
+    it "serves the cluster grouped by declared layer, as cross-layer redundancy" do
+      served = block(key: cross_layer_key, query: ask)
+
+      expect(served["layer_source"]).to eq(NearDuplicateClusters::LAYER_SOURCE)
+      cluster = served["clusters"].sole
+      expect(cluster["layer_redundancy"]).to eq("cross_layer")
+      expect(cluster["layer_groups"].map { |group| group["layer"] }).to eq(%w[request unit])
+
+      request_group = cluster["layer_groups"].first
+      expect(request_group["members"].sole).to include(
+        "text" => "Checkout rejects an expired card payment outright",
+        "file_path" => "spec/requests/checkout_spec.rb"
+      )
+      unit_group = cluster["layer_groups"].last
+      expect(unit_group["members"].sole).to include(
+        "text" => "Checkout rejects an expired card payment",
+        "file_path" => "spec/models/checkout_spec.rb"
+      )
+
+      # The flat member list is untouched by the cut — the groups are a second view of the same
+      # members, not a replacement of the listing the block has always served.
+      expect(cluster["members"].pluck("text"))
+        .to contain_exactly("Checkout rejects an expired card payment",
+                            "Checkout rejects an expired card payment outright")
     end
   end
 

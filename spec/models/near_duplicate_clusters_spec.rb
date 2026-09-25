@@ -50,13 +50,20 @@ RSpec.describe NearDuplicateClusters do
   # One example that resolved to `identity`. `name` is settable apart from the identity's text so a
   # caller can model the case the whole object exists for: several examples whose `full_description`
   # is VERBATIM identical, which the unique key collapses onto one identity row.
-  def observe(identity, duration: 0.5, test_run: run, name: identity.text)
+  #
+  # `layer:` models an ANNOTATED example — the only kind that carries a declared intent layer — and
+  # sets the observation's status with it, so a layer-bearing row here is the shape the ingest path
+  # writes (`status: "annotated"`, `intent_layer` from the `@intent`), never a layer on a row that
+  # claims to be unannotated. Passing no layer keeps the row unannotated exactly as before.
+  def observe(identity, duration: 0.5, test_run: run, name: identity.text, layer: nil)
     @sequence = @sequence.to_i + 1
     SpecObservation.create!(
       repository: repository, test_run: test_run, spec_identity: identity,
       example_id: "./#{identity.file_path}[1:#{@sequence}]",
       file_path: identity.file_path, spec_file_path: identity.file_path,
-      line_number: @sequence, name: name, status: "unannotated",
+      line_number: @sequence, name: name,
+      status: layer ? "annotated" : "unannotated",
+      intent_layer: layer,
       outcome: "passed", duration_seconds: duration
     )
   end
@@ -282,6 +289,191 @@ RSpec.describe NearDuplicateClusters do
 
       expect(result.clustered_identity_count).to eq(3)
       expect(result.clustered_example_count).to eq(4)
+    end
+  end
+
+  # The declared-layer cut (SPGD-1475). Every example here is a report over DECLARATIONS: the
+  # layers on these rows are what fixtures' `@intent`s would have said, read back off
+  # `spec_observations.intent_layer`, and nothing in the cut consults a path — the motivating
+  # fixture below is a `request`-declared test living under `spec/models/` precisely because paths
+  # lie and declarations do not.
+  describe "the declared-layer cut" do
+    # The calibrated pair, each side annotated at a DIFFERENT layer: the same behaviour covered on
+    # two levels, which is the test-pyramid question the census can now answer.
+    # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "a cluster whose members declared different layers is reported as cross-layer redundancy with the members grouped under the layer each declared", layer: "unit" }
+    it "reports a cluster spanning two declared layers as cross-layer redundancy" do
+      unit_copy = identity(EXPIRED, source: "intent", line: 3)
+      request_copy = identity(OUTRIGHT, source: "intent", line: 9)
+      observe(unit_copy, layer: "unit")
+      observe(request_copy, layer: "request")
+
+      cluster = described_class.for(repository).clusters.sole
+
+      expect(cluster.layer_redundancy).to eq("cross_layer")
+      expect(cluster.declared_layers).to eq(%w[request unit])
+      expect(cluster.layer_groups.map(&:layer)).to eq(%w[request unit])
+      expect(cluster.layer_groups.first.members.map(&:text)).to eq([OUTRIGHT])
+      expect(cluster.layer_groups.last.members.map(&:text)).to eq([EXPIRED])
+    end
+
+    # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "a cluster confined to one declared layer is reported as same-layer redundancy rather than cross-layer", layer: "unit" }
+    it "reports a cluster confined to one declared layer as same-layer redundancy" do
+      first_copy = identity(EXPIRED, source: "intent", line: 3)
+      second_copy = identity(OUTRIGHT, source: "intent", line: 9)
+      observe(first_copy, layer: "unit")
+      observe(second_copy, layer: "unit")
+
+      cluster = described_class.for(repository).clusters.sole
+
+      expect(cluster.layer_redundancy).to eq("same_layer")
+      expect(cluster.declared_layers).to eq(%w[unit])
+      expect(cluster.layer_groups.map(&:layer)).to eq(%w[unit])
+      expect(cluster.layer_groups.sole.members.size).to eq(2)
+    end
+
+    # THE UNDECLARED MEMBER STAYS. An identity whose examples carry no annotation is reported under
+    # the `layer: nil` group — never assigned a layer, never dropped from its cluster — and a
+    # cluster holding declared AND undeclared members spans one declared layer, which is same-layer
+    # and not a fiction, because one layer really was declared here.
+    # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "an undeclared member is reported in the null layer group without being dropped from its cluster, beside a declared member the cluster reads as same-layer", layer: "unit" }
+    it "keeps an undeclared member in its cluster under the null layer group" do
+      declared = identity(EXPIRED, source: "intent", line: 3)
+      undeclared = identity(OUTRIGHT, source: "intent", line: 9)
+      observe(declared, layer: "unit")
+      # The legacy shape for an undeclared INTENT-derived member: annotated rows written before the
+      # layer column existed (migration 20260827120000), which store a NULL layer on rows whose
+      # status says annotated. The current ingest path cannot write this state — the schema has
+      # required `layer` since — and the census must still report it as undeclared.
+      SpecObservation.create!(
+        repository: repository, test_run: run, spec_identity: undeclared,
+        example_id: "./spec/models/checkout_spec.rb[2:1]",
+        file_path: undeclared.file_path, spec_file_path: undeclared.file_path,
+        line_number: 9, name: undeclared.text, status: "annotated", intent_layer: nil,
+        outcome: "passed", duration_seconds: 0.5
+      )
+
+      cluster = described_class.for(repository).clusters.sole
+
+      expect(cluster.member_count).to eq(2)
+      expect(cluster.layer_redundancy).to eq("same_layer")
+      expect(cluster.layer_groups.map(&:layer)).to eq(["unit", nil])
+      undeclared_group = cluster.layer_groups.last
+      expect(undeclared_group.members.map(&:text)).to eq([OUTRIGHT])
+    end
+
+    # A cluster whose members declared NOTHING is neither cross-layer nor same-layer: there is no
+    # layer agreement to report, and folding it into `same_layer` would be the same-layer fiction
+    # over a suite that never spoke.
+    # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "a cluster whose members all declared no layer is neither redundancy state, and the census states its layer source as absent", layer: "unit" }
+    it "refuses a redundancy verdict for a cluster whose members declared nothing" do
+      identity(EXPIRED, line: 3)
+      identity(OUTRIGHT, line: 9)
+
+      result = described_class.for(repository)
+
+      cluster = result.clusters.sole
+      expect(cluster.layer_redundancy).to be_nil
+      expect(cluster.declared_layers).to be_empty
+      expect(cluster.layer_groups.map(&:layer)).to eq([nil])
+      expect(cluster.layer_groups.sole.members.size).to eq(2)
+      # And the whole-census stamp says the dimension never spoke — absence stated, not rendered
+      # as an empty fiction.
+      expect(result.layer_source).to be_nil
+    end
+
+    # THE MOTIVATING CASE: a `request`-declared example living under `spec/models/`. The path says
+    # "unit" to any convention-based guess; the declaration says "request"; the cut serves the
+    # declaration, which is the entire reason it is a cut of stored annotations and not a
+    # directory mapping.
+    # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "a request-declared test living under spec models is reported at its declared layer, never at the layer its path suggests", layer: "unit" }
+    it "reports the declared layer and never the path's convention" do
+      lying_path_copy = identity(EXPIRED, source: "intent", line: 3,
+                                 path: "spec/models/checkout_spec.rb")
+      partner = identity(OUTRIGHT, source: "intent", line: 9)
+      observe(lying_path_copy, layer: "request")
+      observe(partner, layer: "request")
+
+      cluster = described_class.for(repository).clusters.sole
+
+      expect(cluster.layer_redundancy).to eq("same_layer")
+      expect(cluster.declared_layers).to eq(%w[request])
+      expect(cluster.layer_groups.sole.layer).to eq("request")
+    end
+
+    # One TEXT declared at two layers — two examples sharing it collapse onto ONE identity, and the
+    # member itself is then tested on more than one level. It appears in EACH group it declared,
+    # and its cluster is cross-layer on the strength of that one member.
+    # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "a member whose own examples declared two layers appears in each layer group and makes its cluster cross-layer", layer: "unit" }
+    it "reports a twice-declared member under each layer it declared" do
+      twice_declared = identity(EXPIRED, source: "intent", line: 3)
+      partner = identity(OUTRIGHT, source: "intent", line: 9)
+      observe(twice_declared, layer: "unit")
+      observe(twice_declared, layer: "request")
+      observe(partner, layer: "request")
+
+      cluster = described_class.for(repository).clusters.sole
+
+      expect(cluster.member_count).to eq(2)
+      expect(cluster.layer_redundancy).to eq("cross_layer")
+      request_group = cluster.layer_groups.first
+      unit_group = cluster.layer_groups.last
+      expect(request_group.layer).to eq("request")
+      expect(request_group.members.map(&:text)).to eq([EXPIRED, OUTRIGHT])
+      expect(unit_group.layer).to eq("unit")
+      expect(unit_group.members.map(&:text)).to eq([EXPIRED])
+    end
+
+    # A member the weighed run did not observe keeps the layer its examples declared — the layer
+    # follows MEMBERSHIP, not the weighed run, so a deleted test is not misfiled as undeclared.
+    # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "a member the weighed run did not observe keeps its declared layer rather than being reported as undeclared", layer: "unit" }
+    it "keeps a declared layer on a member the weighed run did not observe" do
+      deleted_copy = identity(EXPIRED, source: "intent", line: 3)
+      survivor = identity(OUTRIGHT, source: "intent", line: 9)
+
+      older = create_test_run(repository: repository, commit_sha: "00000001")
+      observe(deleted_copy, test_run: older, layer: "unit")
+      observe(survivor, layer: "request")
+
+      cluster = described_class.for(repository).clusters.sole
+
+      unobserved = cluster.members.find { |member| member.text == EXPIRED }
+      expect(unobserved).not_to be_observed
+      expect(unobserved.intent_layers).to eq(%w[unit])
+      expect(cluster.layer_redundancy).to eq("cross_layer")
+    end
+
+    # The stamp is the CENSUS's, not the page's: a declaring member in a cluster past the limit
+    # still makes `layer_source` present, because the dimension is counted over every cluster found
+    # — the same whole-census population the `clustered_*` figures are counted over.
+    # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "layer_source is present when a declaring member sits in a cluster the page truncates away, because the stamp is over the whole census and not the page", layer: "unit" }
+    it "states the layer source over the whole census, not the served page" do
+      cheap_pair_unit = identity(EXPIRED, source: "intent", line: 3)
+      cheap_pair_outright = identity(OUTRIGHT, source: "intent", line: 9)
+      observe(cheap_pair_unit, layer: "unit", duration: 1.0)
+      observe(cheap_pair_outright, layer: "unit", duration: 1.0)
+
+      costly_pair_shipping = identity(UNRELATED, source: "intent", line: 21,
+                                      path: "spec/services/shipping_spec.rb")
+      costly_pair_partner = identity("Shipping calculates a delivery estimate outright",
+                                     source: "intent", line: 29,
+                                     path: "spec/services/shipping_spec.rb")
+      observe(costly_pair_shipping, duration: 90.0)
+      observe(costly_pair_partner, duration: 90.0)
+
+      result = described_class.for(repository, limit: 1)
+
+      expect(result.clusters.sole.layer_redundancy).to be_nil # the page holds only the unannotated pair
+      expect(result.layer_source).to eq(described_class::LAYER_SOURCE)
+    end
+
+    # The layer read is one indexed DISTINCT pass, and a repository with no clusters asks it no
+    # question: empty in, empty out.
+    # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "a repository with no clusters yields no layer data and an absent layer source without querying for members it does not have", layer: "unit" }
+    it "answers an empty census with an absent layer source and no groups" do
+      result = described_class.for(repository)
+
+      expect(result.clusters).to be_empty
+      expect(result.layer_source).to be_nil
     end
   end
 
@@ -967,6 +1159,12 @@ RSpec.describe NearDuplicateClusters do
       create_test_run(repository: small, commit_sha: "0000ffff")
       create_spec_identity(repository: small, text: EXPIRED, file_path: "spec/a_spec.rb",
                            line_number: 1)
+      # A second, near identity, so `small` holds a cluster the way `repository` does: the
+      # declared-layer read runs over the clustered members, so the two sides must agree on HAVING
+      # clusters for the query-count comparison to be a statement about SIZE and not about
+      # emptiness.
+      create_spec_identity(repository: small, text: OUTRIGHT, file_path: "spec/a_spec.rb",
+                           line_number: 9)
 
       expect(count_queries { described_class.for(repository) })
         .to eq(count_queries { described_class.for(small) })
@@ -977,18 +1175,21 @@ RSpec.describe NearDuplicateClusters do
     # presence. A bare total cannot tell "one read per question" from "one question read twice", so
     # the number is asserted next to the list it stands for. Four of the eight are planner/recall
     # directives and their bookends, and none of them depends on how much the repository holds.
-    # @intent: { entity: "NearDuplicateClusters", action: "bound query count", behavior: "exactly eight named statements run whatever the read finds, in a fixed shape", layer: "unit" }
-    it "reads spec_identities twice and spec_observations once, whatever it finds" do
+    # @intent: { entity: "NearDuplicateClusters", action: "bound query count", behavior: "exactly nine named statements run whatever the read finds, in a fixed shape", layer: "unit" }
+    it "reads spec_identities once and spec_observations twice, whatever it finds" do
       statements = executed_sql { described_class.for(repository) }
 
-      expect(statements.size).to eq(8)
+      expect(statements.size).to eq(9)
       expect(statements.grep(/FROM "test_runs"/).size).to eq(1)
       expect(statements.grep(/SHOW cpu_operator_cost/).size).to eq(1)
       expect(statements.grep(/set_config\('cpu_operator_cost'/).size).to eq(2)
       expect(statements.grep(/SET LOCAL hnsw\.iterative_scan/i).size).to eq(1)
       expect(statements.grep(/CROSS JOIN LATERAL/).size).to eq(1)
       expect(statements.grep(/FROM "spec_identities"/).size).to eq(1)
-      expect(statements.grep(/FROM "spec_observations"/).size).to eq(1)
+      # TWO reads of the observations table: the weighed run's weights, and — since SPGD-1475 —
+      # the declared layers of the members the clusters hold. Both are compute-path reads; the
+      # layer read is the cut's entire cost, one DISTINCT pass over the clustered identities.
+      expect(statements.grep(/FROM "spec_observations"/).size).to eq(2)
     end
 
     # The corrected price is a fact about ONE statement, and it binds to the transaction rather than

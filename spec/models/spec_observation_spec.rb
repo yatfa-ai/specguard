@@ -4076,4 +4076,68 @@ RSpec.describe SpecObservation do
     # than a column that happened to be empty.
     expect(observation.intent_layer).to eq("request")
   end
+
+  # THE READ THE NEAR-DUPLICATES CENSUS'S DECLARED-LAYER CUT STANDS ON (SPGD-1475). What is pinned
+  # here is the scope's own contract — distinct, sorted, declared-only, exactly the identities
+  # named — because the census's honesty rules ("declared, never inferred"; undeclared reported,
+  # never fabricated) are only as good as the read that feeds them.
+  describe ".declared_layers_by_identity" do
+    let(:repository) { create_repository }
+    let(:run) { create_test_run(repository: repository) }
+
+    def identity(text)
+      create_spec_identity(repository: repository, text: text)
+    end
+
+    def observe(identity, layer:)
+      @sequence = @sequence.to_i + 1
+      SpecObservation.create!(
+        repository: repository, test_run: run, spec_identity: identity,
+        example_id: "./#{identity.file_path}[1:#{@sequence}]",
+        file_path: identity.file_path, spec_file_path: identity.file_path,
+        line_number: @sequence, name: identity.text,
+        status: layer ? "annotated" : "unannotated", intent_layer: layer,
+        outcome: "passed", duration_seconds: 0.5
+      )
+    end
+
+    # @intent: { entity: "SpecObservation", action: "read declared layers by identity", behavior: "each named identity maps to the distinct sorted layers its examples declared", layer: "unit" }
+    it "maps each identity to the distinct sorted layers its examples declared" do
+      unit_then_request = identity("Checkout rejects an expired card")
+      observe(unit_then_request, layer: "request")
+      observe(unit_then_request, layer: "unit")
+      observe(unit_then_request, layer: "request")
+
+      expect(described_class.declared_layers_by_identity([unit_then_request.id]))
+        .to eq(unit_then_request.id => %w[request unit])
+    end
+
+    # @intent: { entity: "SpecObservation", action: "read declared layers by identity", behavior: "rows without a declared layer are excluded, and an identity nothing declared for is absent from the map rather than mapped to an empty list", layer: "unit" }
+    it "reads only declared layers and leaves a fully undeclared identity out of the map" do
+      declared = identity("Checkout rejects an expired card")
+      undeclared = identity("Shipping calculates a delivery estimate")
+      observe(declared, layer: "unit")
+      observe(declared, layer: nil)
+      observe(undeclared, layer: nil)
+
+      expect(described_class.declared_layers_by_identity([declared.id, undeclared.id]))
+        .to eq(declared.id => %w[unit])
+    end
+
+    # @intent: { entity: "SpecObservation", action: "read declared layers by identity", behavior: "only the named identities are read, however many other layers the table holds", layer: "unit" }
+    it "reads exactly the identities it is handed, and nobody else's rows" do
+      asked = identity("Checkout rejects an expired card")
+      not_asked = identity("Shipping calculates a delivery estimate")
+      observe(asked, layer: "unit")
+      observe(not_asked, layer: "request")
+
+      expect(described_class.declared_layers_by_identity([asked.id]))
+        .to eq(asked.id => %w[unit])
+    end
+
+    # @intent: { entity: "SpecObservation", action: "read declared layers by identity", behavior: "an empty identity list answers an empty map without querying the table", layer: "unit" }
+    it "answers an empty ask with an empty map" do
+      expect(described_class.declared_layers_by_identity([])).to eq({})
+    end
+  end
 end
