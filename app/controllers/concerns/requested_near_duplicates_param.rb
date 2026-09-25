@@ -11,11 +11,14 @@
 # == ⭐ THE COST THIS FLAG STANDS IN FRONT OF, and why there is no second spelling of the ask
 #
 # The block this opens is the suite-wide near-duplicate census — which, since SPGD-1474, is
-# computed ONCE PER INGEST and served STORED. The flag was born in front of a measured, minutes-scale
+# computed once per write that moves its inputs (at ingest, and on run deletion) and served STORED.
+# The flag was born in front of a measured, minutes-scale
 # cost: `NearDuplicateClusters` is linear in the suite, seven queries at every size, tens of seconds
 # extrapolated at the 20,000-identity design point — "not an object to hang off a synchronous page
-# view at that size", in its own class comment's words. SPGD-1474 moved that computation to the
-# ingest path (`Ingest::NearDuplicateCensusJob`, after identity resolution) and the stored artifact
+# view at that size", in its own class comment's words. SPGD-1474 moved that computation off the
+# request path — the ingest path (`Ingest::NearDuplicateCensusJob`, after identity resolution) and
+# the run-deletion path (`RunsController#destroy`) both request the recompute — and the stored
+# artifact
 # it now opens costs one row read — so what this parameter still stands in front of is the
 # CONTRACT, not the milliseconds: the opt-in ask is unchanged wire behaviour, the no-ask path still
 # opens no block and reads no census row, and the zero-query assertion in this block's request spec

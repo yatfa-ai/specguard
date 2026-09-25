@@ -4,8 +4,9 @@ require "rails_helper"
 
 # The `near_duplicates` block on `GET /api/v1/repository` — the machine surface for
 # `NearDuplicateClusters`, the suite-wide duplicate census. Since SPGD-1474 the census is computed
-# ONCE PER INGEST — `Ingest::IdentityResolutionJob` requests the refresh once identities are
-# settled, and `Ingest::NearDuplicateCensusJob` computes and stores it — and this endpoint serves
+# once per write that moves its inputs — `Ingest::IdentityResolutionJob` requests the refresh once
+# identities are settled, `RunsController#destroy` requests one when a deleted run moved the
+# weighed run, and `Ingest::NearDuplicateCensusJob` computes and stores it — and this endpoint serves
 # the STORED artifact: the minutes-scale computation that used to run live behind the ask is off
 # the request path entirely (the agent bridge's thirty-second deadline could never hold it), and
 # the opt-in `?near_duplicates=` ask stays as the wire contract.
@@ -182,9 +183,10 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       expect(served["weighed_run_id"]).to eq(stored.weighed_run_id).and eq(test_run.id)
     end
 
-    # THE STORED ARTIFACT IS WHAT SERVES — the same bytes on every read until the next ingest
-    # recomputes them, and exactly what the stored row holds. This is the serving half of the
-    # stored-equals-live property: between ingests the endpoint cannot drift from the artifact.
+    # THE STORED ARTIFACT IS WHAT SERVES — the same bytes on every read until the next write that
+    # moves the census's inputs (an ingest, or a run deletion) recomputes them, and exactly what
+    # the stored row holds. This is the serving half of the stored-equals-live property: between
+    # those writes the endpoint cannot drift from the artifact.
     # @intent: { entity: "near_duplicates", action: "serve the stored bytes", behavior: "two reads with nothing ingested between them return the identical block, equal to the stored payload with its stamps merged", layer: "request" }
     it "serves the stored artifact verbatim, byte-identical between reads" do
       first = block(query: ask)

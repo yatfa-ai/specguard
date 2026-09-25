@@ -10,10 +10,12 @@
 # thousand identities, tens of seconds extrapolated at the 20,000-identity design point. The agent
 # bridge enforces a per-call deadline two orders of magnitude below that, so the product's core
 # question was unreachable from the consumer it was built for — every agent call failed, retries
-# included. The census is a pure derivative of ingested data — its inputs (`spec_identities`,
-# `spec_observations`, and the repository's newest run as the weighed run) change only at ingest —
-# so the computation belongs to ingest, not to the request path. This table is where the ingest
-# half lands: {Ingest::NearDuplicateCensusJob} computes the census once after identity resolution
+# included. The census is a pure derivative of the data the platform already holds — its inputs
+# (`spec_identities`, `spec_observations`, and the repository's newest run as the weighed run)
+# change only at ingest and on run deletion — so the computation belongs to those write paths,
+# not to the request path. This table is where the write-path half lands:
+# {Ingest::NearDuplicateCensusJob} computes the census once after identity resolution (and
+# {RunsController#destroy} requests the same recompute when a deleted run moved the weighed run)
 # and writes the serialized result here, and `RepositoryOverview#serialized_near_duplicates`
 # serves what is stored. The MCP tool does not change; its answer arrives in milliseconds instead
 # of never.
@@ -26,7 +28,7 @@
 # serialized clusters stores the ANSWER at the size the wire response already was, and serving is
 # a read of that column, not a re-assembly.
 #
-# The payload is also what makes "between ingests, stored equals live" hold **by construction**
+# The payload is also what makes "between writes, stored equals live" hold **by construction**
 # rather than by argument: the writer serializes the very `NearDuplicateClusters` object the live
 # path would have built, from the same frozen inputs, and the serve path returns those bytes
 # verbatim. Nothing re-derives anything on the way out.
@@ -82,7 +84,7 @@ class CreateNearDuplicateCensuses < ActiveRecord::Migration[8.1]
       # states that order (see `RepositoryOverview#serialized_near_duplicates` and the MCP
       # tool's README), so the column must preserve what the writer wrote, which is exactly
       # what `json` is: the text as sent, read back in the order it was written. It is written
-      # once per ingest and read whole, never queried by content, so jsonb's containment and
+      # once per refresh and read whole, never queried by content, so jsonb's containment and
       # indexing machinery buys nothing here.
       t.json :payload
 

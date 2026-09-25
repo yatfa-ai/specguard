@@ -24,6 +24,23 @@ class RunsController < ApplicationController
 
     test_run.destroy!
 
+    # SPGD-1474 (rework): deleting a run changes the stored census's inputs — it can move
+    # `repository.latest_test_run` (the run every weight figure is weighed on) and it destroys the
+    # per-example observations the figures join through — so the delete requests the census
+    # refresh exactly as the ingest path does: {NearDuplicateCensus.request_refresh!} raises the
+    # marker and schedules {Ingest::NearDuplicateCensusJob}, whose compare-and-clear debounces a
+    # burst of deletions into one compute over the settled state. Computing before the destroy
+    # settled would store a census no live computation would return, which is the one property
+    # the serve path may never break — the same after-the-write placement
+    # {Ingest::IdentityResolutionJob} argues for its own refresh.
+    #
+    # This lives on the CONTROLLER rather than a `TestRun` callback on purpose: a repository
+    # destroy destroys its runs too, and a callback would fire there — creating a census row for
+    # a repository that is mid-destroy, against the `dependent: :destroy` already taking that row
+    # away. A junk-run deletion (SPGD-812's own use case) is precisely the state the ingest-path
+    # trigger cannot see, and on a quiet repository it would otherwise last indefinitely.
+    NearDuplicateCensus.request_refresh!(repository.id)
+
     redirect_to repository_path(repository), notice: notice
   end
 end

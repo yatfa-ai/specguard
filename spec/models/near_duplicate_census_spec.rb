@@ -2,7 +2,8 @@
 
 require "rails_helper"
 
-# The stored near-duplicate census: the ingest-side marker (`request_refresh!`), the job-side loop
+# The stored near-duplicate census: the refresh marker (`request_refresh!`, requested by the
+# ingest path and by run deletion), the job-side loop
 # that honours it (`refresh_wanted!`), the compute-and-store unit (`refresh!`), and the serving
 # shape (`#serialized`). `NearDuplicateClusters` itself is the model spec next door — clustering
 # semantics are untouched by SPGD-1474 and asserted nowhere here; what THIS file owns is that the

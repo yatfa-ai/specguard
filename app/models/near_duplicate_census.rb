@@ -1,7 +1,8 @@
 # frozen_string_literal: true
 
 # THE STORED NEAR-DUPLICATE CENSUS — the persisted answer to "where in the suite is the same
-# logic tested more than once, and what does it cost", written once per ingest and served stored,
+# logic tested more than once, and what does it cost", written at ingest and on run deletion and
+# served stored,
 # so the main path answers in milliseconds instead of running a minutes-scale computation behind
 # a request.
 #
@@ -13,16 +14,19 @@
 # whose default deadline is thirty seconds. Every agent call failed, retries included, so the
 # product's core question was unreachable from the consumer it was built for.
 #
-# The fix was always available, because the census is a pure derivative of ingested data. Its
-# three inputs — the repository's `spec_identities` (which the clustering reads), its
-# `spec_observations` (which the weight figures join through), and `repository.latest_test_run`
-# (the weighed run) — change only at ingest. So the computation is scheduled by the ingest path
-# ({Ingest::IdentityResolutionJob} requests a refresh once identity resolution has run), executed
-# by {Ingest::NearDuplicateCensusJob}, and stored; `RepositoryOverview#serialized_near_duplicates`
-# serves what is stored. Between ingests the inputs are frozen, so **the stored census equals what
-# a live computation would return — byte-identical, not approximately**: the writer serializes the
-# very object the live path would have built, and the serve path returns those bytes verbatim.
-# Nothing re-derives anything on the way out.
+# The fix was always available, because the census is a pure derivative of data the platform
+# already holds. Its three inputs — the repository's `spec_identities` (which the clustering
+# reads), its `spec_observations` (which the weight figures join through), and
+# `repository.latest_test_run` (the weighed run) — change only at ingest and on run deletion. So
+# the computation is scheduled by both write paths: {Ingest::IdentityResolutionJob} requests a
+# refresh once identity resolution has run, and {RunsController#destroy} requests one once the
+# deleted run and its observations are gone — SPGD-812's junk-run deletion moves the weighed run
+# exactly as a new run does. {Ingest::NearDuplicateCensusJob} executes, and
+# `RepositoryOverview#serialized_near_duplicates` serves what is stored. Between those writes the
+# inputs are frozen, so **the stored census equals what a live computation would return —
+# byte-identical, not approximately**: the writer serializes the very object the live path would
+# have built, and the serve path returns those bytes verbatim. Nothing re-derives anything on the
+# way out.
 #
 # A request arriving between a completed ingest and the finished recompute serves the PREVIOUS
 # stored census with its own `computed_at` stamp — never a live computation, never an unstamped
@@ -39,9 +43,11 @@
 # which is what the unique `(repository_id)` index states, and what a per-consumer computation
 # would have made impossible to precompute.
 #
-# == The recompute marker, and why one sharded ingest costs one census
+# == The recompute marker, and why one sharded ingest (or a burst of deletions) costs one census
 #
-# `request_refresh!` is called once per identity-resolution job, and one POST is one shard, not
+# Both callers are cheap because of the marker: `request_refresh!` is called once per
+# identity-resolution job — and once per run deletion ({RunsController#destroy}) — and one POST is
+# one shard, not
 # one run — a twenty-shard delivery requests a refresh twenty times. Computing on every request
 # would spend twenty censuses per ingest, each minutes long, on a three-thread worker pool shared
 # with identity resolution itself. So the request only RAISES A FLAG (`refresh_wanted_at`) and
@@ -154,7 +160,7 @@ class NearDuplicateCensus < ApplicationRecord
     # promotion, not a deletion: it is a column beside the payload now, set by the same write, so
     # the figures and the run they were weighed on cannot be stored apart.
     #
-    # A stored payload is written once per ingest and read whole; it is never queried by content,
+    # A stored payload is written once per refresh and read whole; it is never queried by content,
     # so it is a json column and not a graph of tables — and json rather than jsonb, because
     # jsonb normalizes key order and the block's disclosure contract states the written order
     # (`similarity_floor` and `similarity_basis` first); see the column comment on the table's

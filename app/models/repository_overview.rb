@@ -140,9 +140,9 @@ class RepositoryOverview
   # `?near_duplicates=` read as a request for the repository's near-duplicate clusters — the
   # second flag-style `Requested*Param` this object reads. Born in front of a measured, minutes-scale
   # cost (`NearDuplicateClusters` is linear; its class comment carries the table), the flag outlived
-  # the cost that created it: since SPGD-1474 the census is computed once per ingest and served
-  # stored, so the ask now opens one stored row. The opt-in wire contract is unchanged — the ask
-  # is still what opens the block, and a no-ask still reads nothing. See
+  # the cost that created it: since SPGD-1474 the census is computed at ingest and on run deletion
+  # and served stored, so the ask now opens one stored row. The opt-in wire contract is unchanged —
+  # the ask
   # `RequestedNearDuplicatesParam`, which holds the reasoning in full, including why
   # `?near_duplicates=false` is an ask like any other.
   include RequestedNearDuplicatesParam
@@ -404,11 +404,13 @@ class RepositoryOverview
       directory_runtime_file_growth_window: serialized_directory_runtime_file_growth_window,
       directory_runtime_file_growth: serialized_directory_runtime_file_growth,
       # SERVED ON THE ASK AND NEVER WITHOUT IT — and, since SPGD-1474, served STORED: the census is
-      # computed once per ingest and persisted, so what the ask opens is a read of one stored row
-      # rather than the minutes-scale computation it used to be (`NearDuplicateClusters` is linear
-      # but measured in seconds; its class comment carries the table, and the agent bridge's
+      # computed once per write that moves its inputs — at ingest, and on run deletion
+      # ({RunsController#destroy}) — and persisted, so what the ask opens is a read of one stored
+      # row rather than the minutes-scale computation it used to be (`NearDuplicateClusters` is
+      # linear but measured in seconds; its class comment carries the table, and the agent bridge's
       # thirty-second deadline could never hold it — SPGD-1474 is the ticket that moved the
-      # computation to ingest). The opt-in ask itself is unchanged wire contract: `?near_duplicates=`
+      # computation off the request path). The opt-in ask itself is unchanged wire contract:
+      # `?near_duplicates=`
       # is the ask, a client that does not send it gets the key present and `null` — the no-ask
       # spelling every gate on this endpoint uses — and pays not one query for it. See
       # `serialized_near_duplicates`.
@@ -1607,9 +1609,11 @@ class RepositoryOverview
 
   # THE SUITE-WIDE DUPLICATE CENSUS, served STORED — the first block on this endpoint whose GRAIN
   # is the repository rather than a run or a window of runs, and the one whose cost used to be the
-  # reason it had to be opted into at all. Since SPGD-1474 the census is computed ONCE PER INGEST
-  # ({Ingest::NearDuplicateCensusJob}, after identity resolution) and persisted on
-  # `near_duplicate_censuses`; this method reads what is stored and serves it verbatim. The
+  # reason it had to be opted into at all. Since SPGD-1474 the census is computed once per write
+  # that moves its inputs — at ingest ({Ingest::NearDuplicateCensusJob}, after identity
+  # resolution) and on run deletion ({RunsController#destroy} requests the same recompute) — and
+  # persisted on `near_duplicate_censuses`; this method reads what is stored and serves it
+  # verbatim. The
   # minutes-scale computation that used to run here is gone from the request path — the agent
   # bridge's thirty-second deadline could never hold it — and the opt-in ask stays as the wire
   # contract: the key is present and `null` on a no-ask, exactly as before, and a client that did
