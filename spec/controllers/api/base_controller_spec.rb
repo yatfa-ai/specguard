@@ -17,7 +17,7 @@ RSpec.describe Api::BaseController, type: :controller do
     end
   end
 
-  # @intent: { entity: "credential declaration", action: "fail closed with the generic body", behavior: "a controller that declares no credential answers the generic 401 body to a request carrying a token, byte-identical to every other non-revoked 401", layer: "controller" }
+  # @intent: { entity: "credential declaration", action: "fail closed with the generic body", behavior: "a controller that declares no credential answers the generic 401 body to a request carrying a token, byte-identical to every other non-revoked 401", layer: "integration" }
   it "renders the generic unauthorized body, byte-identical to every other non-revoked 401" do
     request.headers["Authorization"] = "Bearer sgu_not-a-key-anywhere"
 
