@@ -147,6 +147,14 @@ class RepositoryOverview
   # `?near_duplicates=false` is an ask like any other.
   include RequestedNearDuplicatesParam
 
+  # `?near=` read as a behavior phrase — the probe text the `near` block ranks this repository's
+  # stored identities against. One more free-text `Requested*Param` guard, and its two lines are
+  # `RequestedBranchParam`'s — but what an admitted ask buys here is a PAID read (one embed per
+  # novel probe on the shipped provider), which is why the malformed shapes are refused at the
+  # door exactly as a value-carrying sibling refuses them. See `RequestedNearParam` for the
+  # guard's reasoning and `NearProbe` for the read it opens.
+  include RequestedNearParam
+
   # `?commit_sha=` read as a commit sha, to name WHICH RUN this endpoint describes — the only
   # `Requested*Param` here that re-anchors rather than narrows. Every parameter above leaves the
   # anchor alone: `?branch=` narrows a history, the drill-in parameters open one area, one file or
@@ -415,6 +423,12 @@ class RepositoryOverview
       # spelling every gate on this endpoint uses — and pays not one query for it. See
       # `serialized_near_duplicates`.
       near_duplicates: serialized_near_duplicates,
+      # SERVED ON THE ASK AND NEVER WITHOUT IT — and, unlike the census beside it, served LIVE:
+      # `?near=` embeds the probe (once per novel phrase, through the shipped cache), ranks the
+      # repository's identities through the ANN seam, and discloses what every figure means. The
+      # no-ask spelling is the same one every gate on this endpoint uses — the key present and
+      # `null`, not one query and not one embed paid for it. See `serialized_near` and `NearProbe`.
+      near: serialized_near,
       branches_window: serialized_branches_window,
       branches: serialized_branches
     }
@@ -1668,6 +1682,20 @@ class RepositoryOverview
     return nil unless requested_near_duplicates?
 
     NearDuplicateCensus.stored_block_for(repository)
+  end
+
+  # THE `?near=` BLOCK — the probe read, live where the census beside it is stored. `NearProbe`
+  # owns every figure and every disclosure; what THIS method owns is the ask's gate and the
+  # anchor the weights ride: `latest_test_run`, the same memo every run-grain block on this body
+  # is read off, so a `?commit_sha=` ask weights the probe against the run the rest of the
+  # response describes rather than against whichever run is newest. The gate reads the memoized
+  # ask (nil, "no ask") so the no-ask path costs nothing at all — no fingerprint read, no cache
+  # read, no run lookup — and the key is present and `null` on it, the spelling every opt-in
+  # block on this endpoint uses.
+  def serialized_near
+    return nil unless requested_near
+
+    NearProbe.for(repository, requested_near, run: latest_test_run)
   end
 
   def serialized_unannotated_examples(test_run)
