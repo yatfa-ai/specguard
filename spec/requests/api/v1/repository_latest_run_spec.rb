@@ -252,7 +252,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "directory_run_file_growth_window", "directory_run_file_growth",
                             "directory_runtime_file_growth_window", "directory_runtime_file_growth",
                             "branches_window", "branches",
-                            "near_duplicates")
+                            "near_duplicates",
+                            "near")
     end
 
     # @intent: { entity: "Repository latest-run endpoint", action: "scope to the key's repository", behavior: "an api_key only ever sees the latest run of its own repository, never a run from another repository the key has no claim on", layer: "request" }
@@ -2817,7 +2818,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "directory_run_file_growth_window", "directory_run_file_growth",
                             "directory_runtime_file_growth_window", "directory_runtime_file_growth",
                             "branches_window", "branches",
-                            "near_duplicates")
+                            "near_duplicates",
+                            "near")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
