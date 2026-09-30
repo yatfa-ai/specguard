@@ -35,9 +35,9 @@
 #
 # `.presence` SECOND, so `?near=` — a browser's unfilled form field, a client building a query
 # string off a nil variable — is not an ask. An ask has to carry a phrase rather than merely be
-# present in the URL. (An ask that carries BLANK-ISH text after that — a lone space — is still an
-# ask: it is a String with content, and what it embeds to is the embedder's business, not the
-# guard's. The census's own convention for "the client sent a word" applies unchanged.)
+# present in the URL. (Blank text of ANY kind — an empty value, a lone space — is the same no-ask:
+# `.presence` nils every Ruby-blank String, so only text with non-whitespace content reaches the
+# embedder. The census's own convention for "the client sent a word" applies unchanged.)
 #
 # Memoized with `defined?` rather than `||=` on the family's reasoning made sharper by the cost:
 # `||=` re-reads the params on every call whenever the memo is FALSY, and the falsy answer — no
