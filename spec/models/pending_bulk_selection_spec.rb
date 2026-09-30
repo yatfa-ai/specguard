@@ -138,6 +138,12 @@ RSpec.describe PendingBulkSelection do
       expect(described_class.redeem(user: user, token: "")).to eq([])
     end
 
+# @intent: { entity: "PendingBulkSelection", action: "redeem NUL handle", behavior: "a token carrying a NUL byte answers an empty list instead of raising, since no stored token can contain one", layer: "unit" }
+    it "answers nothing for a handle carrying a NUL byte" do
+      expect(described_class.redeem(user: user, token: "a\u0000b")).to eq([])
+      expect(described_class.redeem(user: user, token: "\u0000")).to eq([])
+    end
+
 # @intent: { entity: "PendingBulkSelection", action: "expire old handles", behavior: "a token whose row is older than MAX_AGE no longer redeems its saved batch", layer: "unit" }
     it "answers nothing past the age bound" do
       selection = described_class.capture(user: user, organization: "acme", full_names: %w[acme/api])
