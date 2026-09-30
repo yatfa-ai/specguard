@@ -118,6 +118,8 @@ class PendingBulkSelection < ApplicationRecord
   # row held is a row that can be logged, counted, or leaked by a timing difference.
   def self.redeem(user:, token:)
     return [] if user.nil? || token.blank?
+    # Postgres cannot hold a NUL, so no row can match one; letting it reach the query raises ArgumentError (a 500).
+    return [] if token.to_s.include?("\u0000")
 
     selection = find_by(user_id: user.id, token: token.to_s)
     return [] if selection.nil? || selection.stale?

@@ -1377,6 +1377,21 @@ RSpec.describe "Bulk organization registration", type: :request do
         unticked_picker_for_acme
       end
 
+      # @intent: {"entity": "Repository", "action": "ignore NUL handle", "behavior": "A picker reached with a selection handle carrying a NUL byte returns 200 on the acme account with both checkboxes unticked instead of a 500.", "layer": "request"}
+      it "ticks nothing for a handle carrying a NUL byte" do
+        picker_with("a\u0000b")
+
+        unticked_picker_for_acme
+      end
+
+      # Counterweight: the six-character TEXT backslash-u-0000 is not a NUL, just an ordinary unknown handle.
+      # @intent: {"entity": "Repository", "action": "ignore literal escape-text handle", "behavior": "A handle that is the six literal characters backslash-u-0000 is an ordinary unknown handle: 200 with both acme checkboxes unticked.", "layer": "request"}
+      it "ticks nothing for a handle that is the literal text of a NUL escape" do
+        picker_with('\u0000')
+
+        unticked_picker_for_acme
+      end
+
       # THE ONE THAT IS ABOUT SOMEBODY ELSE'S DATA, and it is asserted explicitly rather than being
       # left to the unknown-id case above — an implementation that resolved handles GLOBALLY would
       # pass every other example on this page and leak here.
