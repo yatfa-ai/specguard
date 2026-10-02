@@ -180,6 +180,14 @@ Rails.application.routes.draw do
       # Phase 3 (/check-intent) mounts alongside these.
       get "repository", to: "repositories#show"
       post "ingest", to: "ingests#create"
+      # THE AGENT CREDENTIAL'S INGEST (SPGD-984) — the same action, at an address that NAMES the
+      # repository, because an `sga_` key covers a SET and cannot say which repository a run
+      # belongs to. A path segment rather than a body key so a refusal decided above the controller
+      # (`Ingest::BoundaryRefusalRecorder`) can still attribute it. `POST /api/v1/ingest` above is
+      # untouched and stays the `sgk_` clients' route. Declared ahead of the plural-credential
+      # routes below only for reading order; nothing here collides with them (`ingest` is not a
+      # `repositories/:repository_id/<segment>` any of them declares).
+      post "repositories/:repository_id/ingest", to: "ingests#create"
 
       # PLURAL, and a different credential from the singular route above — which is the whole
       # reason it is a separate controller rather than an `index` on that one. `/repository`

@@ -83,6 +83,32 @@ RSpec.describe AgentApiKeyPolicy do
   # person policy derives its answer from. It is the bound the member-write controller measures a
   # submitted grant against: the key's OWN set (view implied by membership in the set), never the
   # owner's rights.
+  # SPGD-984 — `runs.ingest` is a permission like the other storable four, NOT implied by set
+  # membership the way `view` is: a key that merely covers a repository may open it and may not
+  # post runs to it.
+  describe "runs_ingest" do
+    # @intent: { entity: "AgentApiKeyPolicy", action: "gate ingest on its own permission", behavior: "can?(:runs_ingest) is true only for a covering key that stores runs.ingest, and false for a covering key that stores nothing", layer: "unit" }
+    it "is held only by a covering key that stores the permission" do
+      granted = create_agent_api_key(user: owner, repositories: [repository],
+                                     permissions: [RepositoryMembership::RUNS_INGEST])
+      bare = create_agent_api_key(user: owner, repositories: [repository], permissions: [])
+
+      expect(policy_for(granted).can?(:runs_ingest)).to be(true)
+      expect(policy_for(bare).can?(:runs_ingest)).to be(false)
+      expect(policy_for(bare).can?(:view)).to be(true)
+    end
+
+    # @intent: { entity: "AgentApiKeyPolicy", action: "keep ingest inside the set", behavior: "a key storing runs.ingest still cannot ingest into a repository outside its set", layer: "unit" }
+    it "is refused outside the key's set whatever it stores" do
+      other = create_repository(user: create_user(github_uid: "92005", github_handle: "elsewhere-two"),
+                                github_full_name: "acme/elsewhere-two")
+      key = create_agent_api_key(user: owner, repositories: [repository],
+                                 permissions: [RepositoryMembership::RUNS_INGEST])
+
+      expect(policy_for(key, other).can?(:runs_ingest)).to be(false)
+    end
+  end
+
   describe "grantable_permissions" do
     # @intent: { entity: "AgentApiKeyPolicy", action: "bound grants to the key's set", behavior: "grantable_permissions is exactly the key's stored permissions plus the implied view", layer: "unit" }
     it "is the key's own permission set plus the implied view, and nothing more" do

@@ -11,7 +11,25 @@ class RepositoryMembership < ApplicationRecord
   MEMBERS_MANAGE = "members.manage"
   REPO_DELETE = "repo.delete"
 
-  PERMISSIONS = [VIEW, KEYS_MANAGE, MEMBERS_MANAGE, REPO_DELETE].freeze
+  # "May POST a run to this repository's ingest endpoint" — the permission an `sga_` agent
+  # credential presents at `POST /api/v1/repositories/:repository_id/ingest` (SPGD-984). It is a
+  # permission of its own, settled by the owner, and two cheaper shapes were REJECTED:
+  #
+  #   * `:view` membership as the gate ("anyone who can open the repository may post runs to it").
+  #     `view` is IMPLIED by set membership (`AgentApiKeyPolicy#can?`) and by a membership row
+  #     (`RepositoryPolicy#can?`), so it is held by every agent key and every member by
+  #     construction — gating ingest on it would make "who may ingest" unanswerable at mint time:
+  #     every key minted over a repository could write telemetry into it, and the person minting
+  #     could not withhold that. Permissions are configured in the key-creation UI, so ingest is a
+  #     box the owner ticks, never a default the key inherits.
+  #   * Set-membership alone (covering the repository IS the grant). Same objection one level up:
+  #     an agent key used for reads would silently become a write credential.
+  #
+  # The `sgk_` credential is unaffected: it IS one repository and its authentication is its
+  # authorization (`Api::V1::IngestsController`), so it neither holds nor is checked against this.
+  RUNS_INGEST = "runs.ingest"
+
+  PERMISSIONS = [VIEW, KEYS_MANAGE, MEMBERS_MANAGE, REPO_DELETE, RUNS_INGEST].freeze
 
   # One condition, one sentence, named once. The read-then-write validation below and the
   # database-conflict translation in `#save` are two detections of the SAME fact, and they must

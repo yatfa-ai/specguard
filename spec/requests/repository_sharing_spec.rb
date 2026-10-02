@@ -154,14 +154,24 @@ RSpec.describe "Repository sharing", type: :request do
     # is the difference: the count this viewer may not read costs nothing BEYOND that read. A
     # second `api_keys` statement here means the gate ran after its query — the hidden grouped
     # read charged to the exact viewer the page refuses to tell anything.
-    # @intent: {"entity": "RepositoryMembership", "action": "bound show key reads", "behavior": "a view-only member who minted a key renders repositories show and exactly one api_keys statement is issued, the connection indicator's", "layer": "request"}
-    it "pays the indicator's one api_keys read and nothing for the minted-key count" do
+    #
+    # TWO since SPGD-984, and the second is the same indicator's: `queries_against("api_keys")` is a
+    # SUBSTRING match, so it counts `agent_api_keys` statements as well, and the connection
+    # indicator now asks "has an agent key that may ingest reached this repository" (an `sga_` key
+    # covering it, holding `runs.ingest`) beside the `sgk_` collection read. Both are the
+    # indicator's, both are ungated on the same rule, and the minted-key count still costs nothing
+    # BEYOND them — which is what this pin is for. The statement is split by table below so the
+    # figure cannot drift to a "2" that is really two reads of one table.
+    # @intent: {"entity": "RepositoryMembership", "action": "bound show key reads", "behavior": "a view-only member who minted a key renders repositories show and exactly two credential statements are issued, the connection indicator's one per credential table", "layer": "request"}
+    it "pays the indicator's one read per credential table and nothing for the minted-key count" do
       repository.api_keys.create!(name: "CI — main", created_by_user: repository.repository_memberships.sole.user)
 
       queries = queries_against("api_keys") { get repository_path(repository) }
 
       expect(response).to have_http_status(:ok)
-      expect(queries.size).to eq(1)
+      expect(queries.grep(/FROM "api_keys"/).size).to eq(1)
+      expect(queries.grep(/FROM "agent_api_keys"/).size).to eq(1)
+      expect(queries.size).to eq(2)
     end
 
     # Decision (d). "Every repository you have registered" stopped being true the moment shared

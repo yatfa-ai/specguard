@@ -24,6 +24,29 @@ class Api::V1::IngestsController < Api::BaseController
   # nothing, or blow up as a 500. It is refused at the door instead. See `Api::BaseController`.
   accepts_repository_credential
 
+  # THE `sga_` AGENT CREDENTIAL ALSO INGESTS (SPGD-984) — at the route that NAMES the repository.
+  #
+  # The two credentials arrive at the same action by two different routes, and the difference is
+  # the whole design:
+  #
+  #   * `POST /api/v1/ingest` — a `sgk_` repository key. The key IS one repository, bound by
+  #     `Api::BaseController` during authentication, and authentication is the authorization.
+  #     Byte-for-byte what it has always been: `specguard-rspec` and `specguard-ts` post here.
+  #   * `POST /api/v1/repositories/:repository_id/ingest` — an `sga_` agent key. One key covers N
+  #     repositories (`AgentApiKey#repository_ids`), so the CREDENTIAL cannot name the run's
+  #     repository and the REQUEST must; the repository is a PATH SEGMENT, never a body key, so a
+  #     middleware that refuses the body above the controller still holds it (see
+  #     `Ingest::BoundaryRefusalRecorder`). The agent is then measured against its OWN set and
+  #     permission (`:runs_ingest`) through the standard fork — outside the set is a 404
+  #     indistinguishable from a nonexistent repository, inside it without the permission a 403.
+  #
+  # A repository named in the path under a `sgk_` key is IGNORED, not checked: a key that is one
+  # repository cannot be asked to name a second, and answering 404 or 403 to a segment it never
+  # needed would change the `sgk_` contract for a client that sent one by accident.
+  accepts_agent_credential
+
+  before_action :authorize_agent_ingest!, if: :agent_credential?
+
   def create
     payload = Ingest::Payload.new(request.request_parameters)
 
@@ -118,6 +141,30 @@ class Api::V1::IngestsController < Api::BaseController
   end
 
   private
+
+  # THE AGENT CREDENTIAL'S GATE, run before the body is read — a refused agent costs no parse.
+  #
+  # The path segment is read from `request.path_parameters`, NOT `params`: `params` merges the JSON
+  # body in, so on the segment-less `POST /api/v1/ingest` an agent could otherwise name its
+  # repository with a `repository_id` key in the payload — a second, body-borne spelling of the
+  # ask the owner settled as a path segment, which the boundary recorder could not see when it is
+  # the body that is unreadable. With nothing in the path the answer is a legible 400, not a 404
+  # that reads as "that repository does not exist": the request is malformed for this credential,
+  # and telemetry must never be recorded against nil.
+  #
+  # `current_repository(:runs_ingest)` is the shared fork — 404 for a repository outside the key's
+  # set (or no such repository), 403 for one inside it without `runs.ingest` — rendered by the
+  # base controller's `rescue_from`s.
+  def authorize_agent_ingest!
+    if request.path_parameters[:repository_id].blank?
+      return render_bad_request(
+        ["An agent key must name the repository to ingest into: " \
+         "POST /api/v1/repositories/:repository_id/ingest."]
+      )
+    end
+
+    current_repository(:runs_ingest)
+  end
 
   # Schedules the work that gives every example a durable identity, and reports whether it actually
   # did. Two values, and the API Reference fixes both: `"queued"` **only** when a job was genuinely

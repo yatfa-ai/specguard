@@ -286,8 +286,20 @@ class RepositoryDashboard
     # `last_used_at` still describes the token they carry now. Their nils are load-bearing —
     # "nothing has ever connected" versus "something did, with a token that is gone" — and the
     # partition's own methods carry those readings in full.
-    @last_api_request_at = partition.last_api_request_at
-    @last_live_api_request_at = partition.last_live_api_request_at
+    #
+    # THE AGENT CREDENTIAL IS A THIRD SOURCE OF THAT SAME FACT (SPGD-984). One `sga_` key used
+    # across CI and agents is the expected mainline, so a repository whose runs arrive ONLY under
+    # one must not read "Not connected yet" while ingesting perfectly — the vacuous-green shape
+    # SPGD-560/563 closed for the `sgk_` side, one credential over. The indicator's connectedness
+    # now counts agent-key coverage: the newest `last_used_at` across the live keys that COVER
+    # this repository and hold `runs.ingest` (`AgentApiKey.carrying_ingest_for` names every limb of
+    # that and why). It joins BOTH figures, because an agent key cannot be rotated: its stamp
+    # always describes the token it carries now, so it is never the "stranded" half the live
+    # figure exists to exclude. ONE aggregate SELECT, issued for every viewer — the indicator is
+    # ungated, so this read is too (it returns a timestamp, no key name, hint or count).
+    agent_last_used_at = AgentApiKey.carrying_ingest_for(@repository).maximum(:last_used_at)
+    @last_api_request_at = [partition.last_api_request_at, agent_last_used_at].compact.max
+    @last_live_api_request_at = [partition.last_live_api_request_at, agent_last_used_at].compact.max
     # THE RETIRED KEYS THE PLATFORM HAS SEEN BEING PRESENTED — a revoked token arriving and being
     # refused stamps `last_refused_at` on the row it names (`Api::BaseController`'s failure path),
     # and this is the set the connection indicator's revoked state is derived from. Restricted to

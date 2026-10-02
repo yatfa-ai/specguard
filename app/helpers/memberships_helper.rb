@@ -27,7 +27,8 @@ module MembershipsHelper
     RepositoryMembership::KEYS_MANAGE => "See, mint and revoke this repository's API keys.",
     RepositoryMembership::MEMBERS_MANAGE => "See who can reach this repository, add and remove " \
                                             "members, and change what each one holds.",
-    RepositoryMembership::REPO_DELETE => "Delete the repository, and every key, run and intent on it."
+    RepositoryMembership::REPO_DELETE => "Delete the repository, and every key, run and intent on it.",
+    RepositoryMembership::RUNS_INGEST => "Post test runs to this repository with an agent key."
   }.freeze
 
   # The half of a caption that means something only to the person doing the ticking, split out of

@@ -814,8 +814,14 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # not told there is such a panel. The String spelling of `queries_against` cannot be used
     # here: `"api_keys"` is a substring of `"agent_api_keys"`, so both counts are matched on
     # the FROM clause.
-    # @intent: {"entity": "AgentApiKey", "action": "gate and bound the listing read", "behavior": "a keys.manage viewer's page issues exactly two agent_api_keys SELECTs and still exactly one api_keys SELECT while a view-only member's page issues neither and renders no panel", "layer": "request"}
-    it "costs two agent-key SELECTs behind the gate, and none for a viewer without it" do
+    #
+    # THREE since SPGD-984 for the owner, and the third is the connection indicator's, which is
+    # UNGATED: one aggregate (`maximum(:last_used_at)`) over the live keys covering this repository
+    # that hold `runs.ingest`, so a repository reached only under an agent key does not read "Not
+    # connected yet". A view-only member now pays that one too (below); the two listing reads
+    # stay behind the gate and a member still sees no panel and no listed key.
+    # @intent: {"entity": "AgentApiKey", "action": "gate and bound the listing read", "behavior": "a keys.manage viewer's page issues exactly three agent_api_keys SELECTs (listing, still-presented triage, the indicator's) and one api_keys SELECT while a view-only member's page issues only the indicator's and renders no panel", "layer": "request"}
+    it "costs two gated agent-key SELECTs plus the indicator's, and only the indicator's for a viewer without the gate" do
       repository = create_repository(user: @user)
       create_agent_api_key(user: @user, repositories: [repository], name: "Listed")
 
@@ -824,7 +830,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       owner_key_reads = queries_against(/FROM "api_keys"/) { get repository_path(repository) }.count
 
       expect(response.body).to include("Listed") # the read is non-vacuous, not a count of nothing
-      expect(owner_agent_reads).to eq(2)
+      expect(owner_agent_reads).to eq(3)
       expect(owner_key_reads).to eq(1)
 
       member = create_user(github_uid: "7203", github_handle: "viewer")
@@ -834,7 +840,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
       get repository_path(repository)
       member_agent_reads = queries_against(/FROM "agent_api_keys"/) { get repository_path(repository) }.count
 
-      expect(member_agent_reads).to eq(0)
+      # The indicator's one aggregate, ungated — and NOTHING of the gated listing (its two reads).
+      expect(member_agent_reads).to eq(1)
       expect(response.body).not_to include("Listed")
       expect(response.body).not_to include("agent-keys")
     end
@@ -2594,7 +2601,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # spec/requests/repository_unannotated_directories_spec.rb, which also carries the panel's own
       # N+1 guard: the equality across two suite sizes that an absolute count here cannot tell from
       # an ordinary widening.
-      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 24 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
+      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 25 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -2633,10 +2640,16 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # count is TWO statements total, and this fixture prices the second even with no agent
         # keys at all, exactly as it prices the first.
         #
+        # +1 from SPGD-984: the connection indicator's agent-key coverage read — ONE aggregate
+        # against `agent_api_keys` (`carrying_ingest_for(...).maximum(:last_used_at)`), UNGATED
+        # because the indicator is, so the page's `agent_api_keys` count is THREE statements for
+        # the owner. It is what keeps a repository whose runs arrive only under an `sga_` key from
+        # reading "Not connected yet". 24 -> 25.
+        #
         # Rebaselined by two rather than carved out, because this is an ABSOLUTE page budget:
         # hiding a real new query behind a filter would be the regression this count exists to
         # catch.
-        expect(count_all_queries { get repository_path(repository) }).to eq(24)
+        expect(count_all_queries { get repository_path(repository) }).to eq(25)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)
