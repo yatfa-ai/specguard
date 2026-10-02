@@ -18,6 +18,20 @@ module Ingest
   # writes only rows owned by a resolved repository; a request with no token, a wrong-prefix token
   # or an unresolvable one writes nothing, exactly as a 401 does.
   #
+  # == Two credentials, two addresses (SPGD-984)
+  #
+  # The endpoint answers to two credentials at two paths, and each resolves its repository from a
+  # different place — both of them readable HERE, above the controller, with the body unparsed:
+  #
+  #   * `POST /api/v1/ingest` with a `sgk_` repository key. The key IS one repository.
+  #   * `POST /api/v1/repositories/:repository_id/ingest` with a `sga_` agent key. The key covers a
+  #     SET, so the repository is the one the PATH names — and it is the path, not the body, that
+  #     makes full attribution possible: this layer exists precisely because the body could not be
+  #     read, so a body-borne repository would have left every agent-key boundary refusal — the
+  #     ≥256 KiB gzipped payloads the agent route is FOR — unattributable, re-creating the false
+  #     "No rejected deliveries" this class was written to remove. The only unattributable residue
+  #     is a request whose PATH itself is garbage, which is the residue the `sgk_` route already has.
+  #
   # == Why it resolves the credential by hand
   #
   # There is no `current_repository` at this layer and no controller to ask — the credential is
@@ -29,9 +43,15 @@ module Ingest
   #      `request.headers["Authorization"]`. There is no `request.headers` here.
   #   2. The prefix gate, BEFORE any table is read. `Api::BaseController` states the intent at the
   #      equivalent line: "The prefix decides WHICH table before any of them is read — and, on a
-  #      mismatch, that no table is read at all." Ingest accepts `ApiKey` only, so a `sgu_` user key
-  #      resolves NO repository here and must not be looked up in `api_keys` at all.
-  #   3. `ApiKey.authenticate`, a single digest lookup that returns nil on a miss.
+  #      mismatch, that no table is read at all." Ingest accepts `ApiKey` (`sgk_`) and
+  #      `AgentApiKey` (`sga_`), so a `sgu_` user key resolves NO repository here and must not be
+  #      looked up in either table. This gate USED TO state an `ApiKey`-only contract — one prefix,
+  #      one table — and is now a two-entry dispatch on the same rule: the prefix still names
+  #      exactly one table (the prefixes are same-length and mutually exclusive), and a token
+  #      matching neither reads none.
+  #   3. `ApiKey.authenticate` / `AgentApiKey.authenticate`, a single digest lookup that returns
+  #      nil on a miss. For the agent key the repository is then the PATH's, and it must pass the
+  #      key's own boundaries before a row is written — see `#resolve_agent_repository`.
   #
   # What it deliberately does NOT mirror is `touch_last_used!`. That lives inside the `before_action`
   # these paths never reach, and stamping it from here would silently change what the connection
@@ -62,6 +82,11 @@ module Ingest
     # rather than testing this string for equality outright.
     INGEST_PATH = "/api/v1/ingest"
 
+    # The agent credential's address (SPGD-984): the repository is the segment. Anchored and
+    # numeric so `/api/v1/repositories/12/ingest/extra` and `/api/v1/repositories/abc/ingest` are
+    # not this endpoint (the router would not dispatch the first; the second names nothing).
+    AGENT_INGEST_PATH = %r{\A/api/v1/repositories/(?<repository_id>\d+)/ingest\z}
+
     # `Api::BaseController#bearer_token`'s pattern, verbatim.
     BEARER_PATTERN = /\ABearer\s+(?<token>.+)\z/i
 
@@ -79,8 +104,6 @@ module Ingest
     end
 
     def record
-      return nil unless ingest_path?
-
       repository = resolve_repository
       return nil if repository.nil?
 
@@ -107,16 +130,55 @@ module Ingest
     #
     # It stays an equality test AFTER stripping, not a prefix test — `/api/v1/ingest/extra` is not
     # this endpoint (the router 404s it) and must not be attributed to it.
-    def ingest_path? = @env["PATH_INFO"].to_s.sub(%r{/+\z}, "") == INGEST_PATH
+    def normalized_path = @env["PATH_INFO"].to_s.sub(%r{/+\z}, "")
 
-    # Nil at every limb that `Api::BaseController` would have answered with a 401: no header, a
-    # header that is not a Bearer, a token for the wrong table, or a token that resolves nothing.
+    def ingest_path? = normalized_path == INGEST_PATH
+
+    # The repository id the PATH names on the agent route, or nil when the path is not that route.
+    def agent_path_repository_id
+      normalized_path.match(AGENT_INGEST_PATH)&.[](:repository_id)
+    end
+
+    # Nil at every limb that `Api::BaseController` would have answered with a 401, a 404 or a 403:
+    # no header, a header that is not a Bearer, a token for a table this path does not serve, or a
+    # token that resolves nothing — and, for the agent route, a repository outside the key's set or
+    # a key without the ingest permission.
+    #
+    # THE PREFIX GATE, WIDENED (SPGD-984). This used to be `return nil unless
+    # token&.start_with?(ApiKey::TOKEN_PREFIX)` — the `ApiKey`-only contract: one prefix, one
+    # table, every other token a silent nil. It is now a dispatch keyed on WHICH PATH was posted
+    # to as well as which prefix was presented, and the pairing is deliberate: a `sgk_` token at
+    # the agent path or an `sga_` token at the segment-less path is a request the controller
+    # answers 401 (the prefix is not accepted at that address — see `Api::V1::IngestsController`
+    # for why the agent credential is only reachable by the segment route), so a row for it would
+    # claim a delivery that never authenticated. The `sgu_` user key matches neither branch and
+    # reads no table, exactly as before.
     def resolve_repository
       token = bearer_token
-      # The prefix gate, before `api_keys` is touched. A `sgu_` user key stops here.
-      return nil unless token&.start_with?(ApiKey::TOKEN_PREFIX)
+      return nil if token.nil?
 
-      ApiKey.authenticate(token)&.repository
+      if ingest_path? && token.start_with?(ApiKey::TOKEN_PREFIX)
+        ApiKey.authenticate(token)&.repository
+      elsif (repository_id = agent_path_repository_id) && token.start_with?(AgentApiKey::TOKEN_PREFIX)
+        resolve_agent_repository(AgentApiKey.authenticate(token), repository_id)
+      end
+    end
+
+    # The agent route's attribution: the repository the PATH names, written ONLY if the key holds
+    # the same two boundaries the controller measures it against — covers the repository AND holds
+    # `runs.ingest`. The check is the policy's own (`AgentApiKeyPolicy`), not a second spelling of
+    # it, so a request the controller would have answered 404 or 403 cannot leave a refusal row
+    # that says it was a delivery refused for its payload: a key writing rows into a repository it
+    # may not even open would turn the Rejected-deliveries panel into a write channel for anyone
+    # holding any agent key.
+    def resolve_agent_repository(key, repository_id)
+      return nil if key.nil?
+
+      repository = Repository.find_by(id: repository_id)
+      return nil if repository.nil?
+
+      policy = AgentApiKeyPolicy.new(key, repository)
+      repository if policy.member? && policy.can?(:runs_ingest)
     end
 
     def bearer_token

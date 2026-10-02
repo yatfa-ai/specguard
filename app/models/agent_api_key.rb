@@ -14,7 +14,7 @@ require "openssl"
 #     nothing outside the set — a repository outside it is a 404 indistinguishable from a
 #     nonexistent one, on the same nil-is-404 fork every scoped read takes.
 #   * `permissions` is the VERB boundary, drawn from `RepositoryMembership::PERMISSIONS` verbatim —
-#     the same four strings a membership stores, so one vocabulary serves both kinds of grant.
+#     the same strings a membership stores, so one vocabulary serves both kinds of grant.
 #
 # ## The prefix is load-bearing, not decoration
 #
@@ -97,6 +97,24 @@ class AgentApiKey < ApplicationRecord
   # away from an ambiguity error.
   scope :covering, lambda { |repository|
     where("agent_api_keys.repository_ids @> ARRAY[?]::bigint[]", repository.id)
+  }
+
+  # The keys that could be CARRYING INGEST into a repository right now (SPGD-984): live, covering
+  # it, holding `runs.ingest`, and owned by somebody `authenticate` would still resolve. The
+  # connection indicator's agent-key half reads `maximum(:last_used_at)` off this.
+  #
+  # Every limb is a way a row's `last_used_at` would otherwise describe something that is not CI
+  # reaching this repository: a REVOKED key's stamp is the history of a credential that no longer
+  # exists (the same rule `ApiKeyPartition` applies to the `sgk_` side), an ARCHIVED owner's key
+  # no longer authenticates (`authenticate`'s `merge(User.active)`, restated here by the same
+  # merge), and a key WITHOUT `runs.ingest` stamps `last_used_at` on every read it makes — a
+  # monitoring agent listing the repository would otherwise turn "Not connected yet" into
+  # "Connected" while no run could ever arrive under it. Agent keys have no rotation, so there is
+  # no stranded half to account for.
+  scope :carrying_ingest_for, lambda { |repository|
+    live.covering(repository)
+        .where("agent_api_keys.permissions @> ARRAY[?]::text[]", RepositoryMembership::RUNS_INGEST)
+        .joins(:user).merge(User.active)
   }
 
   def self.digest(token)

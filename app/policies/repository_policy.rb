@@ -2,7 +2,7 @@
 
 # The single authorization question for a repository: "may this user do this to it?"
 #
-# A plain PORO rather than Pundit: the surface is four permissions asked in two controllers, which
+# A plain PORO rather than Pundit: the surface is five permissions asked in two controllers, which
 # does not justify a gem plus an initializer plus a base-policy convention.
 #
 # Capabilities are symbols (`:keys_manage`) and map onto the stored permission strings
@@ -21,6 +21,7 @@ class RepositoryPolicy
     keys_manage: RepositoryMembership::KEYS_MANAGE,
     members_manage: RepositoryMembership::MEMBERS_MANAGE,
     repo_delete: RepositoryMembership::REPO_DELETE,
+    runs_ingest: RepositoryMembership::RUNS_INGEST,
     owner: OWNER_ONLY
   }.freeze
 

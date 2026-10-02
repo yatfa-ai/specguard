@@ -5,8 +5,8 @@ require "rails_helper"
 # SPGD-952 — the agent credential over HTTP: the three plural reads answer to an `sga_` key,
 # bounded by the key's own repository set (the read boundary — out of set is a 404, never a 403)
 # and its own permission set (the verb boundary — in set without the permission is a 403), while
-# ingest, the singular repository route and the person-anchored mutations (register, rename)
-# refuse it.
+# the singular repository route and the person-anchored mutations (register, rename) refuse it;
+# ingest answers to it only at the repository-naming route (SPGD-984, `agent_ingest_spec.rb`).
 #
 # SPGD-973 — the write verbs answer to the same two boundaries: mint/revoke `sgk_` keys under
 # `keys.manage`, member add/edit/revoke under `members.manage`, repository deletion under
@@ -112,7 +112,7 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.dig("credential", "capabilities")).to eq(
         "view" => true, "keys_manage" => true, "members_manage" => true,
-        "repo_delete" => false, "owner" => false
+        "repo_delete" => false, "runs_ingest" => false, "owner" => false
       )
     end
 
@@ -127,7 +127,7 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.dig("credential", "capabilities")).to eq(
         "view" => true, "keys_manage" => false, "members_manage" => false,
-        "repo_delete" => false, "owner" => false
+        "repo_delete" => false, "runs_ingest" => false, "owner" => false
       )
     end
 
@@ -207,7 +207,7 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body["credential"].keys).to eq(["capabilities"])
       expect(response.parsed_body["credential"]["capabilities"].keys)
-        .to match_array(%w[view keys_manage members_manage repo_delete owner])
+        .to match_array(%w[view keys_manage members_manage repo_delete runs_ingest owner])
       expect(response.body).not_to include(person.github_handle)
     end
 
@@ -693,26 +693,31 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
   end
 
   describe "the person-anchored verbs, which the agent credential never reaches" do
-    # THE TWO sgk_-ONLY ROUTES. The prefix matches nothing these endpoints declare, so the refusal
-    # reads no table — asserted, not assumed, because a probing implementation produces the same
-    # 401 at twice the cost.
-    # @intent: { entity: "AgentApiKey", action: "refuse at ingest", behavior: "an agent key at the ingest endpoint answers 401 with zero credential-table reads", layer: "request" }
-    it "is refused by POST /api/v1/ingest with no credential read at all" do
+    # THE `sgk_`-ONLY ROUTE, and what became of ingest. `POST /api/v1/ingest` USED to be the second
+    # `sgk_`-only route here: an agent key got a 401 with no credential read. SPGD-984 made ingest
+    # answer to the agent credential too — at `POST /api/v1/repositories/:repository_id/ingest`
+    # (`agent_ingest_spec.rb`) — so the SEGMENT-LESS route now authenticates the agent and then
+    # refuses it 400: an agent key covers a set, cannot name the run's repository by itself, and a
+    # run must never be recorded against nil. The remaining `sgk_`-only route, which still refuses
+    # the prefix before any table is read, is the singular repository read.
+    # @intent: { entity: "AgentApiKey", action: "refuse an unnamed repository at ingest", behavior: "an agent key at the segment-less ingest route answers 400 naming the path form and records no run", layer: "request" }
+    it "is refused by POST /api/v1/ingest with a 400 that names the repository-bearing route" do
+      expect {
+        post "/api/v1/ingest", params: ingest_payload, as: :json, headers: bearer(agent_key.raw_token)
+      }.not_to change(TestRun, :count)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("/api/v1/repositories/:repository_id/ingest")
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "refuse at the singular route with no credential read", behavior: "an agent key at GET /api/v1/repository answers 401 with zero credential-table reads", layer: "request" }
+    it "is refused by GET /api/v1/repository with no credential read at all" do
       token = agent_key.raw_token
 
-      statements = queries_against(/api_keys/) do
-        post "/api/v1/ingest", params: ingest_payload, as: :json, headers: bearer(token)
-      end
+      statements = queries_against(/api_keys/) { get "/api/v1/repository", headers: bearer(token) }
 
       expect(response).to have_http_status(:unauthorized)
       expect(statements).to be_empty
-    end
-
-    # @intent: { entity: "AgentApiKey", action: "refuse at the singular route", behavior: "an agent key at GET /api/v1/repository answers 401", layer: "request" }
-    it "is refused by GET /api/v1/repository" do
-      get "/api/v1/repository", headers: bearer(agent_key.raw_token)
-
-      expect(response).to have_http_status(:unauthorized)
     end
 
     # THE PERSON-SHAPED RESIDUE after SPGD-973. The token is valid and of a class the endpoint

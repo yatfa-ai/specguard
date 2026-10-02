@@ -493,12 +493,19 @@ RSpec.describe "API v1 — the credential seam", type: :request do
 
     # The third direction of the zero-read refusal, for the credential this slice adds: an `sga_`
     # token at an endpoint that accepts neither the agent nor the person credential is turned
-    # away before any table is read. SPGD-973 released the api-keys mint to the agent credential,
-    # so the example's old target (`POST …/api_keys`) no longer declares "person only"; `POST
-    # /api/v1/ingest` does — `accepts_repository_credential` ALONE — and stays the honest
-    # premise for the guard.
-    # @intent: { entity: "credential prefix", action: "refuse an agent key at an undeclaring endpoint", behavior: "an sga_ token at the repository-key-only ingest endpoint answers 401 with zero credential reads", layer: "request" }
-    it "reads no credential table when an agent key is presented to the ingest endpoint" do
+    # away before any table is read.
+    #
+    # RE-TARGETED (SPGD-984). This example's premise was `POST /api/v1/ingest` — "declares
+    # `accepts_repository_credential` ALONE" — and that stopped being true the moment ingest began
+    # accepting the agent credential (`Api::V1::IngestsController` now declares both, the agent
+    # reaching it at `POST /api/v1/repositories/:repository_id/ingest`). Re-running the old example
+    # unchanged would have gone red for the right reason and been "fixed" by loosening it; instead
+    # the premise is re-stated. `GET /api/v1/repository` is the honest target now: it is
+    # `accepts_repository_credential` alone (`Api::V1::RepositoriesController`), and answers every
+    # other credential 401 before a table is read. The ingest endpoint's own agent behaviour —
+    # authenticated, so it DOES read `agent_api_keys` — is pinned in `agent_ingest_spec.rb`.
+    # @intent: { entity: "credential prefix", action: "refuse an agent key at an undeclaring endpoint", behavior: "an sga_ token at the repository-key-only repository endpoint answers 401 with zero credential reads", layer: "request" }
+    it "reads no credential table when an agent key is presented to a repository-key-only endpoint" do
       # Built from its OWN repository rather than the file's `repository` let: that let is
       # evaluated lazily, and referencing it inside the measured block would count the mint as
       # one of the request's statements — the same trap the first example in this file documents.
@@ -506,7 +513,7 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       token = create_agent_api_key(user: person, repositories: [repo], permissions: []).raw_token
 
       statements = credential_reads do
-        post "/api/v1/ingest", params: ingest_payload, as: :json, headers: bearer(token)
+        get "/api/v1/repository", headers: bearer(token)
       end
 
       expect(response).to have_http_status(:unauthorized)
