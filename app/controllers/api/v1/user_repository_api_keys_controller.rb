@@ -159,6 +159,17 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
   # repo-wide single-source guard exists to refuse). `revoked_at` itself is served only when the
   # predicate says the row carries one — a live key's "revoked_at: null" would restate the
   # status field, and the two-writings-one-fact shape is what lets them drift.
+  # `last_refused_at` follows the same conditional shape for the same reason, with one more
+  # arm: the stamp is written only on an already-revoked row (the refusal path resolves a dead
+  # token's row, `ApiKey#touch_last_refused!`), so a live row's `last_refused_at: null` is
+  # structurally unreachable and would restate `status`. On a REVOKED row the key is always
+  # present and `null` is the served negative — nothing has presented the dead token since the
+  # cut (the offboarding took) — because a positive finding is indistinguishable from "not
+  # tracked" unless the negative is served too. A stamp present means the dead token is still
+  # arriving, and this row's `token_hint` is the handle to hunt in the secret stores — the
+  # remedy-grain fact `credential_health`'s `presented_revoked_keys` names only by a
+  # non-unique `name`. `revoked?` guarantees only `revoked_at`; the stamp is independently
+  # nullable, hence the safe navigation.
   # `rotated_at` serves the same figure the singular `sgk_` block serves (`repositories#show`):
   # the instant `regenerate!` retired the token, `null` when the key has never been regenerated.
   # It has to sit beside `last_used_at` because that stamp alone can mislead here — `regenerate!`
@@ -185,6 +196,7 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
       status: api_key.revoked? ? "revoked" : "live"
     }
     row[:revoked_at] = api_key.revoked_at.iso8601 if api_key.revoked?
+    row[:last_refused_at] = api_key.last_refused_at&.iso8601 if api_key.revoked?
     row
   end
 end

@@ -197,7 +197,7 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
     # serves back.
     let!(:legacy_key) { repository.api_keys.create!(name: "Legacy") }
 
-    # @intent: { entity: "api key", action: "list the inventory", behavior: "a keys.manage holder reads the repository's own keys in insertion order with id, hint, creator, last use, rotation date, rotated-and-unused verdict, and live/revoked status per row", layer: "request" }
+    # @intent: { entity: "api key", action: "list the inventory", behavior: "a keys.manage holder reads the repository's own keys in insertion order with id, hint, creator, last use, rotation date, rotated-and-unused verdict, and live/revoked status per row, with a revoked row additionally carrying its revocation and last-refusal stamps", layer: "request" }
     it "lists the repository's keys with the fields a rotation needs" do
       get mint_path, headers: bearer(owner_key.raw_token)
 
@@ -241,6 +241,38 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
 
       live_row = response.parsed_body["api_keys"].find { |r| r["status"] == "live" }
       expect(live_row.keys).not_to include("revoked_at")
+    end
+
+    # SPGD-1169 — the remedy-grain fact. `credential_health` names a still-presented revoked key
+    # by `name` alone, which the platform does not keep unique (`Default CI Key`), so the row
+    # that carries the `id` and `token_hint` an operator can act on has to carry the refusal
+    # stamp too. Fixtures walk the REAL 401 path (revoke through `revoke!`, present the dead
+    # token so the failure path stamps it) — never a hand-written `last_refused_at`.
+    # @intent: { entity: "api key", action: "serve the refusal stamp on a revoked row", behavior: "a revoked key whose dead token was presented and refused serves last_refused_at from its own column beside its hint, while a revoked key never presented serves the key present and null and a live row carries no such key at all", layer: "request" }
+    it "serves last_refused_at on revoked rows only, null when never refused" do
+      dead_token = legacy_key.raw_token
+      legacy_key.revoke!
+      get "/api/v1/repository", headers: bearer(dead_token)
+      expect(response).to have_http_status(:unauthorized)
+
+      quiet_key = repository.api_keys.create!(name: "Quiet")
+      quiet_key.revoke!
+
+      get mint_path, headers: bearer(owner_key.raw_token)
+
+      rows = response.parsed_body["api_keys"]
+      refused_row = rows.find { |r| r["id"] == legacy_key.id }
+      expect(legacy_key.reload.last_refused_at).to be_present
+      expect(refused_row["last_refused_at"]).to eq(legacy_key.last_refused_at.iso8601)
+      expect(refused_row["token_hint"]).to eq(legacy_key.token_hint)
+
+      quiet_row = rows.find { |r| r["id"] == quiet_key.id }
+      expect(quiet_row).to have_key("last_refused_at")
+      expect(quiet_row["last_refused_at"]).to be_nil
+
+      live_row = rows.find { |r| r["id"] == minted_response.dig("api_key", "id") }
+      expect(live_row["status"]).to eq("live")
+      expect(live_row.keys).not_to include("last_refused_at")
     end
 
     # SPGD-1110 — the state the whole field exists for: `regenerate!` retired the token and left
@@ -364,6 +396,7 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
       post mint_path, params: { name: "Replacement" }, headers: bearer(owner_key.raw_token)
       expect(response).to have_http_status(:created)
       id = response.parsed_body.dig("api_key", "id")
+      replacement_token = response.parsed_body.dig("api_key", "token")
       expect(id).to be_present
 
       delete "/api/v1/repositories/#{repository.id}/api_keys/#{id}",
@@ -374,6 +407,17 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
       row = response.parsed_body["api_keys"].find { |r| r["id"] == id }
       expect(row["status"]).to eq("revoked")
       expect(row["revoked_at"]).to be_present
+      # SPGD-1169 — the post-cut verify: offboarding took until the dead token arrives again, and
+      # the same inventory then names the row to hunt. Never refused so far → served null.
+      expect(row).to have_key("last_refused_at")
+      expect(row["last_refused_at"]).to be_nil
+
+      get "/api/v1/repository", headers: bearer(replacement_token)
+      expect(response).to have_http_status(:unauthorized)
+
+      get mint_path, headers: bearer(owner_key.raw_token)
+      row = response.parsed_body["api_keys"].find { |r| r["id"] == id }
+      expect(row["last_refused_at"]).to be_present
     end
 
     # THE N+1 GUARD, in the per-table budget discipline the credential-seam and overview specs
