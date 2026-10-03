@@ -9,6 +9,8 @@
 # sign-out-everywhere control would land, and naming the route after its first occupant would
 # make each of those a second top-level page.
 class AccountsController < ApplicationController
+  include GithubUserSession
+
   before_action :require_authentication
 
   def show
@@ -91,12 +93,31 @@ class AccountsController < ApplicationController
     #
     # ⚠️ A READ, on the same terms as the grant above and for a sharper reason: these rows are
     # reconciled against GitHub only when this user passes back through the App callback (see
-    # `GithubInstallation`), so between callbacks the panel can still name an account GitHub has
-    # since stopped reporting. The honest way to show what is really there would be a live
-    # page-walk per installation. That is the cost `/repositories/new` already pays and this page
-    # deliberately does not — listing SpecGuard's own record is what the panel claims to show, and
-    # it is what the Disconnect acts on.
-    @github_installations = current_user.github_installations.recent_first
+    # `GithubInstallation`), and a github.com uninstall has no local moment to hook, so between
+    # callbacks a row can name an account GitHub has since stopped answering for. Since SPGD-975 that
+    # row costs more than a `NotFound`: a person holding a fresh-but-empty grant keeps answering a
+    # false `:not_in_installation` for up to `GithubRegistrationGrant::MAX_AGE`, and this panel was
+    # the one page that could have said why.
+    #
+    # THE DECIDED SHAPE (SPGD-986, owner-settled): the panel names such an account, per row, from
+    # `InstallationReachability` — a CREDENTIAL-GATED walk (only when this session already holds a
+    # live GitHub token, which `github_user_token` answers from the session without a network call),
+    # THROTTLED to one walk per person per hour, its outcomes cached and rendered between walks. A
+    # session with no usable credential, or a walk that fails, makes no claim and the panel renders
+    # as it always did. The per-RENDER walk this comment used to refuse is still refused; the cost
+    # accepted here is one walk an hour, and the lag is the same hour.
+    #
+    # ⚠️ The walk calls `InstallationRepositories.sources` directly and this controller includes
+    # `GithubUserSession`, NOT `GithubRepositoryListing` — the latter's `github_sources` is the sole
+    # `GithubRegistrationGrant.capture`, and including it for convenience would silently make this
+    # page a capture site (see the grant above, and the click-through table in `accounts/show`).
+    #
+    # And it STATES, it does not DESTROY: a read must not destroy (SPGD-975). The person presses the
+    # existing per-row Disconnect, which carries the mirrored grant invariant.
+    @github_installations = current_user.github_installations.recent_first.to_a
+    @unreachable_installation_ids = InstallationReachability.unreachable_ids(
+      current_user, installations: @github_installations, user_token: github_user_token
+    )
   end
 
   # Closes the signed-in person's own account (SPGD-853) — the first writer `users.archived_at`

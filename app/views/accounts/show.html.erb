@@ -373,7 +373,7 @@
 
   <%# CONNECTED GITHUB ACCOUNTS — the rows the App callback writes, which appeared on no page until
       now and which the person they belong to could remove only by deleting their whole SpecGuard
-      account. See `AccountsController#show` for why this is a read and not a live GitHub walk.
+      account. See `AccountsController#show` for why this is a read, and for the one-walk-an-hour reading that names a dead row.
 
       Deliberately does NOT restate the grant sentence above it: this panel is about which GitHub
       accounts SpecGuard has a record of, and the panel above is about what GitHub last said those
@@ -399,10 +399,31 @@
       <%= render UI::TableComponent.new(columns: ["Account", "Connected", ""],
                                         describedby: "github-installations-caption") do %>
         <% @github_installations.each do |installation| %>
-          <tr>
+          <% unreachable = @unreachable_installation_ids.include?(installation.installation_id) %>
+          <tr data-installation-state="<%= unreachable ? "unreachable" : "listed" %>">
             <%# `display_name`, which falls back to the id: a row recorded from a callback that
-                carried no login must still be nameable rather than rendering a blank cell. %>
-            <td class="px-3 py-2"><%= installation.display_name %></td>
+                carried no login must still be nameable rather than rendering a blank cell.
+
+                An UNREACHABLE row (SPGD-986) is named in its own cell, attributed to this account
+                and no other: GitHub answered 404 for it on the last reading, which is what an
+                uninstall looks like. The sentence points at the existing Disconnect beside it and
+                does not perform it — the panel states, the person acts. It is absent entirely for
+                a live account and whenever no reading could be made (`InstallationReachability`),
+                so silence on a row means "nothing is known", never "this one is fine". %>
+            <td class="px-3 py-2">
+              <%= installation.display_name %>
+              <% if unreachable %>
+                <%= render UI::BadgeComponent.new(tone: :warning, "data-unreachable-account": installation.installation_id) do %>
+                  No longer reachable
+                <% end %>
+                <p class="mt-1 text-xs text-app-content-secondary">
+                  GitHub no longer answers for <strong><%= installation.display_name %></strong> —
+                  the SpecGuard App may have been uninstalled there. Repositories in it cannot be
+                  registered through it. Press Disconnect to drop SpecGuard's record of it; if the
+                  App is still installed on GitHub, connecting again brings it back.
+                </p>
+              <% end %>
+            </td>
             <td class="px-3 py-2 text-app-content-secondary tabular-nums">
               <%= time_ago_in_words(installation.created_at) %> ago
             </td>
