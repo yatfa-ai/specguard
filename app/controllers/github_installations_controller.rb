@@ -104,6 +104,9 @@ class GithubInstallationsController < ApplicationController
     authorization = GithubAppUserAuthorization.authorize(code: params[:code],
                                                         github_uid: current_user.github_uid)
     store_github_user_token(authorization.token, expires_at: authorization.expires_at)
+    # A reading cached before this pass is about to be contradicted by it: the rows are re-recorded
+    # and reconciled just below, and `/account` must not keep naming a reconnected account as gone.
+    InstallationReachability.forget(current_user)
     recorded = record(authorization.installations)
     disconnected = reconcile(authorization)
 

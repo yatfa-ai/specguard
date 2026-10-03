@@ -223,15 +223,20 @@ RSpec.describe "Account registration access", type: :request do
   # no repositories, and would silently make the account page the second refresh point the ticket
   # forbids.
   describe "the cost of rendering it" do
-    # @intent: {"entity": "RegistrationGrant", "action": "render without github calls", "behavior": "rendering the account page with a current grant issues no GitHub calls and still answers 200 ok", "layer": "request"}
-    it "makes no GitHub call" do
+    # SPGD-986 replaced the original "no GitHub call at all" with the owner's decided cost: ONE
+    # credential-gated walk per person per hour (`InstallationReachability`), a read that names a
+    # dead connected account. What this example still pins is the half that must not move — the walk
+    # is one page-read per installation the person holds, and it is not a capture (the next example,
+    # and `account_github_installations_spec`'s "is not a grant-capture site", say so).
+    # @intent: {"entity": "RegistrationGrant", "action": "render with one bounded walk", "behavior": "rendering the account page with a current grant issues at most one repositories read per held installation and still answers 200 ok", "layer": "request"}
+    it "makes at most one GitHub read per held installation" do
       create_registration_grant(user: person, captured_at: 3.days.ago)
       github = stub_github
 
       get account_path
 
       expect(response).to have_http_status(:ok)
-      expect(github.calls).to be_empty
+      expect(github.calls.length).to be <= person.github_installations.count
     end
 
     # @intent: {"entity": "RegistrationGrant", "action": "leave grant untouched", "behavior": "rendering the page neither calls GithubRegistrationGrant.capture nor changes any attribute of the existing grant", "layer": "request"}

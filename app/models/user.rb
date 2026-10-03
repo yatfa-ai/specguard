@@ -243,7 +243,8 @@ class User < ApplicationRecord
   # registered is decided by reading that installation live (`InstallationRepositories`), because
   # nothing here is kept in step with GitHub BETWEEN callbacks — a row can outlive the
   # installation it names until the user's next pass through the App callback, where GitHub's own
-  # complete list removes it.
+  # complete list removes it. Until then it is not hidden: `/account` names such a row once GitHub
+  # answers 404 for it (`InstallationReachability`), and the user's Disconnect removes it.
   def github_installed? = github_installations.any?
 
   def display_name = github_handle

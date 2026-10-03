@@ -339,6 +339,254 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
     end
   end
 
+  # SPGD-986 — the panel NAMES an account GitHub no longer answers for, so the false
+  # `:not_in_installation` a fresh-but-empty grant keeps answering has a local fix instead of a
+  # `MAX_AGE` wait. The reading is `InstallationReachability`: credential-gated, one walk per person
+  # per hour, cached between walks, and silent whenever it could not be made.
+  describe "an account GitHub no longer answers for" do
+    # `config/environments/test.rb` runs `:null_store`, which would make every throttle example pass
+    # or fail for reasons unrelated to the code. A real store, shared across the example's requests.
+    let(:cache) { ActiveSupport::Cache::MemoryStore.new }
+
+    include ActiveSupport::Testing::TimeHelpers
+
+    before { allow(Rails).to receive(:cache).and_return(cache) }
+
+    def stub_one_dead_account
+      live = FakeGithubApi.new(repos: [github_repo("acme/billing-service")])
+      dead = FakeGithubApi.new(not_found: true)
+      stub_github_per_installation { |id| id == 6002 ? dead : live }
+      [live, dead]
+    end
+
+    # The session credential outlives the throttle hour here, so a render AFTER the hour still has
+    # a token to walk with — the default helper token expires in an hour, which would make the
+    # "walks again" examples pass for the wrong reason.
+    def two_account_person
+      person = sign_in_via_github(installation: 5001)
+      authorize_github_app(installations: [[5001, "acme"], [6002, "globex"]], expires_at: 1.day.from_now)
+      person
+    end
+
+    # The row for one account, sliced out of the panel so an assertion about globex cannot be
+    # satisfied by acme's cell.
+    def row_for(name) = installations_panel.split("<tr").find { |chunk| chunk.include?(">#{name}") || chunk.include?("#{name}\n") }
+
+    # The red this ticket pins first: before the change both rows were presented identically.
+    # @intent: {"entity": "GithubInstallation", "action": "name an unreachable account", "behavior": "an installation GitHub answers 404 for is marked No longer reachable on its own row, attributed to its own account, and the live account's row is not", "layer": "request"}
+    it "names the dead account on its own row and not the live one" do
+      two_account_person
+      stub_one_dead_account
+
+      get account_path
+
+      globex = row_for("globex")
+      acme = row_for("acme")
+      expect(globex).to include("No longer reachable").and include('data-installation-state="unreachable"')
+      expect(globex).to include("GitHub no longer answers for")
+      expect(acme).to include('data-installation-state="listed"')
+      expect(acme).not_to include("No longer reachable")
+    end
+
+    # A false positive here tells somebody to sever a working connection.
+    # @intent: {"entity": "GithubInstallation", "action": "leave live accounts unmarked", "behavior": "when every installation answers, the panel marks nothing as unreachable", "layer": "request"}
+    it "marks nothing when every installation answers" do
+      two_account_person
+      stub_github(repos: [github_repo("acme/billing-service")])
+
+      get account_path
+
+      expect(installations_panel).not_to include("No longer reachable")
+      expect(installations_panel).not_to include("data-installation-state=\"unreachable\"")
+    end
+
+    # @intent: {"entity": "GithubInstallation", "action": "stay silent without a credential", "behavior": "a session holding no GitHub credential makes no GitHub call and renders the panel with no marks", "layer": "request"}
+    it "says nothing, and asks GitHub nothing, when the session holds no credential" do
+      person = sign_in_via_github(installation: 5001, authorize: false)
+      add_github_installation(person, installation_id: 6002, account_login: "globex")
+      _live, dead = stub_one_dead_account
+
+      get account_path
+
+      expect(response).to have_http_status(:ok)
+      expect(installations_panel).not_to include("No longer reachable")
+      expect(dead.calls_to(:repositories)).to eq(0)
+    end
+
+    # @intent: {"entity": "GithubInstallation", "action": "stay silent on error", "behavior": "when GitHub is unavailable the panel renders exactly as before, with no marks and a 200", "layer": "request"}
+    it "says nothing when the reading fails" do
+      two_account_person
+      stub_github(unavailable: true)
+
+      get account_path
+
+      expect(response).to have_http_status(:ok)
+      expect(installations_panel).not_to include("No longer reachable")
+    end
+
+    # @intent: {"entity": "GithubInstallation", "action": "keep cached answer through a failing walk", "behavior": "after a successful walk is cached, a walk that fails still renders the cached mark", "layer": "request"}
+    it "renders the cached answer when a later walk fails" do
+      two_account_person
+      stub_one_dead_account
+      get account_path
+      expect(installations_panel).to include("No longer reachable")
+
+      travel_to((InstallationReachability::FRESH_FOR + 1.minute).from_now) do
+        stub_github(unavailable: true)
+        get account_path
+      end
+
+      expect(installations_panel).to include("No longer reachable")
+    end
+
+    # SPGD-986 criterion 10. The bound is stubbed in its own example, with the unstubbed positive
+    # partner directly below, so moving the constant is a visible test change.
+    describe "the one-walk-an-hour throttle" do
+      # @intent: {"entity": "GithubInstallation", "action": "throttle the walk", "behavior": "a second render within the hour issues no GitHub call and renders the identical panel", "layer": "request"}
+      it "issues no GitHub call on a second render within the hour, and renders the same panel" do
+        two_account_person
+        live, dead = stub_one_dead_account
+
+        get account_path
+        first = installations_panel
+        calls = live.calls_to(:repositories) + dead.calls_to(:repositories)
+        expect(calls).to eq(2)
+
+        travel_to(30.minutes.from_now) { get account_path }
+
+        expect(live.calls_to(:repositories) + dead.calls_to(:repositories)).to eq(calls)
+        # The "Connected N minutes ago" cell legitimately moves with the clock; everything else the
+        # reading decides — which rows are marked — must not.
+        marks = ->(html) { html.scan(/data-installation-state="\w+"/) }
+        expect(marks.call(installations_panel)).to eq(marks.call(first))
+        expect(installations_panel).to include("No longer reachable")
+      end
+
+      # @intent: {"entity": "GithubInstallation", "action": "walk again after the hour", "behavior": "once the hour has lapsed the next render walks GitHub again", "layer": "request"}
+      it "walks again once the hour has lapsed" do
+        two_account_person
+        live, dead = stub_one_dead_account
+        get account_path
+
+        travel_to((InstallationReachability::FRESH_FOR + 1.minute).from_now) { get account_path }
+
+        expect(live.calls_to(:repositories) + dead.calls_to(:repositories)).to eq(4)
+      end
+
+      # The throttle bounds the ATTEMPT, not only the success: a failing GitHub must not turn every
+      # render into the per-render walk this throttle exists to refuse.
+      # @intent: {"entity": "GithubInstallation", "action": "throttle a failing walk", "behavior": "when GitHub fails, a second render within the hour issues no GitHub call, and the hour's lapse walks again", "layer": "request"}
+      it "issues no GitHub call on a second render within the hour when the first walk failed" do
+        two_account_person
+        failing = FakeGithubApi.new(unavailable: true)
+        stub_github_per_installation { |_id| failing }
+
+        get account_path
+        calls = failing.calls_to(:repositories)
+        expect(calls).to be >= 1
+
+        travel_to(30.minutes.from_now) { get account_path }
+
+        expect(failing.calls_to(:repositories)).to eq(calls)
+        expect(installations_panel).not_to include("No longer reachable")
+
+        # The unstubbed positive partner: the hour lapsing re-opens the walk.
+        travel_to((InstallationReachability::FRESH_FOR + 1.minute).from_now) { get account_path }
+        expect(failing.calls_to(:repositories)).to be > calls
+      end
+
+      # @intent: {"entity": "GithubInstallation", "action": "throttle a failing walk after a clean one", "behavior": "a failed walk after a cached clean one is throttled and still renders the cached mark", "layer": "request"}
+      it "does not re-walk within the hour after a failed walk, and keeps rendering the last clean answer" do
+        two_account_person
+        stub_one_dead_account
+        get account_path
+
+        failing = FakeGithubApi.new(unavailable: true)
+        stub_github_per_installation { |_id| failing }
+        travel_to((InstallationReachability::FRESH_FOR + 1.minute).from_now) { get account_path }
+        calls = failing.calls_to(:repositories)
+        expect(calls).to be >= 1
+
+        travel_to((InstallationReachability::FRESH_FOR + 11.minutes).from_now) { get account_path }
+
+        expect(failing.calls_to(:repositories)).to eq(calls)
+        expect(installations_panel).to include("No longer reachable")
+      end
+
+      # @intent: {"entity": "GithubInstallation", "action": "pin the bound", "behavior": "the throttle bound is exactly one hour", "layer": "request"}
+      it "is one hour" do
+        expect(InstallationReachability::FRESH_FOR).to eq(1.hour)
+      end
+    end
+
+    # @intent: {"entity": "GithubInstallation", "action": "drop the cached reading on reconnect", "behavior": "passing back through the App callback discards the cached reading so a reconnected account is not still named as gone", "layer": "request"}
+    it "drops the cached reading when the person passes back through the App callback" do
+      two_account_person
+      stub_one_dead_account
+      get account_path
+      expect(installations_panel).to include("No longer reachable")
+
+      stub_github(repos: [github_repo("acme/billing-service")])
+      authorize_github_app(installations: [[5001, "acme"], [6002, "globex"]], expires_at: 1.day.from_now)
+      get account_path
+
+      expect(installations_panel).not_to include("No longer reachable")
+    end
+
+    # The landmine: the panel is a READ and must never become a `GithubRegistrationGrant.capture`.
+    # @intent: {"entity": "GithubRegistrationGrant", "action": "never capture from /account", "behavior": "rendering /account with a credential walks GitHub and mints no grant", "layer": "request"}
+    it "is not a grant-capture site" do
+      person = two_account_person
+      stub_github(repos: [github_repo("acme/billing-service")])
+      expect(grant_for(person)).to be_nil
+
+      get account_path
+
+      expect(grant_for(person)).to be_nil
+    end
+
+    # Decision B: the panel states, it does not destroy.
+    # @intent: {"entity": "GithubInstallation", "action": "never destroy on read", "behavior": "naming a dead account removes neither its row nor an existing grant", "layer": "request"}
+    it "destroys nothing" do
+      person = two_account_person
+      stub_github(repos: [github_repo("acme/billing-service")])
+      visit_picker
+      stub_one_dead_account
+      grant = grant_for(person)
+      expect(grant).to be_present
+
+      expect { get account_path }.not_to change { [person.github_installations.count, grant_for(person)&.id] }
+
+      expect(installations_panel).to include("No longer reachable")
+    end
+
+    # SPGD-986 criterion 6, scoped to the SOLE-installation case on purpose:
+    # `forget_registration_grant_if_last_installation` is guarded on the last row, so disconnecting
+    # one dead account of two correctly leaves a redeemable grant standing.
+    # @intent: {"entity": "GithubRegistrationGrant", "action": "reach not_granted through the panel", "behavior": "a sole-installation user holding a fresh grant whose installation 404s sees the account named, presses Disconnect, and the API then answers not_granted rather than not_in_installation", "layer": "request"}
+    it "lets a sole-installation user reach :not_granted through the panel's own Disconnect" do
+      person = sign_in_via_github(installation: 5001)
+      key = create_user_api_key(user: person)
+      visit_picker # mints the grant while the installation still answers
+      expect(grant_for(person)).to be_present
+      stub_github(not_found: true)
+
+      post "/api/v1/repositories", params: { github_full_name: "acme/billing-service" }, as: :json,
+                                   headers: { "Authorization" => "Bearer #{key.raw_token}" }
+      expect(response.body).to include(InstallationRepositories::MESSAGES[:not_in_installation])
+
+      get account_path
+      expect(installations_panel).to include("No longer reachable")
+
+      disconnect(person.github_installations.sole)
+
+      post "/api/v1/repositories", params: { github_full_name: "acme/billing-service" }, as: :json,
+                                   headers: { "Authorization" => "Bearer #{key.raw_token}" }
+      expect(response.body).to include(InstallationRepositories::MESSAGES[:not_granted])
+      expect(response.body).not_to include(InstallationRepositories::MESSAGES[:not_in_installation])
+    end
+  end
+
   # The action talks to GitHub not at all, so it must keep working on an instance whose App
   # credentials have been removed — which is precisely the reader left holding rows they can no
   # longer act on. `require_configured_app` guards the three actions that go to github.com and must

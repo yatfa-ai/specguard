@@ -24,8 +24,12 @@
 # reacting to installation and uninstall events is still a later slice — so the connected set is
 # read LIVE from GitHub on every use rather than trusted from here. A row that goes stale between
 # callbacks, because an installation was uninstalled or this user lost access to it after their
-# last pass through, costs a `GithubApi::NotFound` on the next read and nothing worse, which is
-# exactly the failure a stale row should have.
+# last pass through, costs a `GithubApi::NotFound` on the next read — and, since SPGD-975, more than
+# that: a fresh-but-empty `GithubRegistrationGrant` minted over it keeps answering a false
+# `:not_in_installation` for up to `GithubRegistrationGrant::MAX_AGE`, because a read must not
+# destroy the row. The row is therefore NAMED rather than dropped: `/account` marks an account
+# GitHub answers 404 for (`InstallationReachability`, at most one walk an hour per person), and the
+# person's own Disconnect is what removes it and, if it was their last, the grant with it.
 class GithubInstallation < ApplicationRecord
   belongs_to :user
 

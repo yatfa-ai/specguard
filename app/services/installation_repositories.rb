@@ -128,7 +128,13 @@ class InstallationRepositories
   # read any more — an uninstall is the ordinary way a row goes stale — so it is deliberately not an
   # error and does not make the sources incomplete. It is nevertheless an account whose repositories
   # are not on the page, which is the whole reason a reader is owed a sentence about it.
-  Outcome = Data.define(:account, :status, :count) do
+  #
+  # `installation_id` names the row the outcome is about, for the callers that must match an outcome
+  # back to a `GithubInstallation` rather than to its display name (`InstallationReachability`). It
+  # defaults to nil so a caller that builds an outcome by hand, as the model specs do, is unchanged.
+  Outcome = Data.define(:account, :status, :count, :installation_id) do
+    def initialize(account:, status:, count:, installation_id: nil) = super
+
     # Did this installation hand over its repositories? True for an installation that answered with
     # none of them, which is an answer rather than a failure.
     def read? = status == :read
@@ -294,7 +300,8 @@ class InstallationRepositories
       installations.each do |installation|
         listing, status = read(installation, user_token)
         outcomes << Outcome.new(account: installation.display_name, status: status,
-                                count: listing ? listing.repos.length : 0)
+                                count: listing ? listing.repos.length : 0,
+                                installation_id: installation.installation_id)
         next error ||= status if listing.nil?
 
         repos.concat(listing.repos)
