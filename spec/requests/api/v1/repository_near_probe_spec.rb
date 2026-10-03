@@ -14,11 +14,12 @@ require "rails_helper"
 # SPGD-958 built), and returns the top-10 with per-hit similarity, signal source, last-known path
 # and the weight the response's own run measured.
 #
-# ⭐ THE READ RANKS AND DISCLOSES ONLY. It applies NO nearness floor — so nothing here may assert
-# or imply a "near" verdict, and the block never answers "is this behavior already tested?" (the
-# owner-rejected `/check-intent` posture, preserved by construction: a ranked list with disclosed
-# similarities is evidence, never a conclusion the server drew). Floor semantics are slice 2's;
-# MCP reach slice 3's; contract docs slice 4's. `NearProbe`'s class comment owns the argument.
+# ⭐ THE READ RANKS AND DISCLOSES, AND SINCE SLICE 2 (SPGD-1548) IT HOLDS THE CENSUS'S OWN FLOOR:
+# `NearDuplicateClusters::SIMILARITY` (0.85), read and never restated, applied as a Ruby
+# post-filter on RAW distance. It is never `SpecIdentity::MATCH_SIMILARITY` (0.95) and the block
+# never answers "is this behavior already tested?" (the owner-rejected `/check-intent` posture):
+# the floor filters a ranked read and discloses itself, it issues no verdict. MCP reach is
+# slice 3's; contract docs slice 4's. `NearProbe`'s class comment owns the argument.
 #
 # ITS OWN FILE, on the precedent `repository_near_duplicates_spec.rb` states: every example here
 # needs identities whose texts bear a stated relation to a probe phrase the client supplies, which
@@ -27,16 +28,17 @@ require "rails_helper"
 # ⭐ THE PROVIDER IS LEXICAL HERE, for the same reason the census spec gives: the suite-wide stub
 # makes two different strings near-orthogonal however alike they read. Under the lexical stand-in
 # the probe's own text IS a stored identity's text, so the ranking has a deterministic head (the
-# exact match at similarity 1.0) without this file pinning any vector it typed. The floor is not
-# asserted anywhere — there is no floor — and no similarity threshold is exercised on this read.
+# exact match at similarity 1.0) without this file pinning any vector it typed. The census spec's calibrated
+# trio gives a deterministic ladder: the exact match at 1.0, the one-word-apart pair at 0.89 (above
+# the 0.85 floor) and an unrelated text at ~0.04 (below it).
 #
 # ⭐ THE SEAM IS ASSERTED AS A MECHANISM, NOT AN OUTCOME, per SPGD-375's own lesson as
 # `Ingest::IdentityResolver`'s spec records it: a recall assertion at test-suite table sizes is
 # vacuous (the planner does not choose the HNSW index at all there), while what cannot be
 # accidentally right is whether `SET LOCAL hnsw.iterative_scan` was issued on the connection for
 # THIS statement. The statement's shape — distance ordering merged with the `id` tiebreak, a
-# LIMIT, and NO threshold — is pinned beside it, because the threshold's absence is the read's
-# defining property and its presence would silently re-decide the slice's scope.
+# LIMIT, and NO threshold — is pinned beside it: the floor is a Ruby post-filter, and a threshold
+# on the statement would change its measured shape and import `MATCH_DISTANCE` by accident.
 RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
   include_context "with lexical embeddings"
 
@@ -48,6 +50,7 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
   # (near-orthogonal) — the census spec's own trio, reused so both files speak about the same
   # texts. The probe is the exact stored text: the deterministic head of the ranking.
   let(:expired) { "Checkout rejects an expired card" }
+  let(:outright) { "Checkout rejects an expired card outright" }
   let(:shipping) { "Shipping calculates a delivery estimate" }
   let(:probe) { expired }
 
@@ -107,37 +110,56 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
   end
 
   describe "an asking client" do
-    # @intent: { entity: "near", action: "rank the repository's identities", behavior: "a probe matching a stored text answers the deterministic head with every disclosed figure carried per hit and the disclosures above them", layer: "request" }
-    it "ranks nearest first and discloses what every figure means" do
+    # THE LADDER: exact match (1.0) then the calibrated one-word-apart neighbour (0.89), both above
+    # the floor; the unrelated identity (~0.04) is below it and is NOT ranked. Slice 1 ranked it.
+    # @intent: { entity: "near", action: "rank the repository's identities", behavior: "a probe matching a stored text answers the deterministic head with every disclosed figure carried per hit and the disclosures above them, ranking only identities at or above the floor", layer: "request" }
+    it "ranks nearest first, discloses what every figure means, and drops what is below the floor" do
+      neighbour_run = record_and_resolve(
+        repository,
+        [unannotated(file_path: "spec/models/checkout_spec.rb", line_number: 30,
+                     name: outright, id: "./spec/models/checkout_spec.rb[5:1]")],
+        commit_sha: "feedfacecafe0010"
+      )
+
       served = block(query: ask)
 
       expect(served["status"]).to eq("ok")
+      expect(served["similarity_floor"]).to eq(NearDuplicateClusters::SIMILARITY)
       expect(served["similarity_basis"]).to eq(NearProbe::SIMILARITY_BASIS)
       # Under the lexical provider there is no fingerprint and no published model — the nils are
       # the disclosure, not a gap; the cache group below pins the populated spellings.
       expect(served["provider_fingerprint"]).to be_nil
       expect(served["provider_model"]).to be_nil
       expect(served["cache_served"]).to be(false)
-      expect(served["weighed_run_id"]).to eq(test_run.id)
+      expect(served["weighed_run_id"]).to eq(neighbour_run.id)
 
-      expect(served["ranked"].pluck("text")).to eq([expired, shipping])
+      expect(served["ranked"].pluck("text")).to eq([expired, outright])
+      expect(served["ranked"].pluck("similarity")).to eq([1.0, 0.89])
+      # The unrelated identity is held by the denominator, not by the ranking.
+      expect(served["identity_count"]).to eq(3)
+      expect(served).not_to have_key("best_below_floor_similarity")
       head = served["ranked"].first
       expect(head).to include(
         "signal_source" => "name",
         "file_path" => "spec/models/checkout_spec.rb",
         "similarity" => 1.0,
         # The three-example loop collapsed onto ONE identity: the weight is the loop's, counted
-        # in the response's own run.
-        "example_count" => 3,
-        "total_seconds" => 0.75,
-        "timed_count" => 3
+        # in the run that observed it. The weighed run is the NEWEST one (the neighbour's), which
+        # never saw the loop — so the head reads unobserved here; the anchor group pins weights.
+        "example_count" => 0
       )
       expect(head).to have_key("text_digest")
       expect(head).to have_key("line_number")
       expect(head["id"]).to eq(repository.spec_identities.find_by(text: expired).id)
-      # The unrelated identity ranks, far away — and the server says no word about nearness it
-      # did not measure: the similarity is the only judgement in the block, and it is per hit.
-      expect(served["ranked"].last["similarity"]).to be < 1.0
+    end
+
+    # THE WEIGHT HEADLINE, on the base fixture alone (the loop's own run is the newest).
+    # @intent: { entity: "near", action: "weigh the head hit", behavior: "a collapsed three-example loop identity carries the loop's example count and wall clock measured in the response's own run", layer: "request" }
+    it "weighs the collapsed loop identity in the response's run" do
+      head = block(query: ask)["ranked"].first
+
+      expect(head).to include("example_count" => 3, "total_seconds" => 0.75, "timed_count" => 3,
+                              "similarity" => 1.0)
     end
 
     # The cap is the census's own neighbour cap, read from `NearDuplicateClusters::NEIGHBOURS`
@@ -156,7 +178,9 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
                          end,
                          commit_sha: "feedfacecafe0009")
 
-      served = block(query: ask)
+      # The growth texts sit near each other (0.88–0.92) and far from `expired`, so the ask
+      # probes one of THEM: every top-10 hit is above the floor and the cap is what binds.
+      served = block(query: { near: texts.first })
 
       expect(served["ranked"].size).to eq(NearDuplicateClusters::NEIGHBOURS)
     end
@@ -172,7 +196,12 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
 
       set = statements.grep(/\ASET LOCAL hnsw\.iterative_scan/i).sole
       expect(set).to match(/relaxed_order/i)
-      ann = statements.grep(/FROM "spec_identities"/).sole
+      # AMENDED DELIBERATELY (SPGD-1548), the same documented pattern as the cost example below:
+      # slice 2's `identity_count` is a SECOND statement against `spec_identities`, so the loose
+      # table match no longer isolates the ANN under `.sole`. The matcher tightens to the ANN's
+      # own shape — an `ORDER BY` on the `<=>` distance operator. The ANN statement itself is
+      # unchanged: still unthresholded, still byte-for-byte slice 1's.
+      ann = statements.grep(/FROM "spec_identities".*ORDER BY.*<=>/m).sole
       # The SET is on the same connection, ahead of the statement it scopes — a directive issued
       # anywhere else would pass the line above and mean nothing.
       expect(statements.index(ann)).to be > statements.index(set)
@@ -185,20 +214,23 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
     end
 
     # THE COST, pinned as a statement delta rather than a bare total: the response body already
-    # reads several tables unconditionally, so what this block adds is exactly THREE statements —
-    # the seam's `SET LOCAL` directive, the ANN read, and the weight read — whatever the rest of
-    # the body does. Pinned as a delta over the same request without the ask, on the census
-    # spec's warming discipline.
-    # @intent: { entity: "near", action: "bound the ask's cost", behavior: "an asking request costs exactly three more statements than the same request without the ask — the seam directive, one statement against spec_identities, and one against spec_observations", layer: "request" }
-    it "costs exactly three statements beyond the body's own — directive, ANN, weight" do
+    # reads several tables unconditionally, so what this block adds is exactly FOUR statements —
+    # the seam's `SET LOCAL` directive, the ANN read, the weight read and (SPGD-1548) the
+    # `identity_count` denominator. AMENDED DELIBERATELY from slice 1's three: the count statement
+    # replaced slice 1's derive-zero-when-empty shortcut because the denominator now rides every
+    # ok answer. Pinned as a delta over the same request without the ask, on the census spec's
+    # warming discipline.
+    # @intent: { entity: "near", action: "bound the ask's cost", behavior: "an asking request costs exactly four more statements than the same request without the ask — the seam directive, the ANN and the count against spec_identities, and one against spec_observations", layer: "request" }
+    it "costs exactly four statements beyond the body's own — directive, ANN, weight, count" do
       get_repository(query: ask) # warm every cache the two requests below share
 
       baseline = executed_sql { get_repository }
       asked = executed_sql { get_repository(query: ask) }
 
-      expect(asked.size - baseline.size).to eq(3)
+      expect(asked.size - baseline.size).to eq(4)
       expect(asked.grep(/FROM "spec_identities"/).size - baseline.grep(/FROM "spec_identities"/).size)
-        .to eq(1)
+        .to eq(2)
+      expect(asked.grep(/COUNT\(\*\) FROM "spec_identities"/).size).to eq(1)
       expect(asked.grep(/FROM "spec_observations"/).size - baseline.grep(/FROM "spec_observations"/).size)
         .to eq(1)
     end
@@ -281,6 +313,8 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
 
       expect(served["status"]).to eq("provider_unconfigured")
       expect(served["ranked"]).to be_nil
+      expect(served["similarity_floor"]).to eq(NearDuplicateClusters::SIMILARITY)
+      expect(served["similarity_basis"]).to eq(NearProbe::SIMILARITY_BASIS)
       expect(queries_against("spec_identities") { block(query: ask) }).to be_empty
 
       # THE COMPANION, inside the same example: the silence is the SHAPE's, not the suite stub's.
@@ -311,6 +345,8 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
       expect(served["status"]).to eq("embedding_failed")
       expect(served["error"]).to eq("HTTP 429 quota exhausted")
       expect(served["ranked"]).to be_nil
+      expect(served["similarity_floor"]).to eq(NearDuplicateClusters::SIMILARITY)
+      expect(served["similarity_basis"]).to eq(NearProbe::SIMILARITY_BASIS)
       expect(queries_against("spec_identities") { block(query: ask) }).to be_empty
     end
 
@@ -329,6 +365,65 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
       expect(served["ranked"]).to eq([])
       expect(served["identity_count"]).to eq(0)
       expect(served["weighed_run_id"]).to be_nil
+      expect(served).not_to have_key("best_below_floor_similarity")
+      expect(served["signal_sources"]).to eq("intent" => 0, "name" => 0)
+      expect(served["similarity_floor"]).to eq(NearDuplicateClusters::SIMILARITY)
+    end
+
+    # THE COMPANION that makes the two empties distinct: identities exist, none reaches the floor.
+    # `ranked: []` is the same on the wire; the denominator and the nearest figure are the
+    # difference, and the figure is the one the unranked hit would have displayed.
+    # @intent: { entity: "near", action: "answer nothing near", behavior: "an ask whose every top-ten hit is below the floor answers an empty ranking with a positive identity count and the nearest below-floor similarity, distinguishable from a repository with no identities", layer: "request" }
+    it "answers nothing-near as a finding: empty ranking, positive denominator, the nearest figure" do
+      served = block(query: { near: "Invoices are emailed to the account owner monthly" })
+
+      expect(served["status"]).to eq("ok")
+      expect(served["ranked"]).to eq([])
+      expect(served["identity_count"]).to eq(2)
+      expect(served["identity_count"]).to be > 0
+      expect(served["best_below_floor_similarity"]).to be_a(Float).and be < NearDuplicateClusters::SIMILARITY
+      expect(served["signal_sources"]).to eq("intent" => 0, "name" => 0)
+      expect(served["similarity_floor"]).to eq(NearDuplicateClusters::SIMILARITY)
+      expect(served["similarity_basis"]).to eq(NearProbe::SIMILARITY_BASIS)
+    end
+
+    # Membership is RAW distance, not the displayed figure: two hits straddle the floor by 0.001
+    # of distance each — both DISPLAY exactly 0.85 after the two-decimal rounding, and only the
+    # one within the floor is ranked. The ANN is stubbed to serve them because no lexical text
+    # lands that close to the boundary by construction.
+    # @intent: { entity: "near", action: "compare the floor on raw distance", behavior: "a hit whose rounded similarity displays as exactly the floor is ranked when its raw distance is within the floor and excluded when its raw distance is beyond it", layer: "request" }
+    it "compares the floor on raw distance, so rounding never flips membership" do
+      raw = lambda do |distance|
+        hit = Struct.new(:neighbor_distance).new(distance)
+        NearProbe.new(repository, probe, nil).send(:similarity_of, hit)
+      end
+      # Both sides of the boundary DISPLAY the floor...
+      inside = NearDuplicateClusters::DISTANCE - 0.001
+      beyond = NearDuplicateClusters::DISTANCE + 0.001
+      expect(raw.call(inside)).to eq(NearDuplicateClusters::SIMILARITY)
+      expect(raw.call(beyond)).to eq(NearDuplicateClusters::SIMILARITY)
+
+      # ...and membership splits them: drive the real answer with the ANN stubbed to those two.
+      hits = [inside, beyond].each_with_index.map do |distance, index|
+        SpecIdentity.new(id: SecureRandom.uuid, text: "boundary #{index}", text_digest: "d#{index}",
+                         signal_source: "name", file_path: "x_spec.rb", line_number: index + 1)
+                    .tap { |identity| identity.define_singleton_method(:neighbor_distance) { distance } }
+      end
+      allow_any_instance_of(NearProbe).to receive(:ranked_hits).and_return(hits)
+
+      served = block(query: ask)
+
+      expect(served["ranked"].pluck("text")).to eq(["boundary 0"])
+      expect(served["ranked"].first["similarity"]).to eq(NearDuplicateClusters::SIMILARITY)
+      expect(served["signal_sources"]).to eq("intent" => 0, "name" => 1)
+    end
+
+    # @intent: { entity: "near", action: "compose signal sources over the served page", behavior: "signal source composition counts the served page only, with every source present as a measured zero", layer: "request" }
+    it "counts signal sources over the served page, zeros measured" do
+      served = block(query: ask)
+
+      expect(served["signal_sources"]).to eq("intent" => 0, "name" => 1)
+      expect(served["signal_sources"].keys).to match_array(SpecIdentity::SOURCES)
     end
   end
 
@@ -360,7 +455,9 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
                          commit_sha: "nearanchor0002")
     end
 
-    def hit_for(text, query: ask)
+    # Each text probes ITSELF: the floor now drops what is far from the probe, so a hit is read
+    # in the ask whose head it is.
+    def hit_for(text, query: { near: text })
       block(query: query)["ranked"].find { |hit| hit["text"] == text }
     end
 
