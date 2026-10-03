@@ -13,17 +13,30 @@
 # `RequestedNearParam` for the ask's guard and `repository_near_probe_spec.rb` for the wire
 # contract.
 #
-# == ⭐ IT RANKS AND DISCLOSES ONLY — THERE IS NO FLOOR, AND THAT IS THE DESIGN
+# == ⭐ THE FLOOR IS THE CENSUS'S OWN, READ — AND IT FILTERS A RANKED READ, NEVER A WRITE
 #
-# This read applies NO nearness threshold: `#nearest`'s `MATCH_DISTANCE` is a resolution floor
-# (are these two observations the same test?) and the census's `SIMILARITY` is a redundancy floor
-# (are these two tests redundant?); this read is neither question, so it borrows neither
-# constant. Every identity comes back ranked, each carrying the similarity a client needs to
-# draw its own line — and because the server drew no line, the server makes no "near" claim and
-# answers no "is this behavior already tested?" question. That posture is the owner-rejected
-# `/check-intent` one, preserved here by construction rather than by discipline: a ranked list
-# with disclosed similarities is evidence, not a verdict. Slices 2-4 of the roadmap own floor
-# semantics, MCP reach and contract docs; none of that lives here.
+# Slice 1 (SPGD-1544) applied no floor, so "these are near" and "these are merely the
+# least-distant of everything" were byte-indistinguishable on the wire. Slice 2 (SPGD-1548) gives
+# the read `NearDuplicateClusters::SIMILARITY` (0.85) — "as near as two tests the census itself
+# would pair", the only semantic-similarity bar the system has — READ from the census, never
+# restated, and disclosed on every answer as `similarity_floor`, in the census's own naming.
+#
+# ⛔ It is explicitly NOT `SpecIdentity::MATCH_SIMILARITY` (0.95): that constant is the *matching*
+# threshold ("is this the same test?") and its own comment says the two must never share a
+# constant. Importing it would answer "is this behavior already tested?" — the owner-rejected
+# `/check-intent` posture. The floor discloses and filters a RANKED read; it never gates a write
+# and never issues a verdict.
+#
+# * Membership compares the RAW `neighbor_distance` against `NearDuplicateClusters::DISTANCE`,
+#   before the two-decimal display rounding, so rounding can never flip membership: a hit whose
+#   similarity displays as exactly the floor still counts as near.
+# * The floor is a Ruby post-filter. The ANN statement is byte-unchanged — no `threshold:`,
+#   nothing added to the query — so the read keeps its measured shape and does not import
+#   `MATCH_DISTANCE` semantics by accident.
+# * Order of operations: floor-filter the hits, weigh the SERVED page only (no weight query is
+#   spent on dropped hits), derive `signal_sources` composition in memory from the served page.
+#
+# Slices 3-4 of the roadmap own MCP reach and contract docs; none of that lives here.
 #
 # == The three silences are distinct, and the shape keeps them distinct
 #
@@ -37,14 +50,14 @@
 # * `status: "embedding_failed"` — the provider was asked and refused. Same `ranked: nil`, plus
 #   the provider's own failure message in `error` — the same honesty convention the census
 #   family holds for its mid-recompute window, moved to the one live failure this read has.
-# * `status: "ok"` with `ranked: []` and `identity_count: 0` — the search RAN over this
-#   repository and found no identities to rank. The zero is derived, not looked up: the read
-#   has no floor, `spec_identities.embedding` is NOT NULL and `nearest_neighbors` hard-filters
-#   nulls, so an unfiltered, tenant-scoped scan that returns nothing IS a repository with zero
-#   identities — which is a finding about the repository (nothing has been ingested), and is
-#   served as one rather than papered over. The count rides this shape only: a populated
-#   ranking would need a second `spec_identities` statement to state its own denominator, and
-#   the query budget below does not buy one.
+# * `status: "ok"` with `ranked: []` — the search RAN and found nothing near. Two different
+#   findings wear this empty list, and the denominator that rides EVERY ok answer
+#   (`identity_count`, one counted statement) tells them apart:
+#   - `identity_count: 0` — the repository holds no identities (nothing has been ingested);
+#   - `identity_count: N > 0` with `best_below_floor_similarity` — identities exist and none
+#     reaches the floor. The nearest one's rounded similarity is served so "nothing near" is a
+#     FINDING a client can verify, never a fabricated zero. It comes from the in-memory hits:
+#     zero extra queries.
 #
 # == The cost, and why the guard behind the ask matters
 #
@@ -52,7 +65,9 @@
 # class is ever constructed. An ask costs: one fingerprint read (an environment read, not a
 # query), one cache read, at most one embed per NOVEL probe (a paid HTTPS round trip on the
 # shipped provider — a repeated probe is served from `EmbeddingCacheEntry` and buys nothing),
-# one cache write on the miss, one ANN statement, and one weight query. That is why the
+# one cache write on the miss, one ANN statement, one weight query (none when the floor leaves
+# no hit to weigh) and one `identity_count` statement. The seam's `SET LOCAL` directive counts as
+# a statement too, so the ok ask path costs four. That is why the
 # parameter's guard is a value-carrying sibling's and not the flag's: the malformed shapes it
 # refuses would otherwise bill the provider on every request a broken serializer makes.
 #
@@ -66,8 +81,8 @@
 # one-probe shape SPGD-375 measured directive-only at recall 1.000. It inherits that measured
 # setup and does NOT answer the held-open price question on anyone's behalf; a second hand-rolled
 # setup is forbidden by the seam's own comment and none exists here. The statement itself copies
-# `#nearest`'s three deliberate differences for a top-N read: no `threshold:` (no floor by
-# design, above), `.order(:id)` kept (it merges after the distance `ORDER BY` as the determinism
+# `#nearest`'s three deliberate differences for a top-N read: no `threshold:` (the floor is a
+# Ruby post-filter, above), `.order(:id)` kept (it merges after the distance `ORDER BY` as the determinism
 # tiebreak that forces the Incremental Sort — without it, tied distances could serve a different
 # ten to identical asks), and the select list widened to what each hit discloses. The cap is
 # `NearDuplicateClusters::NEIGHBOURS` read from the census rather than restated: 10 is the
@@ -101,6 +116,10 @@ class NearProbe
   # The figure is pgvector's cosine distance (`embedding <=> probe`) subtracted from 1, rounded to
   # the two places `NearDuplicateClusters::Cluster#similarity_range` rounds to.
   SIMILARITY_BASIS = "pgvector cosine distance; similarity = 1 − distance, higher is nearer"
+
+  # The floor a hit had to clear to be ranked — the census's own redundancy floor, read. A
+  # method rather than a copied number: one constant stays one constant.
+  def self.similarity_floor = NearDuplicateClusters::SIMILARITY
 
   STATUS_OK = "ok"
   STATUS_PROVIDER_UNCONFIGURED = "provider_unconfigured"
@@ -157,6 +176,7 @@ class NearProbe
       provider_fingerprint: fingerprint,
       provider_model: provider_model,
       cache_served: nil,
+      similarity_floor: self.class.similarity_floor,
       similarity_basis: SIMILARITY_BASIS,
       ranked: nil
     }
@@ -164,20 +184,34 @@ class NearProbe
 
   def ranked_answer(fingerprint, cache_served, vector)
     hits = ranked_hits(vector)
-    weights = weights_for(hits)
+    served = hits.select { |hit| hit.neighbor_distance <= NearDuplicateClusters::DISTANCE }
+    weights = weights_for(served)
 
     answer = {
       status: STATUS_OK,
       provider_fingerprint: fingerprint,
       provider_model: provider_model,
       cache_served: cache_served,
+      similarity_floor: self.class.similarity_floor,
       similarity_basis: SIMILARITY_BASIS,
       weighed_run_id: run&.id,
-      ranked: hits.map { |hit| hit_payload(hit, weights) }
+      identity_count: repository.spec_identities.count,
+      signal_sources: signal_sources_of(served),
+      ranked: served.map { |hit| hit_payload(hit, weights) }
     }
-    answer[:identity_count] = 0 if hits.empty?
+    # Hits exist but none cleared the floor: state the nearest one's figure, from the same
+    # in-memory objects, so "nothing near" is verifiable rather than a bare empty list.
+    answer[:best_below_floor_similarity] = similarity_of(hits.first) if served.empty? && hits.any?
     answer
   end
+
+  # Composition of the SERVED page by signal source, over `SpecIdentity::SOURCES` — measured
+  # zeros over a page fully in hand, never absent keys.
+  def signal_sources_of(served)
+    SpecIdentity::SOURCES.index_with { |source| served.count { |hit| hit.signal_source == source } }
+  end
+
+  def similarity_of(hit) = (1 - hit.neighbor_distance).round(2)
 
   # The probe's own embed, mirroring `Ingest::IdentityResolver#embed_page`'s per-row fallback
   # register: the failure is caught HERE (not allowed to 500 an authenticated GET) and disclosed
@@ -268,7 +302,7 @@ class NearProbe
       signal_source: hit.signal_source,
       file_path: hit.file_path,
       line_number: hit.line_number,
-      similarity: (1 - hit.neighbor_distance).round(2),
+      similarity: similarity_of(hit),
       example_count: weight[:example_count],
       total_seconds: weight[:total_seconds],
       timed_count: weight[:timed_count]
