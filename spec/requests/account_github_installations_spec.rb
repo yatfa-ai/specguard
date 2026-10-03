@@ -473,6 +473,46 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
         expect(live.calls_to(:repositories) + dead.calls_to(:repositories)).to eq(4)
       end
 
+      # The throttle bounds the ATTEMPT, not only the success: a failing GitHub must not turn every
+      # render into the per-render walk this throttle exists to refuse.
+      # @intent: {"entity": "GithubInstallation", "action": "throttle a failing walk", "behavior": "when GitHub fails, a second render within the hour issues no GitHub call, and the hour's lapse walks again", "layer": "request"}
+      it "issues no GitHub call on a second render within the hour when the first walk failed" do
+        two_account_person
+        failing = FakeGithubApi.new(unavailable: true)
+        stub_github_per_installation { |_id| failing }
+
+        get account_path
+        calls = failing.calls_to(:repositories)
+        expect(calls).to be >= 1
+
+        travel_to(30.minutes.from_now) { get account_path }
+
+        expect(failing.calls_to(:repositories)).to eq(calls)
+        expect(installations_panel).not_to include("No longer reachable")
+
+        # The unstubbed positive partner: the hour lapsing re-opens the walk.
+        travel_to((InstallationReachability::FRESH_FOR + 1.minute).from_now) { get account_path }
+        expect(failing.calls_to(:repositories)).to be > calls
+      end
+
+      # @intent: {"entity": "GithubInstallation", "action": "throttle a failing walk after a clean one", "behavior": "a failed walk after a cached clean one is throttled and still renders the cached mark", "layer": "request"}
+      it "does not re-walk within the hour after a failed walk, and keeps rendering the last clean answer" do
+        two_account_person
+        stub_one_dead_account
+        get account_path
+
+        failing = FakeGithubApi.new(unavailable: true)
+        stub_github_per_installation { |_id| failing }
+        travel_to((InstallationReachability::FRESH_FOR + 1.minute).from_now) { get account_path }
+        calls = failing.calls_to(:repositories)
+        expect(calls).to be >= 1
+
+        travel_to((InstallationReachability::FRESH_FOR + 11.minutes).from_now) { get account_path }
+
+        expect(failing.calls_to(:repositories)).to eq(calls)
+        expect(installations_panel).to include("No longer reachable")
+      end
+
       # @intent: {"entity": "GithubInstallation", "action": "pin the bound", "behavior": "the throttle bound is exactly one hour", "layer": "request"}
       it "is one hour" do
         expect(InstallationReachability::FRESH_FOR).to eq(1.hour)
