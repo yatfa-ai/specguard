@@ -8,8 +8,8 @@
 # census — which answers "which pairs are redundant with each other", never "what is near X". The
 # probe embeds the caller's phrase once (through the shipped provider and shipped cache), ranks
 # the repository's identities through the single tenant-filtered ANN seam, and returns the
-# top-10 with per-hit similarity, signal source, last-known path and the weight the latest run
-# measured. It is served by `RepositoryOverview` behind the `?near=` opt-in — see
+# top-N (10 unasked, up to `RequestedLimitParam::MAX_LIMIT` on ask) with per-hit similarity,
+# signal source, last-known path and the weight the latest run measured. It is served by `RepositoryOverview` behind the `?near=` opt-in — see
 # `RequestedNearParam` for the ask's guard and `repository_near_probe_spec.rb` for the wire
 # contract.
 #
@@ -84,9 +84,38 @@
 # `#nearest`'s three deliberate differences for a top-N read: no `threshold:` (the floor is a
 # Ruby post-filter, above), `.order(:id)` kept (it merges after the distance `ORDER BY` as the determinism
 # tiebreak that forces the Incremental Sort — without it, tied distances could serve a different
-# ten to identical asks), and the select list widened to what each hit discloses. The cap is
-# `NearDuplicateClusters::NEIGHBOURS` read from the census rather than restated: 10 is the
-# neighbour cap the census's own pair read uses, and one constant should stay one constant.
+# page to identical asks), and the select list widened to what each hit discloses.
+#
+# == ⭐ THE CAP IS A DEFAULT PLUS AN ASK, AND THE TRUNCATION IS DISCLOSED (SPGD-1585)
+#
+# Unasked, the page is `NearDuplicateClusters::NEIGHBOURS` (10) — read from the census rather than
+# restated: one constant stays one constant. `?limit=` (`RequestedLimitParam`, clamped to its
+# `MAX_LIMIT`) widens it, and the APPLIED figure — the clamped one, never the raw ask — is served
+# as `limit` so the answer says what it did. NOTE `?limit=` is the endpoint's existing shared
+# param: it ALSO widens the duration rollups on the same body. That is the param's contract, not a
+# coupling this class adds.
+#
+# Before this slice a dense area was a blind spot: "these ten are all" and "ten of thirty-seven"
+# were byte-identical, and the only recourse was paraphrasing the probe (each a billed embed).
+# The statement now fetches `n + 1` rows — only the LIMIT literal changes; still ONE statement,
+# still unthresholded, still `ORDER BY distance, id`. Hits are distance-ordered, so the
+# above-floor hits are a PREFIX of the fetch; `truncated` is true iff the (n+1)th row also clears
+# the floor, i.e. more than `n` hits are near. It is computed from that extra row and never from
+# the served page's length (a full page proves nothing: exactly `n` near hits fill it too).
+# `truncated` is `nil` on both failure shapes — no ranking was attempted, so neither "all" nor
+# "some" is a claim to make — and `false` on the nothing-near shape.
+#
+# == ⭐ THE ASK'S CEILING IS `MAX_NEAR_LIMIT` (50), NOT `RequestedLimitParam::MAX_LIMIT` (200)
+#
+# SPGD-375's grid measured top-1 recall; a ranking is a top-k read, so SPGD-1585 re-ran the same
+# corpus and seam (`script/ann_recall_audit.rb topk` — 4×20,000 + 100 rows, seed 375, PG 17.11 /
+# pgvector 0.8.0, seam directive `relaxed_order`, price `false`, 40 probes per tenant, truth = the
+# same statement with index scans off). The small tenant is exact at every k (the planner reads
+# the btree). The LARGE tenant's mean recall@k: k=10 0.996 (min 0.91), k=50 0.988 (min 0.88),
+# k=100 0.885 (min 0.72), k=200 0.791 (min 0.70). k=200 is NOT measured-good, so the near ask is
+# clamped lower than the param's ceiling and the served `limit` states the figure actually applied
+# — an unmeasured deep ranking is not shipped. Raising it is a re-measurement (a higher
+# `hnsw.ef_search`, or a different corpus), not a constant edit.
 #
 # == The weights are the latest run's, and the run rides the response's anchor
 #
@@ -121,6 +150,14 @@ class NearProbe
   # method rather than a copied number: one constant stays one constant.
   def self.similarity_floor = NearDuplicateClusters::SIMILARITY
 
+  # The default page — the census's own neighbour cap, unchanged from slices 1-2.
+  DEFAULT_LIMIT = NearDuplicateClusters::NEIGHBOURS
+
+  # The deepest page an ask may buy — the deepest `k` whose recall was measured good; see the
+  # class comment. Lower than `RequestedLimitParam::MAX_LIMIT`, which the ask has already been
+  # clamped to by the time it arrives.
+  MAX_NEAR_LIMIT = 50
+
   STATUS_OK = "ok"
   STATUS_PROVIDER_UNCONFIGURED = "provider_unconfigured"
   STATUS_EMBEDDING_FAILED = "embedding_failed"
@@ -130,15 +167,20 @@ class NearProbe
     # @param probe [String] the behavior phrase, as the `?near=` guard admitted it.
     # @param run [TestRun, nil] the run the weights are measured in — the caller's anchor, not
     #   this class's choice. See the weights section above.
-    def for(repository, probe, run: nil)
-      new(repository, probe, run).answer
+    # @param limit [Integer, nil] how many hits to serve at most — the caller's
+    #   `requested_limit`, or `nil` for "no ask" (the default page). Resolved HERE to
+    #   `ask || DEFAULT_LIMIT` (`.limit(nil)` is NO limit at all) and clamped to
+    #   `MAX_NEAR_LIMIT`; the applied figure is what the answer serves as `limit`.
+    def for(repository, probe, run: nil, limit: nil)
+      new(repository, probe, run, [limit || DEFAULT_LIMIT, MAX_NEAR_LIMIT].min).answer
     end
   end
 
-  def initialize(repository, probe, run)
+  def initialize(repository, probe, run, limit = DEFAULT_LIMIT)
     @repository = repository
     @probe = probe
     @run = run
+    @limit = limit
   end
 
   def answer
@@ -160,7 +202,7 @@ class NearProbe
 
   private
 
-  attr_reader :repository, :probe, :run
+  attr_reader :repository, :probe, :run, :limit
 
   # The one live failure this read can produce, disclosed rather than swallowed into an empty
   # list. The class is always `EmbeddingGenerator::Error` — the interface wraps every provider
@@ -178,13 +220,17 @@ class NearProbe
       cache_served: nil,
       similarity_floor: self.class.similarity_floor,
       similarity_basis: SIMILARITY_BASIS,
-      ranked: nil
+      ranked: nil,
+      truncated: nil
     }
   end
 
   def ranked_answer(fingerprint, cache_served, vector)
     hits = ranked_hits(vector)
-    served = hits.select { |hit| hit.neighbor_distance <= NearDuplicateClusters::DISTANCE }
+    near = hits.select { |hit| hit.neighbor_distance <= NearDuplicateClusters::DISTANCE }
+    # The +1 row decides truncation, not the page's length: more than `limit` near hits within the
+    # fetch means the (limit+1)th one is near too.
+    served = near.first(limit)
     weights = weights_for(served)
 
     answer = {
@@ -197,6 +243,8 @@ class NearProbe
       weighed_run_id: run&.id,
       identity_count: repository.spec_identities.count,
       signal_sources: signal_sources_of(served),
+      limit: limit,
+      truncated: near.size > limit,
       ranked: served.map { |hit| hit_payload(hit, weights) }
     }
     # Hits exist but none cleared the floor: state the nearest one's figure, from the same
@@ -253,14 +301,15 @@ class NearProbe
   # THE RANKED READ — the one ANN statement this class issues, through the seam, at the price
   # answer the class comment owns. The statement's shape is `Ingest::IdentityResolver#nearest`'s
   # one-probe shape widened to a page and to the disclosure columns; see the class comment for
-  # why the threshold is absent, why `.order(:id)` stays and why the cap is the census's.
+  # why the threshold is absent, why `.order(:id)` stays and how the cap (`limit`, plus the one
+  # extra row that discloses truncation) works.
   def ranked_hits(vector)
     SpecIdentity.with_hnsw_planner_setup(correct_operator_price: false) do
       repository.spec_identities
                 .select(:id, :text, :text_digest, :signal_source, :file_path, :line_number)
                 .nearest_neighbors(:embedding, vector, distance: "cosine")
                 .order(:id)
-                .limit(NearDuplicateClusters::NEIGHBOURS)
+                .limit(limit + 1)
                 .to_a
     end
   end

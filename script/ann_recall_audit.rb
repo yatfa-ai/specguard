@@ -20,6 +20,9 @@
 #
 #   bin/rails runner script/ann_recall_audit.rb recall      # the recall grid + miss costs
 #   bin/rails runner script/ann_recall_audit.rb calibrate   # MATCH_SIMILARITY bands (needs a key)
+#   bin/rails runner script/ann_recall_audit.rb topk        # top-k recall at k=10/50/100/200 (SPGD-1585,
+#                                                           # the `?near=` ranking's depth ceiling; same
+#                                                           # corpus, seam and THROWAWAY-database rule as `recall`)
 #
 # `recall` talks only to the database it is pointed at — set `DATABASE_URL` to a THROWAWAY
 # database; it TRUNCATES `spec_identities` and inserts ~80k rows. The corpus is synthetic (see
@@ -346,9 +349,49 @@ def run_calibrate
   puts "\nCurrent MATCH_SIMILARITY = #{SpecIdentity::MATCH_SIMILARITY}. Record on SPGD-375."
 end
 
+
+def topk_for(repository, embedding, k, exact: false)
+  rows = nil
+  SpecIdentity.transaction do
+    if exact
+      SpecIdentity.connection.execute("SET LOCAL enable_indexscan = off")
+      SpecIdentity.connection.execute("SET LOCAL enable_bitmapscan = off")
+      rows = repository.spec_identities.select(:id).nearest_neighbors(:embedding, embedding, distance: "cosine").order(:id).limit(k).map(&:id)
+    else
+      rows = SpecIdentity.with_hnsw_planner_setup(correct_operator_price: false) do
+        repository.spec_identities.select(:id).nearest_neighbors(:embedding, embedding, distance: "cosine").order(:id).limit(k).map(&:id)
+      end
+    end
+    raise ActiveRecord::Rollback
+  end
+  rows
+end
+
+def run_topk
+  dim = EmbeddingGenerator::DIMENSIONS
+  identities, probes = build_corpus(dim)
+  tenants = insert_identities!(identities)
+  ActiveRecord::Base.connection.execute("ANALYZE spec_identities")
+  large = tenants.first
+  large_members = identities.each_index.select { |i| identities[i][0].zero? }.first(40)
+  large_probes = large_members.map { |i| V.nudge(identities[i][1], 0.96 + V.rng.rand * 0.035, dim) }
+  puts "# top-k recall (NearProbe shape: unthresholded, ORDER BY dist,id, LIMIT k+1; seam relaxed_order, price false)"
+  { "SMALL (#{SMALL_ROWS} rows)" => [tenants.last, probes.first(40)], "LARGE (#{LARGE_ROWS} rows)" => [large, large_probes] }.each do |label, (tenant, ps)|
+    [10, 50, 100, 200].each do |k|
+      recalls = ps.map do |p|
+        truth = topk_for(tenant, p, k + 1, exact: true)
+        got = topk_for(tenant, p, k + 1)
+        truth.empty? ? 1.0 : (truth & got).size.to_f / truth.size
+      end
+      puts format("%-22s k=%-4d mean recall %.4f  min %.4f  (n=%d probes)", label, k, recalls.sum / recalls.size, recalls.min, recalls.size)
+    end
+  end
+end
+
 case ARGV.first
 when "recall"    then run_recall
+when "topk"      then run_topk
 when "calibrate" then run_calibrate
 else
-  abort "usage: bin/rails runner script/ann_recall_audit.rb [recall|calibrate] — read the header of this file first"
+  abort "usage: bin/rails runner script/ann_recall_audit.rb [recall|topk|calibrate] — read the header of this file first"
 end
