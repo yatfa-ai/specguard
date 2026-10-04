@@ -1692,10 +1692,16 @@ class RepositoryOverview
   # ask (nil, "no ask") so the no-ask path costs nothing at all — no fingerprint read, no cache
   # read, no run lookup — and the key is present and `null` on it, the spelling every opt-in
   # block on this endpoint uses.
+  #
+  # `?limit=` (`requested_limit`, already clamped to `RequestedLimitParam::MAX_LIMIT`, then to
+  # `NearProbe::MAX_NEAR_LIMIT` — the deepest measured-good ranking) is the page size; `nil` falls
+  # to the probe's default of ten. It is the endpoint's one shared `?limit=`,
+  # so it widens the duration rollups too — that is the param's existing contract. The block serves
+  # the APPLIED `limit` and `truncated`, so the clamp and any cut are visible (SPGD-1585).
   def serialized_near
     return nil unless requested_near
 
-    NearProbe.for(repository, requested_near, run: latest_test_run)
+    NearProbe.for(repository, requested_near, run: latest_test_run, limit: requested_limit)
   end
 
   def serialized_unannotated_examples(test_run)

@@ -162,14 +162,20 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
                               "similarity" => 1.0)
     end
 
-    # The cap is the census's own neighbour cap, read from `NearDuplicateClusters::NEIGHBOURS`
-    # rather than restated — so this assertion pins the READ, not a number this file typed: the
-    # day the census's cap moves, the probe's moves with it and this example stays green.
-    # @intent: { entity: "near", action: "cap the ranking", behavior: "a repository with more identities than the census neighbour cap answers at most that many ranked hits", layer: "request" }
-    it "caps the ranking at the census's neighbour count" do
-      texts = Array.new(NearDuplicateClusters::NEIGHBOURS + 2) do |index|
-        "Behavior probe fixture #{index} verifies the invoice total for order #{index}"
-      end
+    # Seeds `count` mutually-near identities (0.88–0.92 under the lexical provider, far from
+    # `expired`/`shipping`), so probing one of them makes every top hit above the floor and the
+    # page size is what binds. Returns the texts.
+    #
+    # The numbers are NOT consecutive: under the lexical provider fixture 11 sits at 0.957 from
+    # fixture 1, which is past `SpecIdentity::MATCH_SIMILARITY` — the resolver would merge it
+    # onto fixture 1's identity and the seeded count would silently fall short. These indices are
+    # pairwise below that bar and all at 0.86+ from the first (probed offline).
+    GROWTH_NUMBERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 17, 18, 20].freeze
+
+    def growth_text(number) = "Behavior probe fixture #{number} verifies the invoice total for order #{number}"
+
+    def seed_growth(count)
+      texts = GROWTH_NUMBERS.first(count).map { |number| growth_text(number) }
       record_and_resolve(repository,
                          texts.each_with_index.map do |text, index|
                            unannotated(file_path: "spec/models/growth_spec.rb",
@@ -177,12 +183,77 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
                                        id: "./spec/models/growth_spec.rb[3:#{index + 1}]")
                          end,
                          commit_sha: "feedfacecafe0009")
+      texts
+    end
 
-      # The growth texts sit near each other (0.88–0.92) and far from `expired`, so the ask
-      # probes one of THEM: every top-10 hit is above the floor and the cap is what binds.
+    # The default page is the census's own neighbour cap, read from `NearDuplicateClusters::NEIGHBOURS`
+    # rather than restated — this pins the READ. And (SPGD-1585) the cut is DISCLOSED: with more
+    # near hits than the page, `truncated` is true and the applied `limit` is served.
+    # @intent: { entity: "near", action: "cap the ranking", behavior: "a repository with more near identities than the default page answers exactly the default page, discloses truncated true and serves the applied limit", layer: "request" }
+    it "caps the ranking at the census's neighbour count and discloses the truncation" do
+      texts = seed_growth(NearDuplicateClusters::NEIGHBOURS + 2)
+
       served = block(query: { near: texts.first })
 
       expect(served["ranked"].size).to eq(NearDuplicateClusters::NEIGHBOURS)
+      expect(served["truncated"]).to be(true)
+      expect(served["limit"]).to eq(NearDuplicateClusters::NEIGHBOURS)
+      expect(served["limit"]).to eq(10)
+    end
+
+    # THE FETCH-N+1 BOUNDARY, both ways: exactly a page of near hits is NOT truncated (a full
+    # page proves nothing), one more is. Computing `truncated` from the served page's length, or
+    # dropping the +1 fetch, each fails one side of this pair.
+    # @intent: { entity: "near", action: "disclose truncation exactly at the boundary", behavior: "exactly the default page of near hits answers truncated false and one more answers truncated true", layer: "request" }
+    it "discloses truncation exactly at the page boundary, both ways" do
+      # `expired` + `outright`-free fixture: the base fixture's `expired` is far from the growth
+      # texts, so the near population is exactly what is seeded here.
+      texts = seed_growth(NearDuplicateClusters::NEIGHBOURS)
+
+      exact = block(query: { near: texts.first })
+      expect(exact["ranked"].size).to eq(NearDuplicateClusters::NEIGHBOURS)
+      expect(exact["truncated"]).to be(false)
+
+      record_and_resolve(
+        repository,
+        [unannotated(file_path: "spec/models/growth_spec.rb", line_number: 99,
+                     name: growth_text(GROWTH_NUMBERS[NearDuplicateClusters::NEIGHBOURS]),
+                     id: "./spec/models/growth_spec.rb[3:99]")],
+        commit_sha: "feedfacecafe0011"
+      )
+
+      over = block(query: { near: texts.first })
+      expect(over["ranked"].size).to eq(NearDuplicateClusters::NEIGHBOURS)
+      expect(over["truncated"]).to be(true)
+    end
+
+    # `?limit=` is honoured, and the APPLIED figure is what is served — the clamp is visible.
+    # @intent: { entity: "near", action: "honour the limit ask", behavior: "a limit ask widens the near page to the asked size, serves it as limit with truncated false when everything near fits, and serves the clamped ceiling for an over-large ask", layer: "request" }
+    it "honours ?limit= and serves the applied, clamped figure" do
+      texts = seed_growth(NearDuplicateClusters::NEIGHBOURS + 2)
+
+      wide = block(query: { near: texts.first, limit: "12" })
+      expect(wide["ranked"].size).to eq(12)
+      expect(wide["truncated"]).to be(false)
+      expect(wide["limit"]).to eq(12)
+
+      narrow = block(query: { near: texts.first, limit: "3" })
+      expect(narrow["ranked"].size).to eq(3)
+      expect(narrow["truncated"]).to be(true)
+      expect(narrow["limit"]).to eq(3)
+
+      # The clamp is visible. The ask is bounded by the recall-measured near ceiling (50), which
+      # sits under the param's own MAX_LIMIT (200) — k=200 recall was measured 0.79, not good.
+      clamped = block(query: { near: texts.first, limit: "1000" })
+      expect(clamped["limit"]).to eq(NearProbe::MAX_NEAR_LIMIT)
+      expect(clamped["limit"]).to eq(50)
+      expect(NearProbe::MAX_NEAR_LIMIT).to be < RequestedLimitParam::MAX_LIMIT
+      expect(clamped["truncated"]).to be(false)
+      expect(block(query: { near: texts.first, limit: "50" })["limit"]).to eq(50)
+      expect(block(query: { near: texts.first, limit: "51" })["limit"]).to eq(50)
+
+      # A malformed ask is no ask: the default page, not no limit at all.
+      expect(block(query: { near: texts.first, limit: "0" })["limit"]).to eq(10)
     end
 
     # THE SEAM, asserted as a mechanism and not an outcome — the reasoning is
@@ -211,6 +282,9 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
       # so the assertion matches the space-or-digit spelling a threshold would have to use.
       expect(ann).to match(/ORDER BY.*<=>.*,\s*"spec_identities"\."id" ASC\s*LIMIT/m)
       expect(ann).not_to match(/<=\s*[\d$]/)
+      # SPGD-1585: the fetch is the page PLUS ONE (the extra row decides `truncated`) — still the
+      # same single statement, only the LIMIT literal moved from the page to page + 1.
+      expect(ann).to match(/LIMIT\s+(\$\d+|#{NearDuplicateClusters::NEIGHBOURS + 1})\b/)
     end
 
     # THE COST, pinned as a statement delta rather than a bare total: the response body already
@@ -313,6 +387,9 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
 
       expect(served["status"]).to eq("provider_unconfigured")
       expect(served["ranked"]).to be_nil
+      # No ranking attempted: truncated is null (not false) — neither "all" nor "some" is claimed.
+      expect(served).to have_key("truncated")
+      expect(served["truncated"]).to be_nil
       expect(served["similarity_floor"]).to eq(NearDuplicateClusters::SIMILARITY)
       expect(served["similarity_basis"]).to eq(NearProbe::SIMILARITY_BASIS)
       expect(queries_against("spec_identities") { block(query: ask) }).to be_empty
@@ -345,6 +422,8 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
       expect(served["status"]).to eq("embedding_failed")
       expect(served["error"]).to eq("HTTP 429 quota exhausted")
       expect(served["ranked"]).to be_nil
+      expect(served).to have_key("truncated")
+      expect(served["truncated"]).to be_nil
       expect(served["similarity_floor"]).to eq(NearDuplicateClusters::SIMILARITY)
       expect(served["similarity_basis"]).to eq(NearProbe::SIMILARITY_BASIS)
       expect(queries_against("spec_identities") { block(query: ask) }).to be_empty
@@ -363,6 +442,8 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
 
       expect(served["status"]).to eq("ok")
       expect(served["ranked"]).to eq([])
+      expect(served["truncated"]).to be(false)
+      expect(served["limit"]).to eq(10)
       expect(served["identity_count"]).to eq(0)
       expect(served["weighed_run_id"]).to be_nil
       expect(served).not_to have_key("best_below_floor_similarity")
@@ -379,6 +460,7 @@ RSpec.describe "GET /api/v1/repositories/:id — near", type: :request do
 
       expect(served["status"]).to eq("ok")
       expect(served["ranked"]).to eq([])
+      expect(served["truncated"]).to be(false)
       expect(served["identity_count"]).to eq(2)
       expect(served["identity_count"]).to be > 0
       expect(served["best_below_floor_similarity"]).to be_a(Float).and be < NearDuplicateClusters::SIMILARITY
