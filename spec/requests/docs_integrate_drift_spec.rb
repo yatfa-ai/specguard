@@ -211,6 +211,13 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
           "both duration rows (the run's duration_seconds and the per-spec duration) must " \
           "state that the value must be finite as well as non-negative"
 
+    # The indexed-string byte bound, read from the validator rather than retyped: changing
+    # MAX_INDEXED_STRING_BYTES reddens this against a page still stating the old figure.
+    max_bytes = Ingest::Payload::MAX_INDEXED_STRING_BYTES
+    expect(response.body).to include("#{max_bytes} bytes"),
+          "the server refuses btree-indexed strings above #{max_bytes} bytes (read from " \
+          "Ingest::Payload), which /docs/integrate does not state"
+
     # The NUL refusal, worded as the server words its entries: the six characters \u0000, not
     # an actual NUL byte, which the page cannot render and the server never sends.
     expect(response.body).to include("\\u0000"),

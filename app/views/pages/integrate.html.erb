@@ -658,6 +658,17 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
           location, because Postgres cannot store a NUL in a <code>text</code> or
           <code>jsonb</code> column.
         </p>
+        <p class="text-xs text-app-muted">
+          Eight strings are indexed by the database and so are length-bounded: the envelope's
+          <code>commit_sha</code>, <code>branch</code>, <code>ci_run_id</code> and
+          <code>shard_id</code>, and each example's <code>name</code>, <code>id</code>,
+          <code>spec_file_path</code> and <code>outcome</code>. Each may be at most
+          <strong class="text-app-content">2048 bytes</strong> — bytes, not characters, so
+          multibyte text counts for more (a CJK character is 3 bytes). A longer one refuses the
+          run with a <code>400</code> whose entry names the field, and nothing is stored. The
+          bound applies whether or not the value would compress: a 2 KB+ example name is not a
+          realistic input, and a predictable refusal beats a failure that depends on the text.
+        </p>
       </div>
 
       <div class="space-y-2">
