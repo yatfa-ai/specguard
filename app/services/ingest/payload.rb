@@ -23,6 +23,27 @@ module Ingest
     NUL = "\u0000"
     NUL_AS_TEXT = "\\u0000"
 
+    # The longest a btree-indexed client string may be, in BYTES. Postgres refuses an index entry
+    # over 2704 bytes (btree version 4: `PG::ProgramLimitExceeded: index row size … exceeds btree
+    # version 4 maximum 2704`), and the eight fields in {ENVELOPE_INDEXED_STRINGS} and
+    # {SPEC_INDEXED_STRINGS} each sit in such an index. 2048 sits below that ceiling because the
+    # entries are multi-column (`repository_id`, `test_run_id`, `created_at` … ride beside the
+    # string), so the string cannot have the whole 2704; 2048 leaves headroom for them.
+    #
+    # DELIBERATE TRADE-OFF: Postgres compresses long index values inline, so before this bound a
+    # 20,000-character repetitive name and a 5,000-character realistic-prose name were accepted
+    # while an incompressible ~2,700-byte one raised a 500 — accept-or-500 by entropy, which no
+    # client can predict. This cap is on bytes, not compressibility, so it also refuses some
+    # payloads that used to work. That tightening is intended: a 2 KB+ example name, branch or id
+    # is not a realistic input, and a predictable per-field 400 beats an unpredictable 500.
+    MAX_INDEXED_STRING_BYTES = 2048
+
+    # Envelope strings that are btree-indexed (`test_runs`, `test_run_shards`).
+    ENVELOPE_INDEXED_STRINGS = %w[commit_sha branch ci_run_id shard_id].freeze
+
+    # Per-spec strings that are btree-indexed (`spec_observations`).
+    SPEC_INDEXED_STRINGS = %w[name id spec_file_path outcome].freeze
+
     attr_reader :errors
 
     def initialize(body)
@@ -85,6 +106,7 @@ module Ingest
       validate_no_nul_characters
       return if @errors.any?
 
+      validate_indexed_string_lengths
       validate_commit_sha
       validate_branch
       validate_ci_run_id
@@ -183,6 +205,38 @@ module Ingest
     # changes by a byte.
     def nul_safe(text)
       text.gsub(NUL, NUL_AS_TEXT)
+    end
+
+    # Refuses a String longer than {MAX_INDEXED_STRING_BYTES} bytes on each of the eight
+    # btree-indexed client fields. Like {#validate_duration} and {#validate_line_number}, this is
+    # the only gate before `upsert_all`: nothing else bounds these strings, so an over-long one
+    # reaches the index and raises `PG::ProgramLimitExceeded` inside `Ingest::RunRecorder`'s
+    # transaction — a 500 with no `TestRun` and no `IngestRejection` row, which a shipped client
+    # (content-refusal codes `[400]`) classifies as "undelivered" and replays forever.
+    #
+    # The rule is bytes (`bytesize`), not characters, because the index limit is in bytes. A
+    # non-String value is left to the type validators beside it. Errors are collected per field,
+    # and per spec through {#label}, so a payload with an over-long name on one spec and another
+    # defect on the next reports both.
+    def validate_indexed_string_lengths
+      ENVELOPE_INDEXED_STRINGS.each do |field|
+        flag_overlong(@body[field], field, nil)
+      end
+
+      return unless @body["specs"].is_a?(Array)
+
+      @body["specs"].each_with_index do |spec, index|
+        next unless spec.is_a?(Hash)
+
+        SPEC_INDEXED_STRINGS.each { |field| flag_overlong(spec[field], field, label(spec, index)) }
+      end
+    end
+
+    def flag_overlong(value, field, prefix)
+      return unless value.is_a?(String) && value.bytesize > MAX_INDEXED_STRING_BYTES
+
+      message = "#{field} must be at most #{MAX_INDEXED_STRING_BYTES} bytes (got #{value.bytesize})"
+      @errors << (prefix ? "#{prefix}: #{message}" : message)
     end
 
     def validate_commit_sha

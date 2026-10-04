@@ -1213,6 +1213,72 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       end
     end
 
+    # Eight client strings are btree-indexed, and an entry over Postgres's 2704-byte limit used to
+    # raise `PG::ProgramLimitExceeded` inside `Ingest::RunRecorder` — an HTML 500 with no run, no
+    # observation and no `IngestRejection` row, which a shipped client replays forever. The bound
+    # is `Ingest::Payload::MAX_INDEXED_STRING_BYTES`, in bytes because the index limit is.
+    describe "an over-long indexed string" do
+      let(:bound) { Ingest::Payload::MAX_INDEXED_STRING_BYTES }
+
+      # The body whose only unusual thing is `value` in `field`. `shard_id` rides with a
+      # `ci_run_id`, as it does in a real sharded run.
+      def body_for(field, value)
+        case field
+        when "commit_sha", "branch", "ci_run_id"
+          ingest_payload(field.to_sym => value, specs: [unannotated_spec])
+        when "shard_id"
+          ingest_payload(ci_run_id: "build-1", shard_id: value, specs: [unannotated_spec])
+        else
+          ingest_payload(specs: [unannotated_spec(field.to_sym => value)])
+        end
+      end
+
+      %w[commit_sha branch ci_run_id shard_id name id spec_file_path outcome].each do |field|
+        # @intent: { entity: "POST /api/v1/ingest", action: "reject an over-long indexed string", behavior: "a 3000-byte value in a btree-indexed field answers a 400 naming the field, with exactly one rejection row and no run or observation rows", layer: "request" }
+        it "answers 400 for a 3000-byte #{field}, naming it and writing only the rejection row" do
+          expect { ingest(body_for(field, "a" * 3000)) }.to change(IngestRejection, :count).by(1)
+
+          expect(response).to have_http_status(:bad_request)
+          expect(response.parsed_body["details"].grep(/\b#{field} must be at most/).size).to eq(1)
+          expect(TestRun.count).to eq(0)
+          expect(SpecObservation.count).to eq(0)
+        end
+
+        # @intent: { entity: "POST /api/v1/ingest", action: "pin both sides of the length bound", behavior: "a value of exactly the bound is accepted and one byte more is refused, for each btree-indexed field", layer: "request" }
+        it "accepts a #{field} of exactly the bound and refuses one byte more" do
+          ingest(body_for(field, "a" * bound))
+          expect(response).to have_http_status(:accepted)
+
+          ingest(body_for(field, "a" * (bound + 1)))
+          expect(response).to have_http_status(:bad_request)
+        end
+      end
+
+      # @intent: { entity: "POST /api/v1/ingest", action: "collect an over-long name beside another defect", behavior: "an over-long name on one spec and an unrelated defect on another are both reported in details", layer: "request" }
+      it "reports an over-long name and an unrelated defect on another spec independently" do
+        body = ingest_payload(specs: [unannotated_spec(name: "a" * 3000),
+                                      unannotated_spec(file_path: "spec/b_spec.rb", line_number: 0)])
+
+        ingest(body)
+
+        details = response.parsed_body["details"]
+        expect(response).to have_http_status(:bad_request)
+        expect(details.grep(/specs\[0\].*name must be at most/).size).to eq(1)
+        expect(details.grep(/specs\[1\].*line_number is required/).size).to eq(1)
+      end
+
+      # The rule is bytes, matching the index: 1500 CJK characters are under the bound in
+      # characters and over it in bytes (3 bytes each = 4500).
+      # @intent: { entity: "POST /api/v1/ingest", action: "measure the length bound in bytes", behavior: "a name of 1500 CJK characters, over the byte bound but under it in characters, is refused", layer: "request" }
+      it "counts bytes rather than characters" do
+        ingest(ingest_payload(specs: [unannotated_spec(name: "試" * 1500)]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["details"].grep(/name must be at most/).size).to eq(1)
+        expect(TestRun.count).to eq(0)
+      end
+    end
+
     # @intent: { entity: "POST /api/v1/ingest", action: "reject an unknown status", behavior: "a spec status outside the allowed vocabulary is refused with the field named", layer: "request" }
     it "rejects an unknown status" do
       ingest(ingest_payload(specs: [annotated_spec.merge(status: "skipped")]))
