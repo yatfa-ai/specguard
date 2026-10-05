@@ -3,8 +3,9 @@
     credential and therefore the copy: an `sga_` token answers the PLURAL routes, with the reach
     of the grant minted onto it — the reads since SPGD-952 and, since SPGD-973, the writes its
     permissions cover (minting and revoking the repository's CI keys, managing its members,
-    deleting the repository), each gated by the matching box ticked at mint. Never ingest, never
-    the singular repository route, and registering and renaming stay person-only. %>
+    deleting the repository), each gated by the matching box ticked at mint. Ingest only through
+    the repository-scoped route (`POST /api/v1/repositories/:id/ingest`, gated by `runs.ingest`),
+    never the singular `/api/v1/repository` route, and registering and renaming stay person-only. %>
 <% if @revealed_agent_token.present? %>
   <% content_for :head do %>
     <meta name="turbo-cache-control" content="no-cache">

@@ -139,10 +139,14 @@
       when you mint it. A key can read the repositories in its set — and nothing outside it, which
       is indistinguishable from a repository that does not exist — and take only the actions its
       permissions cover, over the API as in a browser: minting and revoking the repository's CI
-      keys, managing its members, deleting the repository — each gated by the matching box you
-      ticked. It cannot ingest CI results (<code class="font-mono text-xs">sgk_</code>
-      keys do that) and it cannot act as you: registering and renaming stay person-only over the
-      API. Revoking one leaves the rest working.
+      keys, managing its members, deleting the repository, and posting a run — each gated by the
+      matching box you ticked. With <code class="font-mono text-xs"><%= RepositoryMembership::RUNS_INGEST %></code>
+      ticked, a key can post a run to any repository in its set at
+      <code class="font-mono text-xs">POST /api/v1/repositories/&lt;id&gt;/ingest</code> (the id is a
+      path segment; a repository outside the set is indistinguishable from one that does not
+      exist); a repository's own <code class="font-mono text-xs">sgk_</code> key remains its
+      single-repository ingest credential. A key cannot act as you: registering and renaming stay
+      person-only over the API. Revoking one leaves the rest working.
     </p>
 
     <%# THE FULL MINT FORM — the grant is chosen here and bounded by the model, on the membership
