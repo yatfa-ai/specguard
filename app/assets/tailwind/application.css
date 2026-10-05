@@ -61,7 +61,7 @@
  * word in a method name does on your behalf.
  */
 @plugin "daisyui" {
-  themes: dark --default, winter;
+  themes: false;
   exclude: avatar, breadcrumbs, calendar, carousel, chat, collapse, countdown, diff, divider, dock,
            drawer, fab, fieldset, filter, footer, hero, hover3d, hovergallery, indicator, kbd, mask,
            mockup, modal, navbar, otp, select, stack, steps, tab, textarea, timeline, toggle,
@@ -69,83 +69,193 @@
 }
 
 /* ---------------------------------------------------------------------------
- * Tokens — dark (the default theme, OLED)
+ * Tokens — the YATFA "final UI kit" language: ONE blue scheme, two themes.
+ *
+ * Values are read straight off the live YATFA stylesheet (application-*.css), not re-derived.
+ * The structure is the kit's 25 colour tokens plus its non-colour roles:
+ *
+ *   surfaces   background · surface · surface-raised · surface-hover · surface-active · secondary
+ *   text       text · text-secondary · text-muted
+ *   edges      border · border-strong            (border-strong is the 3:1 control edge)
+ *   accent     accent · accent-solid · accent-ink · accent-ink-hover · solid-label
+ *   status     success · warning · error · info  (+ a -surface tint each, + solid steps)
+ *
+ * `accent-solid` is the FILL role (white label, >= 4.5:1), `accent-ink` is the accent AS TEXT,
+ * `accent` is the bright hue-true value for rules, dots and the showpiece. Never swap them.
+ *
+ * Shape and motion are tokens too: radii 10 (controls) / 12 (cards) / 16 (showpiece), one easing,
+ * three durations, ONE focus technique (the ring) — see the base layer below.
  * ------------------------------------------------------------------------ */
 :root,
 [data-theme="dark"] {
   --app-background: #020617;
   --app-surface: #0f172a;
   --app-surface-raised: #1e293b;
-
-  --app-primary: #0f172a;
-  --app-secondary: #1e293b;
-
-  --app-cta: #22c55e;
-  --app-cta-hover: #16a34a;
+  --app-surface-hover: #1a2438;
+  --app-surface-active: #29364d;
+  --app-secondary: #29364d;
 
   --app-text: #f8fafc;
   --app-text-secondary: #94a3b8;
-  --app-text-muted: #64748b;
+  --app-text-muted: #8091a6;
 
-  --app-border: #1e293b;
-  --app-border-light: #334155;
+  --app-border: #404a59;
+  --app-border-strong: #798392;
 
-  /* The panel-border trap: in dark, --app-border is byte-identical to
-     --app-surface-raised (#1E293B), so a 1px card border is literally invisible.
-     --app-panel-border + shadow-app are PANEL-SCOPED so panels read as raised
-     without blasting the global border. Do not "fix" --app-border instead. */
-  --app-panel-border: #334155;
-  --app-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.45), 0 1px 2px -1px rgb(0 0 0 / 0.45);
+  --app-accent: #0062fc;
+  --app-accent-solid: #0b4fd0;
+  --app-accent-ink: #6aa2f9;
+  --app-accent-ink-hover: #7cadfa;
+  --app-accent-ambient: #0062fc26;
+  --app-solid-label: #ffffff;
 
-  --app-success: #22c55e;
-  --app-success-surface: rgb(34 197 94 / 0.15);
-  --app-warning: #f59e0b;
-  --app-warning-surface: rgb(245 158 11 / 0.15);
-  --app-error: #ef4444;
-  --app-error-surface: rgb(239 68 68 / 0.15);
-  --app-info: #3b82f6;
-  --app-info-surface: rgb(59 130 246 / 0.15);
+  --app-success: #0ad17b;
+  --app-success-surface: #0e3336;
+  --app-warning: #f0a020;
+  --app-warning-surface: #312c28;
+  --app-warning-solid: #a1670b;
+  --app-error: #f26368;
+  --app-error-surface: #311e2f;
+  --app-error-solid: #e5131a;
+  --app-info: #01bad5;
+  --app-info-surface: #0d2f44;
   --app-neutral-surface: rgb(148 163 184 / 0.15);
+
+  --app-shadow: inset 0 0 0 1px #ffffff0e, 0 1px 2px #0006, 0 8px 24px -14px #0000008c;
+  --app-shadow-2: inset 0 0 0 1px #ffffff12, 0 2px 6px #0000006b, 0 16px 40px -18px #0009;
+  --app-ambient-glow: #0062fc38;
+  --app-gradient-showpiece: linear-gradient(135deg, #0062fc, #01bad5 55%, #0ad17b);
+
+  --app-focus-ring-width: 2px;
+  --app-focus-ring-offset: 2px;
+  --app-control-h-sm: 32px;
+  --app-control-h-md: 40px;
+  --app-control-h-lg: 48px;
+  --app-radius-control: 10px;
+  --app-radius-card: 12px;
+  --app-radius-showpiece: 16px;
+  --app-radius-pill: 9999px;
+  --app-ease: cubic-bezier(0.2, 0, 0, 1);
+  --transition-fast: 150ms;
+  --transition-normal: 200ms;
+  --transition-slow: 300ms;
 
   --sidebar-width: 256px;
   --sidebar-width-collapsed: 68px;
   --topbar-height: 56px;
+
+  /* Legacy names. Every `*-app-cta` / `*-app-panel-border` / `*-app-border-light` utility in the
+     tree keeps working, and now resolves to the kit's role it always stood for. */
+  --app-primary: var(--app-surface);
+  --app-cta: var(--app-accent-solid);
+  --app-cta-hover: var(--app-accent-ink-hover);
+  --app-border-light: var(--app-border-strong);
+  --app-panel-border: var(--app-border);
 }
 
 /* ---------------------------------------------------------------------------
- * Tokens — winter (light). EVERY --app-* token is overridden; nothing is
- * inherited from the dark block, so no dark-only value can leak into light.
+ * Tokens — winter (light). EVERY colour token is overridden; nothing is inherited from the dark
+ * block, so no dark-only value can leak into light.
  * ------------------------------------------------------------------------ */
 [data-theme="winter"] {
-  --app-background: #f8fafc;
+  --app-background: #eaebec;
   --app-surface: #ffffff;
   --app-surface-raised: #f1f5f9;
-
-  --app-primary: #ffffff;
-  --app-secondary: #f1f5f9;
-
-  --app-cta: #16a34a;
-  --app-cta-hover: #15803d;
+  --app-surface-hover: #edf2f7;
+  --app-surface-active: #e2e8f0;
+  --app-secondary: #cbd5e1;
 
   --app-text: #0f172a;
   --app-text-secondary: #475569;
-  --app-text-muted: #64748b;
+  --app-text-muted: #596779;
 
-  --app-border: #e2e8f0;
-  --app-border-light: #cbd5e1;
+  --app-border: #e0e3e6;
+  --app-border-strong: #5d6b80;
 
-  --app-panel-border: #e2e8f0;
-  --app-shadow: 0 1px 3px 0 rgb(15 23 42 / 0.08), 0 1px 2px -1px rgb(15 23 42 / 0.08);
+  --app-accent: #a4c8ff;
+  --app-accent-solid: #0b4fd0;
+  --app-accent-ink: #095cdf;
+  --app-accent-ink-hover: #0a61e9;
+  --app-accent-ambient: #a4c8ff40;
+  --app-solid-label: #ffffff;
 
-  --app-success: #15803d;
-  --app-success-surface: rgb(34 197 94 / 0.12);
-  --app-warning: #b45309;
-  --app-warning-surface: rgb(245 158 11 / 0.14);
-  --app-error: #b91c1c;
-  --app-error-surface: rgb(239 68 68 / 0.12);
-  --app-info: #1d4ed8;
-  --app-info-surface: rgb(59 130 246 / 0.12);
+  --app-success: #0b7648;
+  --app-success-surface: #e4faf0;
+  --app-warning: #8e5d0f;
+  --app-warning-surface: #fdf5e6;
+  --app-warning-solid: #a1670b;
+  --app-error: #d11a20;
+  --app-error-surface: #fdebec;
+  --app-error-solid: #e5131a;
+  --app-info: #067282;
+  --app-info-surface: #e3f7fa;
   --app-neutral-surface: rgb(100 116 139 / 0.12);
+
+  --app-shadow: inset 0 0 0 1px #ffffffd9, 0 1px 2px #17171f0f, 0 8px 24px -16px #17171f29;
+  --app-shadow-2: inset 0 0 0 1px #ffffffe6, 0 2px 6px #17171f12, 0 16px 36px -20px #17171f38;
+  --app-ambient-glow: #0062fc2e;
+}
+
+/* ---------------------------------------------------------------------------
+ * daisyUI STAYS in the build — tuned to the tokens above instead of its stock palette, so the
+ * few classes the app still takes from it (tooltips, menus) read as the same language.
+ * ------------------------------------------------------------------------ */
+@plugin "daisyui/theme" {
+  name: "dark";
+  default: true;
+  prefersdark: true;
+  color-scheme: dark;
+  --color-base-100: #0f172a;
+  --color-base-200: #020617;
+  --color-base-300: #1e293b;
+  --color-base-content: #f8fafc;
+  --color-primary: #0b4fd0;
+  --color-primary-content: #ffffff;
+  --color-secondary: #29364d;
+  --color-secondary-content: #f8fafc;
+  --color-accent: #0062fc;
+  --color-accent-content: #ffffff;
+  --color-neutral: #29364d;
+  --color-neutral-content: #f8fafc;
+  --color-info: #01bad5;
+  --color-info-content: #020617;
+  --color-success: #0ad17b;
+  --color-success-content: #020617;
+  --color-warning: #f0a020;
+  --color-warning-content: #020617;
+  --color-error: #f26368;
+  --color-error-content: #020617;
+  --radius-selector: 9999px;
+  --radius-field: 10px;
+  --radius-box: 12px;
+}
+
+@plugin "daisyui/theme" {
+  name: "winter";
+  color-scheme: light;
+  --color-base-100: #ffffff;
+  --color-base-200: #eaebec;
+  --color-base-300: #e0e3e6;
+  --color-base-content: #0f172a;
+  --color-primary: #0b4fd0;
+  --color-primary-content: #ffffff;
+  --color-secondary: #cbd5e1;
+  --color-secondary-content: #0f172a;
+  --color-accent: #a4c8ff;
+  --color-accent-content: #0f172a;
+  --color-neutral: #0f172a;
+  --color-neutral-content: #f8fafc;
+  --color-info: #067282;
+  --color-info-content: #ffffff;
+  --color-success: #0b7648;
+  --color-success-content: #ffffff;
+  --color-warning: #8e5d0f;
+  --color-warning-content: #ffffff;
+  --color-error: #d11a20;
+  --color-error-content: #ffffff;
+  --radius-selector: 9999px;
+  --radius-field: 10px;
+  --radius-box: 12px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -157,10 +267,18 @@
   --color-app-background: var(--app-background);
   --color-app-surface: var(--app-surface);
   --color-app-surface-raised: var(--app-surface-raised);
+  --color-app-surface-hover: var(--app-surface-hover);
+  --color-app-surface-active: var(--app-surface-active);
 
   --color-app-primary: var(--app-primary);
   --color-app-secondary: var(--app-secondary);
 
+  --color-app-accent: var(--app-accent);
+  --color-app-accent-solid: var(--app-accent-solid);
+  --color-app-accent-ink: var(--app-accent-ink);
+  --color-app-accent-ink-hover: var(--app-accent-ink-hover);
+  --color-app-accent-ambient: var(--app-accent-ambient);
+  --color-app-solid-label: var(--app-solid-label);
   --color-app-cta: var(--app-cta);
   --color-app-cta-hover: var(--app-cta-hover);
 
@@ -169,6 +287,7 @@
   --color-app-muted: var(--app-text-muted);
 
   --color-app-border: var(--app-border);
+  --color-app-border-strong: var(--app-border-strong);
   --color-app-border-light: var(--app-border-light);
   --color-app-panel-border: var(--app-panel-border);
 
@@ -176,13 +295,25 @@
   --color-app-success-surface: var(--app-success-surface);
   --color-app-warning: var(--app-warning);
   --color-app-warning-surface: var(--app-warning-surface);
+  --color-app-warning-solid: var(--app-warning-solid);
   --color-app-error: var(--app-error);
   --color-app-error-surface: var(--app-error-surface);
+  --color-app-error-solid: var(--app-error-solid);
   --color-app-info: var(--app-info);
   --color-app-info-surface: var(--app-info-surface);
   --color-app-neutral-surface: var(--app-neutral-surface);
 
   --shadow-app: var(--app-shadow);
+  --shadow-app-2: var(--app-shadow-2);
+
+  --radius-control: var(--app-radius-control);
+  --radius-card: var(--app-radius-card);
+  --radius-showpiece: var(--app-radius-showpiece);
+
+  /* One easing, three durations. Tailwind's `transition-*` utilities read these defaults. */
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: var(--app-ease);
+  --ease-app: var(--app-ease);
 }
 
 /* ---------------------------------------------------------------------------
@@ -230,9 +361,10 @@
     font-family: var(--font-sans);
   }
 
+  /* ONE focus technique across inputs, buttons, chips, tabs and menu rows: the ring. */
   :focus-visible {
-    outline: 2px solid var(--app-cta);
-    outline-offset: 2px;
+    outline: var(--app-focus-ring-width) solid var(--app-accent-ink);
+    outline-offset: var(--app-focus-ring-offset);
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -275,7 +407,7 @@
     line-height: var(--text-xs--line-height);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    opacity: 0.4;
+    font-weight: 600;
   }
 
   .app-sidebar {
@@ -286,3 +418,143 @@
     height: var(--topbar-height);
   }
 }
+
+
+/* ---------------------------------------------------------------------------
+ * Repository page — verdict band + workspaces (`repositories/show`).
+ *
+ * The workspaces are CSS-only radio tabs: the checked radio decides which pane shows, so the
+ * page works with no JavaScript and survives being captured offline. Everything is built from the
+ * tokens above — no raw colour appears in this block.
+ * ------------------------------------------------------------------------ */
+@layer components {
+  .rt-band {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) repeat(3, minmax(0, 1fr)) minmax(0, 1.1fr);
+    gap: 0;
+    background: var(--app-surface);
+    border: 1px solid var(--app-border);
+    border-radius: var(--app-radius-showpiece);
+    box-shadow: var(--app-shadow-2);
+    overflow: hidden;
+    position: relative;
+  }
+  .rt-band::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 3px;
+    background: var(--app-gradient-showpiece);
+  }
+  .rt-band > * { padding: 1.25rem 1.25rem 1.1rem; min-width: 0; }
+  .rt-band > * + * { border-left: 1px solid var(--app-border); }
+  .rt-band-empty { display: block; }
+  .rt-band-run { font-size: var(--text-lg); font-weight: 700; margin-top: 0.15rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .rt-band-branch {
+    font-size: var(--text-xs); font-weight: 600; padding: 0.1rem 0.5rem; border-radius: var(--app-radius-pill);
+    background: var(--app-neutral-surface); color: var(--app-text-secondary);
+    max-width: 100%; overflow-wrap: anywhere;
+  }
+  .rt-band-num { font-size: var(--text-3xl); line-height: 1.1; font-weight: 700; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; margin: 0.2rem 0 0.25rem; display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap; }
+  .rt-band-num-sm { font-size: var(--text-2xl); }
+  .rt-band-unit { font-size: var(--text-lg); color: var(--app-text-secondary); font-weight: 600; }
+  .rt-band-delta { font-size: var(--text-sm); font-weight: 600; letter-spacing: 0; color: var(--app-text-secondary); }
+  .rt-band-meter [role="meter"] { margin: 0.1rem 0 0.4rem; }
+  .rt-band-flags { display: flex; flex-direction: column; gap: 0.5rem; justify-content: center; background: var(--app-surface-raised); }
+  .rt-flag {
+    display: flex; align-items: center; gap: 0.6rem; cursor: pointer;
+    padding: 0.5rem 0.7rem; border-radius: var(--app-radius-control);
+    background: var(--app-surface); border: 1px solid var(--app-border);
+    color: var(--app-text-secondary); font-size: var(--text-sm); font-weight: 500;
+    transition: border-color var(--transition-fast) var(--app-ease), background-color var(--transition-fast) var(--app-ease);
+  }
+  .rt-flag:hover { border-color: var(--app-accent-ink); background: var(--app-surface-hover); }
+  .rt-flag-n { font-size: var(--text-xl); font-weight: 700; color: var(--app-text); font-variant-numeric: tabular-nums; min-width: 1.6ch; text-align: right; }
+  .rt-flag-warn { border-color: var(--app-warning); }
+  .rt-flag-warn .rt-flag-n { color: var(--app-warning); }
+  .rt-flag-err { border-color: var(--app-error); }
+  .rt-flag-err .rt-flag-n { color: var(--app-error); }
+  .rt-link { color: var(--app-accent-ink); text-decoration: underline; text-underline-offset: 2px; }
+
+  .rt { margin-top: 1.5rem; }
+  .rt-bar {
+    display: flex; gap: 0.25rem; padding: 0.25rem; width: max-content; max-width: 100%; overflow-x: auto;
+    background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius-card);
+    margin-bottom: 1rem;
+  }
+  .rt-tab {
+    display: inline-flex; align-items: center; gap: 0.5rem; height: var(--app-control-h-md); padding: 0 1rem;
+    border-radius: var(--app-radius-control); cursor: pointer; white-space: nowrap;
+    font-size: var(--text-sm); font-weight: 600; color: var(--app-text-secondary);
+    transition: background-color var(--transition-fast) var(--app-ease), color var(--transition-fast) var(--app-ease);
+  }
+  .rt-tab:hover { background: var(--app-surface-hover); color: var(--app-text); }
+  .rt-count {
+    min-width: 1.35rem; height: 1.35rem; padding: 0 0.35rem; border-radius: var(--app-radius-pill);
+    display: inline-flex; align-items: center; justify-content: center; font-size: var(--text-xs); font-weight: 700;
+  }
+  .rt-count-warn { background: var(--app-warning-surface); color: var(--app-warning); }
+  .rt-count-err { background: var(--app-error-surface); color: var(--app-error); }
+  .rt-pane { display: none; }
+  .rt:has(#ws-suite:checked) .rt-pane[data-pane="suite"],
+  .rt:has(#ws-speed:checked) .rt-pane[data-pane="speed"],
+  .rt:has(#ws-changes:checked) .rt-pane[data-pane="changes"],
+  .rt:has(#ws-runs:checked) .rt-pane[data-pane="runs"],
+  .rt:has(#ws-connect:checked) .rt-pane[data-pane="connect"] { display: block; }
+  .rt:has(#ws-suite:checked) label[for="ws-suite"],
+  .rt:has(#ws-speed:checked) label[for="ws-speed"],
+  .rt:has(#ws-changes:checked) label[for="ws-changes"],
+  .rt:has(#ws-runs:checked) label[for="ws-runs"],
+  .rt:has(#ws-connect:checked) label[for="ws-connect"].rt-tab {
+    background: var(--app-accent-solid); color: var(--app-solid-label);
+  }
+  .rt:has(#ws-suite:checked) label[for="ws-suite"] .rt-count,
+  .rt:has(#ws-changes:checked) label[for="ws-changes"] .rt-count,
+  .rt:has(#ws-connect:checked) label[for="ws-connect"] .rt-count { background: var(--app-solid-label); color: var(--app-accent-solid); }
+  .rt:has(#ws-suite:focus-visible) label[for="ws-suite"],
+  .rt:has(#ws-speed:focus-visible) label[for="ws-speed"],
+  .rt:has(#ws-changes:focus-visible) label[for="ws-changes"],
+  .rt:has(#ws-runs:focus-visible) label[for="ws-runs"],
+  .rt:has(#ws-connect:focus-visible) label[for="ws-connect"] {
+    outline: var(--app-focus-ring-width) solid var(--app-accent-ink); outline-offset: var(--app-focus-ring-offset);
+  }
+
+  .rt-zone + .rt-zone { margin-top: 2rem; }
+  .rt-zone-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 0.9rem; margin-bottom: 0.75rem; }
+  .rt-zone-note { font-size: var(--text-xs); color: var(--app-text-muted); }
+  .rt-zone-lock {
+    display: inline-flex; align-items: center; gap: 0.35rem; font-size: var(--text-xs); font-weight: 700;
+    padding: 0.15rem 0.6rem; border-radius: var(--app-radius-pill);
+    background: var(--app-warning-surface); color: var(--app-warning);
+  }
+
+  @media (max-width: 1100px) {
+    .rt-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .rt-band > *:nth-child(n+3) { border-top: 1px solid var(--app-border); }
+    .rt-band > *:nth-child(odd) { border-left: 0; }
+    .rt-band > *:nth-child(even) { border-left: 1px solid var(--app-border); }
+  }
+
+  /* Progressive disclosure for the explanatory "basis" prose that used to sit stacked above every
+     table. The words are unchanged; they are one click away instead of in the way. */
+  .rt-basis { margin: 0.5rem 0; border: 1px solid var(--app-border); border-radius: var(--app-radius-control); background: var(--app-surface-raised); }
+  .rt-basis > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.4rem 0.75rem; font-size: var(--text-xs); font-weight: 600; color: var(--app-text-secondary);
+    border-radius: var(--app-radius-control); transition: color var(--transition-fast) var(--app-ease), background-color var(--transition-fast) var(--app-ease);
+  }
+  .rt-basis > summary::-webkit-details-marker { display: none; }
+  .rt-basis > summary::before { content: ""; width: 0.45rem; height: 0.45rem; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform var(--transition-fast) var(--app-ease); }
+  .rt-basis[open] > summary::before { transform: rotate(45deg); }
+  .rt-basis > summary:hover { color: var(--app-text); background: var(--app-surface-hover); }
+  .rt-basis > p { padding: 0 0.75rem 0.7rem; margin: 0 !important; }
+}
+
+/* Unlayered on purpose: it has to beat the utilities layer (`lg:grid-cols-3`) it re-columns. */
+/* The Speed workspace is two columns wide: the slowest-tests rankings run the full width, the
+   two rollups (files, directories) sit side by side. */
+.rt-pane[data-pane="speed"] > .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rt-pane[data-pane="speed"] > .grid > .lg\:col-span-3 { grid-column: 1 / -1; }
+.rt-pane[data-pane="speed"] > .grid > .lg\:col-span-1 { grid-column: span 1 / span 1; }
+@media (max-width: 1023px) { .rt-pane[data-pane="speed"] > .grid { grid-template-columns: minmax(0, 1fr); } }
+

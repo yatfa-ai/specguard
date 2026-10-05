@@ -3,9 +3,9 @@
 # One labelled form control. Never set a bespoke width here — layout is the caller's `.form-grid`
 # plus `.form-field-full`, per the design-system layout rules.
 class Forms::FieldComponent < ApplicationComponent
-  INPUT_CLASS = "w-full rounded-md border border-app-border-light bg-app-surface-raised " \
+  INPUT_CLASS = "w-full h-10 rounded-control border border-app-border-strong bg-app-surface-raised " \
                 "px-3 py-2 text-sm text-app-content placeholder:text-app-muted " \
-                "focus:border-app-cta focus:outline-none"
+                "transition-colors duration-150 ease-app hover:border-app-accent-ink focus-visible:border-app-accent-ink"
 
   def initialize(form:, attribute:, as: :text_field, label: nil, hint: nil, full: false, **input_options)
     @form = form

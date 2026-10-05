@@ -78,7 +78,7 @@
             <%# What the rows ARE, before they are read as a verdict, and what the list is the head
                 OF. Both claims are counted off the same grouped read that returned the rows, so this
                 paragraph cannot end up describing a different row set from the table under it. %>
-            <p class="text-xs text-app-muted mb-3" id="unannotated-directories-basis">
+            <details class="rt-basis"><summary>How areas are grouped</summary><p class="text-xs text-app-muted mb-3" id="unannotated-directories-basis">
               <%# The cap, disclosed whether or not anything was cut. `rows.size` cannot state the
                   population — it IS the truncated figure — so the total rides back on the same
                   aggregate and `#truncated?` decides which sentence is true. A cut list that does
@@ -128,7 +128,7 @@
                   is cheaper than a reader discovering it with a calculator. %>
               Counted off the per-example rows this run reported, which is a different population
               from the suite size on the Overview panel above and may legitimately differ from it.
-            </p>
+            </p></details>
 
             <%= render UI::TableComponent.new(columns: ["Directory", "Carrying an @intent",
                                                         "Read from the description", "Not readable",

@@ -101,7 +101,7 @@
               list — `SpecObservation::UNSTABLE_TEST_RUN_POPULATION_COUNTS` is two windows on that
               one query — so the caption cannot end up describing a different population from the
               rows under it. %>
-          <p class="text-xs text-app-muted mb-3" id="unstable-test-runs-basis">
+          <details class="rt-basis"><summary>What this run-by-run view shows</summary><p class="text-xs text-app-muted mb-3" id="unstable-test-runs-basis">
             <span class="text-app-content-secondary"><%= @unstable_test_runs.name %></span>
             — <%= unstable_test_runs_scope_sentence(@unstable_test_runs) %>
             <%# The rule for reading the column, HANDED THE SEQUENCE because which readings are
@@ -131,7 +131,7 @@
             test and keeps its history — and not two different tests sharing a description; each row
             links against its own run's commit, so two rows pointing at two different files can both
             be right.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(
                 columns: ["Commit", "Definition site", "Branch", "Ingested", "Duration", "Outcome"],
                 describedby: "unstable-test-runs-basis"

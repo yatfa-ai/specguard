@@ -134,7 +134,7 @@
               back as a window (`SpecObservation::UNANNOTATED_POPULATION_COUNTS`) and the window is
               evaluated after the WHERE, so it describes the NARROWED population rather than the run,
               and a caption cannot come to describe a different row set from the table under it. %>
-          <p class="text-xs text-app-muted mb-3" id="unannotated-examples-basis">
+          <details class="rt-basis"><summary>What this list covers</summary><p class="text-xs text-app-muted mb-3" id="unannotated-examples-basis">
             <%# The subject, named before anything is claimed about it. An empty state without a
                 subject is a sentence about nothing, and so is a caption — "all 3 examples this run
                 recorded here" is not a fact until "here" has been said. %>
@@ -317,7 +317,7 @@
                 cheaper than a reader discovering it with a calculator. %>
             Counted off the per-example rows this run reported, which is a different population from
             the suite size on the Overview panel above and may legitimately differ from it.
-          </p>
+          </p></details>
 
           <%= render UI::TableComponent.new(columns: ["Test", "Spec file", "What SpecGuard reads"],
                                             describedby: "unannotated-examples-basis") do %>

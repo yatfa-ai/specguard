@@ -73,13 +73,13 @@
                   them is the defect the nesting above was fixed to remove. Rendered only when there
                   are excluded rows, for the reason the paragraph below gives. %>
               <% if @repeated_descriptions.excluded_unnamed_rows? %>
-                <p class="text-xs text-app-muted mt-3" id="repeated-descriptions-untimed-basis">
+                <details class="rt-basis"><summary>Why some rows have no timing</summary><p class="text-xs text-app-muted mt-3" id="repeated-descriptions-untimed-basis">
                   <%= number_with_delimiter(@repeated_descriptions.unnamed_row_count) %>
                   of the <%= number_with_delimiter(@repeated_descriptions.recorded_count) %>
                   <%= "example".pluralize(@repeated_descriptions.recorded_count) %> this run recorded
                   carried no description at all and could not be grouped, so nothing here describes
                   them.
-                </p>
+                </p></details>
               <% end %>
             </div>
           <% else %>
@@ -93,7 +93,7 @@
                 Every figure is counted off THIS RUN'S ROWS — `RepeatedDescriptions` holds the list and
                 these counts together — so this paragraph cannot end up describing a different row set
                 from the table under it. %>
-            <p class="text-xs text-app-muted mb-3" id="repeated-descriptions-basis">
+            <details class="rt-basis"><summary>What this ranking covers</summary><p class="text-xs text-app-muted mb-3" id="repeated-descriptions-basis">
               <% if @repeated_descriptions.any? %>
                 <%# The list is CAPPED, so its own length says nothing about how many repetitions the
                     run holds. The total is stated whether or not anything was cut, and costs no extra
@@ -145,7 +145,7 @@
                 <%= "example".pluralize(@repeated_descriptions.recorded_count) %> this run recorded
                 carried no description at all and could not be grouped, so nothing here describes them.
               <% end %>
-            </p>
+            </p></details>
             <% if @repeated_descriptions.any? %>
               <%= render UI::TableComponent.new(
                     columns: ["Description", "Examples", "Examples timed", "Total duration"],

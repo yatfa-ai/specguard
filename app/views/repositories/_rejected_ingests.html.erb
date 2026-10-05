@@ -51,7 +51,7 @@
                and so is each ROW, so a short reason list is not evidence the endpoint said little.
                The two bounds are independent: one refusal of a large suite is a single row
                carrying thousands of reasons. %>
-        <p class="text-xs text-app-muted mb-3" id="rejected-ingests-basis">
+        <details class="rt-basis"><summary>What is (and is not) listed here</summary><p class="text-xs text-app-muted mb-3" id="rejected-ingests-basis">
           Deliveries that authenticated successfully and were then refused for their
           <strong>payload</strong> — <code>400 {"error":"bad_request"}</code>. A wrong or revoked
           key gets <code>401</code> instead, which identifies no repository and so cannot be listed
@@ -68,7 +68,7 @@
             most <%= IngestRejection::RETAINED_REASONS_PER_ROW %> are kept per delivery and each
             row below says how many it is not showing.
           <% end %>
-        </p>
+        </p></details>
 
         <%# == The retained window, stated as a whole
             The basis line explains what these rows ARE; this line states how MANY there are and
@@ -111,7 +111,7 @@
             EXACTLY, separators included, so neither failure can return. The comment's own body
             stays free of ERB closing markers for the reason this fix exists: one inside a
             comment ends the comment there and leaks the rest as page text. %>
-        <p class="text-xs text-app-muted mb-3" id="rejected-ingests-window">
+        <details class="rt-basis"><summary>What the retained window holds</summary><p class="text-xs text-app-muted mb-3" id="rejected-ingests-window">
           The retained window holds
           <strong class="text-app-content"><%= window.total %></strong>
           refused <%= "delivery".pluralize(window.total) %>:
@@ -122,7 +122,7 @@
                  "#{count} Not reported"
                end
              end %><%= safe_join(parts, ", ") %>.
-        </p>
+        </p></details>
 
         <%= render UI::TableComponent.new(columns: ["When", "Reported by", "Served by",
                                                     "What the endpoint said"],
@@ -205,12 +205,12 @@
                       malformed spec and a gem the installation will not accept — a distinction the
                       full list would have buried rather than shown. %>
                   <% if rejection.reasons_truncated? %>
-                    <p class="text-xs text-app-muted mt-1">
+                    <details class="rt-basis"><summary>How to read a rejected delivery</summary><p class="text-xs text-app-muted mt-1">
                       … and <%= number_with_delimiter(rejection.omitted_reasons_count) %> more
                       <%= "reason".pluralize(rejection.omitted_reasons_count) %> not kept
                       (<%= number_with_delimiter(rejection.total_reasons_count) %> in total) —
                       the client was sent all of them at the time.
-                    </p>
+                    </p></details>
                   <% end %>
                 <% else %>
                   <%# A refusal with no reason recorded. Not synthesised into one: the row says the

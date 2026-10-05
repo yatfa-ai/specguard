@@ -36,7 +36,7 @@
               a denominator from one measurement under a numerator from another. `SlowestExamples`
               carries the argument, and holds the list and these figures together so the sentence
               cannot end up describing a different row set from the one below it. %>
-          <p class="text-xs text-app-muted mb-3" id="slowest-examples-basis">
+          <details class="rt-basis"><summary>What this ranking covers</summary><p class="text-xs text-app-muted mb-3" id="slowest-examples-basis">
             The <%= @slowest_examples.rows.size %>
             slowest <%= "test".pluralize(@slowest_examples.rows.size) %> of the run named above,
             slowest first.
@@ -68,7 +68,7 @@
             <%= slowest_examples_outcome_sentence(@slowest_examples) %>
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel and may legitimately differ from it.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(columns: ["Test", "Duration", "Outcome"],
                                             describedby: "slowest-examples-basis") do %>
             <% @slowest_examples.rows.each do |observation| %>

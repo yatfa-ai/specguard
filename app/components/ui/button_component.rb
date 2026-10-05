@@ -10,22 +10,23 @@
 #
 #   <%= button_to "Revoke", path, class: UI::ButtonComponent.classes(variant: :danger, size: :sm) %>
 class UI::ButtonComponent < ApplicationComponent
-  BASE = "inline-flex items-center justify-center gap-2 rounded-md font-semibold " \
-         "transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+  BASE = "inline-flex items-center justify-center gap-2 rounded-control font-semibold whitespace-nowrap " \
+         "transition-[background-color,color,border-color,filter] duration-150 ease-app " \
+         "disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
 
   VARIANTS = {
-    primary: "bg-app-cta text-app-background hover:bg-app-cta-hover",
-    secondary: "bg-app-surface-raised text-app-content border border-app-border-light hover:bg-app-secondary",
-    warning: "bg-app-warning-surface text-app-warning border border-app-warning hover:bg-app-warning hover:text-app-background",
-    ghost: "bg-transparent text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content",
-    danger: "bg-app-error-surface text-app-error border border-app-error hover:bg-app-error hover:text-app-background"
+    primary: "bg-app-accent-solid text-app-solid-label hover:brightness-110",
+    secondary: "bg-app-surface-raised text-app-content border border-app-border hover:bg-app-surface-active",
+    warning: "bg-app-warning-surface text-app-warning border border-transparent hover:border-app-warning",
+    ghost: "bg-transparent text-app-content-secondary hover:bg-app-surface-hover hover:text-app-content",
+    danger: "bg-app-error-surface text-app-error border border-transparent hover:border-app-error"
   }.freeze
 
   SIZES = {
-    xs: "text-xs px-2 py-1",
-    sm: "text-sm px-3 py-1.5",
-    md: "text-sm px-4 py-2",
-    lg: "text-base px-5 py-2.5"
+    xs: "text-xs px-2.5 h-7",
+    sm: "text-sm px-3.5 h-8",
+    md: "text-sm px-4 h-10",
+    lg: "text-base px-5 h-12"
   }.freeze
 
   # Shared by the component and by `button_to` call sites.

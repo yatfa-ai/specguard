@@ -35,7 +35,7 @@
               one DECISION on this panel rather than a measurement: everything else here was
               counted, but "the same description in two runs is the same test" is a rule the reader
               has to be able to check against their own repository. %>
-          <p class="text-xs text-app-muted mb-3" id="unstable-tests-basis">
+          <details class="rt-basis"><summary>How "changed outcome" is decided</summary><p class="text-xs text-app-muted mb-3" id="unstable-tests-basis">
             <%= unstable_tests_window_sentence(@unstable_tests) %>
             <%= unstable_tests_matching_sentence %>
             <%= unstable_tests_boundary_sentence %>
@@ -43,7 +43,7 @@
                 reach. Rendered only when there are any — a clause reading "0 rows carried no
                 description" is a sentence about arithmetic rather than about this window. %>
             <%= unstable_tests_exclusion_sentence(@unstable_tests) %>
-          </p>
+          </p></details>
           <% if @unstable_tests.any? %>
             <%= render UI::TableComponent.new(columns: ["Test", "Runs seen", "Runs failed", "Outcomes seen"],
                                               describedby: "unstable-tests-basis") do %>
@@ -171,9 +171,9 @@
               description did. %>
           <% if @unstable_tests.shared_description_rows.any? %>
             <div id="unstable-tests-shared" class="mt-4 border-t border-app-border-light pt-3">
-              <p class="text-xs text-app-muted" id="unstable-tests-shared-basis">
+              <details class="rt-basis"><summary>Why these are listed apart</summary><p class="text-xs text-app-muted" id="unstable-tests-shared-basis">
                 <%= unstable_tests_shared_description_sentence(@unstable_tests) %>
-              </p>
+              </p></details>
               <ul class="mt-2 space-y-1 text-sm text-app-content">
                 <% @unstable_tests.shared_description_rows.each do |test| %>
                   <li>

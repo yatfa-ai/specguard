@@ -51,7 +51,7 @@
 
               Never off `TestRun#total_specs_count` on the Overview panel, which is re-derived by
               SUM over shard reports and can legitimately differ. %>
-          <p class="text-xs text-app-muted mb-3" id="spec-directory-files-basis">
+          <details class="rt-basis"><summary>What this list covers</summary><p class="text-xs text-app-muted mb-3" id="spec-directory-files-basis">
             <span class="font-mono text-app-content-secondary"><%= @spec_directory_files.path %></span>
             —
             <% if @spec_directory_files.any_timed? %>
@@ -147,7 +147,7 @@
             subdirectory of it is its own row in the panel above rather than part of this list.
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel above and may legitimately differ from it.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(columns: ["Spec file", "Examples timed", "Total duration"],
                                             describedby: "spec-directory-files-basis") do %>
             <% @spec_directory_files.rows.each do |file| %>

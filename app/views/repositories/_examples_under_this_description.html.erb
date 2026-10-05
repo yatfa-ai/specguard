@@ -63,7 +63,7 @@
               list — `SpecObservation::DESCRIPTION_POPULATION_COUNTS` is two windows on that one
               query — and never off `TestRun#total_specs_count`, which is re-derived by SUM over
               shard reports and can legitimately differ. %>
-          <p class="text-xs text-app-muted mb-3" id="repeated-description-examples-basis">
+          <details class="rt-basis"><summary>What this list covers</summary><p class="text-xs text-app-muted mb-3" id="repeated-description-examples-basis">
             <span class="text-app-content-secondary"><%= @repeated_description_examples.name %></span>
             — <%= repeated_description_examples_scope_sentence(@repeated_description_examples) %>
             <% if @repeated_description_examples.complete? %>
@@ -128,7 +128,7 @@
             differ when a shared example group is included by more than one file, and rows sharing
             one definition site are one test run more than once rather than a description written
             more than once.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(columns: ["Ran in", "Defined at", "Duration", "Outcome"],
                                             describedby: "repeated-description-examples-basis") do %>
             <% @repeated_description_examples.rows.each do |observation| %>
