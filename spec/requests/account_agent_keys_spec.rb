@@ -270,6 +270,25 @@ RSpec.describe "Account agent keys", type: :request do
     expect(response.body).to include("must name at least one repository")
   end
 
+  # SPGD-1588 — the caption once said an sga_ key "could not post CI results" while the grid beside
+  # it offered the runs.ingest box (true since SPGD-984). Caption and grid are pinned together so
+  # one cannot drift from the other again.
+  # @intent: { entity: "AgentApiKey", action: "describe the ingest grant", behavior: "the Agent keys caption names runs.ingest and the repository-scoped ingest route, never denies keys the ability to ingest, keeps registering and renaming person-only, and the grid still offers the runs.ingest box", layer: "request" }
+  it "describes the ingest grant in the caption and offers the matching box" do
+    mint_grant
+
+    get account_path
+
+    caption = Capybara.string(response.body).find("#agent-keys-caption").text.squish
+    expect(caption).not_to match(/cannot\s+ingest/i)
+    expect(caption).to include(RepositoryMembership::RUNS_INGEST)
+    expect(caption).to include("/api/v1/repositories/")
+    expect(caption).to match(/registering and renaming stay person-only/)
+
+    expect(Capybara.string(response.body))
+      .to have_css("#agent_api_key_permissions_#{RepositoryMembership::RUNS_INGEST.parameterize}")
+  end
+
   # THE OFFERED SET, pinned the way repository_members_spec pins the member forms' grids: the
   # grid renders from `@grantable_permissions` — the union of `RepositoryPolicy#grantable_permissions`
   # across the offered repositories — so it can never offer a box whose only possible outcome is
