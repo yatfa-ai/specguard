@@ -42,7 +42,7 @@
               Every figure comes off `@slowest_tests`, which holds the list and these counts
               together, so this paragraph cannot end up describing a different population from the
               rows below it. Nothing here is recomputed from the rows. %>
-          <p class="text-xs text-app-muted mb-3" id="slowest-tests-window-basis">
+          <details class="dc-note"><summary>What this window ranking covers</summary><p class="text-xs text-app-muted mb-3" id="slowest-tests-window-basis">
             <%= slowest_tests_window_sentence(@slowest_tests) %>
             <%# ⭐ The partition: which tests are here at all was decided by ONE run, and a test the
                 newest run did not report is absent however slow it was. Not recoverable from any
@@ -57,7 +57,7 @@
                 reading "0 rows carried no durable identity" is a sentence about arithmetic rather
                 than about this window. %>
             <%= slowest_tests_exclusion_sentence(@slowest_tests) %>
-          </p>
+          </p></details>
           <%# No `#any?` guard, and that is deliberate rather than an omission. `:ranked` is reached
               only where the anchor has resolved rows, which is exactly the condition under which
               `SpecObservation.slowest_identity_candidates_in` returns candidates and the

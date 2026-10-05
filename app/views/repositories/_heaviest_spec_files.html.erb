@@ -28,7 +28,7 @@
         suite telemetry, nothing credential and nothing actionable. %>
     <% if @spec_file_durations&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Heaviest spec files", id: "spec-file-durations",
-                                        class: "lg:col-span-3") do %>
+                                        class: "lg:col-span-1") do %>
         <% if @spec_file_durations.any_timed? %>
           <%# What the totals COVER, before the totals themselves. `SUM` skips a missing timing
               silently, so a file whose examples were half untimed prints a total covering half of
@@ -41,7 +41,7 @@
               two can legitimately differ. `SpecFileDurations` carries the argument and holds the
               rows and their coverage together, so this sentence cannot end up describing a
               different row set from the one below it. %>
-          <p class="text-xs text-app-muted mb-3" id="spec-file-durations-basis">
+          <details class="dc-note"><summary>What this ranking covers</summary><p class="text-xs text-app-muted mb-3" id="spec-file-durations-basis">
             <%# The list is CAPPED, so its own length says nothing about how much of the run it
                 covers. "The 10 files the run spent the most wall clock in" is read as the whole
                 story by a reader who cannot see the limit, and on a suite spread over three
@@ -72,7 +72,7 @@
             <% end %>
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel above and may legitimately differ from it.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(columns: ["Spec file", "Examples timed", "Total duration"],
                                             describedby: "spec-file-durations-basis") do %>
             <% @spec_file_durations.rows.each do |file| %>

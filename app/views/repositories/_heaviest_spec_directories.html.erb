@@ -26,7 +26,7 @@
         suite telemetry, nothing credential and nothing actionable. %>
     <% if @spec_directory_durations&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Heaviest spec directories", id: "spec-directory-durations",
-                                        class: "lg:col-span-3") do %>
+                                        class: "lg:col-span-1") do %>
         <% if @spec_directory_durations.any_timed? %>
           <%# What the totals COVER, before the totals themselves — the argument the panel above
               makes, where it costs more. `SUM` skips a missing timing silently, and an area is a
@@ -40,7 +40,7 @@
               two can legitimately differ. `SpecDirectoryDurations` carries the argument and holds
               the rows and their coverage together, so this sentence cannot end up describing a
               different row set from the one below it. %>
-          <p class="text-xs text-app-muted mb-3" id="spec-directory-durations-basis">
+          <details class="dc-note"><summary>What this ranking covers</summary><p class="text-xs text-app-muted mb-3" id="spec-directory-durations-basis">
             <%# The list is CAPPED, so its own length says nothing about how much of the run it
                 covers — the same lie by omission the coverage column refuses one grain down, which
                 is why the total is stated whether or not anything was cut. It costs no extra
@@ -106,7 +106,7 @@
               here: not one of their examples reported a description, so there is nothing to count
               distinct rather than nothing distinct to count.
             <% end %>
-          </p>
+          </p></details>
           <%# "Distinct descriptions" LAST, in the order the area-grain reading is said in: this
               area carries N examples ("Examples timed"), costs this much wall clock ("Total
               duration"), for this many distinct behaviors. %>

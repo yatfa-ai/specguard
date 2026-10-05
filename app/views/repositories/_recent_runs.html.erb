@@ -36,7 +36,7 @@
             No conditional on the wiring: this caption and that table are both inside this
             `@recent_test_runs.any?` branch and cannot render apart. The empty state below renders
             no table at all, so there is nothing there to point at a missing id. %>
-        <p class="text-xs text-app-muted mb-3" id="recent-runs-basis">
+        <details class="dc-note"><summary>How to read this history</summary><p class="text-xs text-app-muted mb-3" id="recent-runs-basis">
           One history across every branch CI reports from, interleaved, newest first — so two
           consecutive rows are routinely two different branches. They are not a series, and the
           difference between two of these test counts is not a change in the suite. Suite growth is
@@ -81,7 +81,7 @@
               reader and says nothing at all to anyone else. %>
           Every commit below opens this page on its own run.
           <%= recent_runs_anchor_note(@run_anchor_run, @recent_test_runs) %>
-        </p>
+        </p></details>
         <%= render UI::TableComponent.new(columns: (["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"] +
                                                    (repository_policy.can?(:repo_delete) ? [""] : [])),
                                           describedby: "recent-runs-basis") do %>

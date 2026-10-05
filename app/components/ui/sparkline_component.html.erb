@@ -24,11 +24,11 @@
           text a sighted reader can see, so the two cannot drift. %>
       <svg class="block h-auto w-full" viewBox="0 0 <%= UI::SparklineComponent::VIEWBOX_WIDTH %> <%= UI::SparklineComponent::VIEWBOX_HEIGHT %>"
            role="img" aria-labelledby="<%= label_id %>" aria-describedby="<%= summary_id %>">
-        <path d="<%= area_path %>" class="fill-app-cta opacity-10" />
-        <path d="<%= line_path %>" fill="none" class="stroke-app-cta" stroke-width="2"
+        <path d="<%= area_path %>" class="fill-app-accent opacity-15" />
+        <path d="<%= line_path %>" fill="none" class="stroke-app-accent-ink" stroke-width="2"
               stroke-linejoin="round" stroke-linecap="round" />
         <% coordinates.each_with_index do |(x, y), index| %>
-          <circle cx="<%= x %>" cy="<%= y %>" r="<%= UI::SparklineComponent::MARKER_RADIUS %>" class="fill-app-cta">
+          <circle cx="<%= x %>" cy="<%= y %>" r="<%= UI::SparklineComponent::MARKER_RADIUS %>" class="fill-app-accent-ink">
             <title><%= point_title(points[index]) %></title>
           </circle>
         <% end %>

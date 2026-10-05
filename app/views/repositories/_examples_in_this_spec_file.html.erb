@@ -64,7 +64,7 @@
               — `SpecObservation::FILE_POPULATION_COUNTS` is two windows on that one query — and
               never off `TestRun#total_specs_count` on the Overview panel, which is re-derived by
               SUM over shard reports and can legitimately differ. %>
-          <p class="text-xs text-app-muted mb-3" id="spec-file-examples-basis">
+          <details class="dc-note"><summary>What this list covers</summary><p class="text-xs text-app-muted mb-3" id="spec-file-examples-basis">
             <span class="font-mono text-app-content-secondary"><%= @spec_file_examples.path %></span>
             — <%= spec_file_examples_scope_sentence(@spec_file_examples) %>
             <% if @spec_file_examples.complete? %>
@@ -142,7 +142,7 @@
             group is a different file from this one — this list is what this file RAN.
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel above and may legitimately differ from it.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(columns: ["Test", "Duration", "Outcome"],
                                             describedby: "spec-file-examples-basis") do %>
             <% @spec_file_examples.rows.each do |observation| %>

@@ -38,7 +38,7 @@
       Deliberately OUTSIDE the @revealed_token gate, exactly as its predecessor was: the
       instructions have to outlive the one-shot flash, or a reader who reloads the page has no way
       to learn what the key is for. %>
-  <%= render UI::PanelComponent.new(title: "Wire this repository up", id: "wire-up") do %>
+  <%= render UI::PanelComponent.new(title: "Wire this repository up", id: "wire-up", class: "lg:col-span-3") do %>
     <div class="space-y-4">
       <% if has_api_keys %>
         <p class="text-sm text-app-content-secondary">
@@ -69,7 +69,7 @@
             an ungated link would dangle for exactly the reader who cannot act on it. Telling a
             `view` member that the value is unrecoverable is still worth saying — it is why the
             prompt they are looking at names a secret instead. %>
-        <p class="text-xs text-app-muted">
+        <details class="dc-note"><summary>Why the prompt names a secret, not a key</summary><p class="text-xs text-app-muted">
           The prompt refers to the key by the name of the CI secret, not by its value: SpecGuard
           keeps only a digest and cannot show an existing key again.
           <% if repository_policy.can?(:keys_manage) %>
@@ -77,7 +77,7 @@
             <a href="#api-keys" class="underline">API keys</a> below — the replacement is shown once,
             with the prompt already carrying it.
           <% end %>
-        </p>
+        </p></details>
       <% elsif repository_policy.can?(:keys_manage) %>
         <p class="text-sm text-app-content-secondary">
           This repository has no API key yet, so there is nothing for CI to authenticate with.
