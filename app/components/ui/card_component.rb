@@ -25,8 +25,8 @@ class UI::CardComponent < ApplicationComponent
   # returns the same string rather than dropping the caller's class on the second call.
   def wrapper_class
     @wrapper_class ||= merge_classes(
-      "block bg-app-surface-raised border border-app-panel-border rounded-lg shadow-app p-4",
-      @href ? "transition-colors hover:border-app-cta" : nil,
+      "block bg-app-surface-raised border border-app-border rounded-card shadow-app p-4",
+      @href ? "transition-colors hover:border-app-accent-ink" : nil,
       @options.delete(:class)
     )
   end

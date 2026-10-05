@@ -15,7 +15,7 @@
         is the page's one never-ingested empty state, and a second dashed box saying a quieter
         version of it would read as a different, milder fact. %>
     <% if @latest_test_run.present? %>
-      <%= render UI::PanelComponent.new(title: "Suite growth", id: "suite-trajectory", class: "lg:col-span-3") do %>
+      <%= render UI::PanelComponent.new(title: "Suite growth", id: "suite-trajectory", class: "lg:col-span-2") do %>
         <div class="space-y-3">
           <%# == Which branch this is drawn on
               The page has no branch of record: the run every panel above names is whichever branch
@@ -92,7 +92,7 @@
                   <% end %>
                 </div>
               <% end %>
-              <p class="text-xs text-app-muted" id="suite-trajectory-branches-basis">
+              <details class="dc-note"><summary>Which branches the chart follows</summary><p class="text-xs text-app-muted" id="suite-trajectory-branches-basis">
                 Only this panel follows the branch you pick — it is anchored on that branch's newest
                 run and reads back <%= Repository::TRAJECTORY_LIMIT %> runs from there.
                 <% if @trajectory_branches.any?(&:capped?) %>
@@ -104,7 +104,7 @@
                   the chart reaches.
                 <% end %>
                 <%= trajectory_hidden_branches_sentence(@trajectory_branches, @suite_trajectory.branch) %>
-              </p>
+              </p></details>
             </div>
           <% end %>
           <%# The ask was not honoured, and the panel says so. Every figure below is correctly
@@ -118,9 +118,9 @@
               Nested inside the selector, the one page state that says nothing else about the ask
               was the one state where this could not speak. %>
           <% if (fallback_notice = trajectory_branch_fallback_notice(@trajectory_branch_request, @suite_trajectory)) %>
-            <p class="text-xs text-app-muted" id="suite-trajectory-branch-fallback">
+            <details class="dc-note"><summary>Why this branch is showing</summary><p class="text-xs text-app-muted" id="suite-trajectory-branch-fallback">
               <%= fallback_notice %>
-            </p>
+            </p></details>
           <% end %>
           <% if @suite_trajectory.branch.blank? %>
             <%# The same state the basis line above names, and it must not be answered here with the
@@ -166,7 +166,7 @@
                 stronger claim than a level, and it is worth only as much as the rows it declined to
                 draw. Which rows those were, and why, said here rather than left to the reader to
                 notice that the count under the label is smaller than the history. %>
-            <p class="text-xs text-app-muted" id="suite-trajectory-basis">
+            <details class="dc-note"><summary>How the suite-size line is drawn</summary><p class="text-xs text-app-muted" id="suite-trajectory-basis">
               Drawn through <%= @suite_trajectory.plotted.size %>
               of the last <%= @suite_trajectory.considered_count %>
               <%= "run".pluralize(@suite_trajectory.considered_count) %>
@@ -237,7 +237,7 @@
                 <span class="font-mono"><%= @suite_trajectory.last_run.commit_sha.first(7) %></span>,
                 <%= time_ago_in_words(@suite_trajectory.last_run.created_at) %> ago.
               <% end %>
-            </p>
+            </p></details>
 
             <%# == The same cohort, read for what it COST
                 A suite-size line answers "is this suite growing?" and cannot answer "is it getting
@@ -292,7 +292,7 @@
                   are drawn through the same cohort but not necessarily through the same runs — a
                   run that reported a suite and no clock is on one line and off the other — so one
                   shared caption would be true of neither. %>
-              <p class="text-xs text-app-muted" id="suite-trajectory-runtime-basis">
+              <details class="dc-note"><summary>How the wall clock is plotted</summary><p class="text-xs text-app-muted" id="suite-trajectory-runtime-basis">
                 Drawn through <%= @suite_trajectory.timed.size %>
                 of the <%= @suite_trajectory.plotted.size %>
                 <%= "run".pluralize(@suite_trajectory.plotted.size) %>
@@ -345,12 +345,12 @@
                   two runs whose shards reported in different numbers cannot be differenced without
                   reading telemetry loss as a change in speed.
                 <% end %>
-              </p>
+              </p></details>
             <% else %>
               <%# Not an empty state, because the panel is not empty — the size line above is drawn.
                   A missing runtime line is one sentence about what was reported, in the same
                   register as the withholding sentences beside it. %>
-              <p class="text-xs text-app-muted" id="suite-trajectory-runtime-basis">
+              <details class="dc-note"><summary>How the wall clock is plotted</summary><p class="text-xs text-app-muted" id="suite-trajectory-runtime-basis">
                 No wall-clock line yet on <%= @suite_trajectory.branch %>:
                 <% if @suite_trajectory.timed.empty? %>
                   none of the <%= @suite_trajectory.plotted.size %> plotted
@@ -382,7 +382,7 @@
                 <% end %>
                 A single wall clock drawn as a line is a flat one, which says this suite takes as
                 long as it always did — a claim one measurement cannot support.
-              </p>
+              </p></details>
             <% end %>
           <% else %>
             <%# Never a flat line, and never a single point drawn as one. Both would assert a stable

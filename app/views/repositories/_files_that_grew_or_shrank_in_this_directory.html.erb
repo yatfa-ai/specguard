@@ -42,7 +42,7 @@
               Every figure below comes back as a window on the ONE aggregate that returned the rows,
               counted before the cap, so the sentence cannot describe a different row set from the
               table under it. %>
-          <p class="text-xs text-app-muted mb-3" id="spec-directory-file-growth-basis">
+          <details class="dc-note"><summary>What this comparison covers</summary><p class="text-xs text-app-muted mb-3" id="spec-directory-file-growth-basis">
             <span class="font-mono text-app-content-secondary"><%= @spec_directory_file_growth.path %></span>
             —
             <%# The cap is disclosed against the FILE count the comparison covered, never against
@@ -81,7 +81,7 @@
             <%= number_with_delimiter(@spec_directory_file_growth.latest_recorded_count) %> example
             rows the two runs recorded in this area — this area's own rows, not the suite totals the
             panel above is counted over and not the suite size on the Overview panel.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(columns: ["Spec file", "Examples then", "Examples now", "Change"],
                                             describedby: "spec-directory-file-growth-basis") do %>
             <% @spec_directory_file_growth.rows.each do |file| %>

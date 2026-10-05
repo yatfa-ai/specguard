@@ -14,8 +14,8 @@ class UI::EmptyStateComponent < ApplicationComponent
 
   def wrapper_class
     @wrapper_class ||= merge_classes(
-      "flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed " \
-      "border-app-border-light px-6 py-12 text-center",
+      "flex flex-col items-center justify-center gap-3 rounded-card border border-dashed " \
+      "border-app-border-strong px-6 py-10 text-center",
       @options.delete(:class)
     )
   end

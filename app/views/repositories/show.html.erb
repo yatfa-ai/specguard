@@ -78,7 +78,7 @@
       bought inside the `keys.manage` gate only; the controller carries that table in full. %>
   <% has_api_keys = @api_keys.any? %>
 
-<%= render "repositories/wire_up_this_repository", has_api_keys: has_api_keys -%>
+
 
   <%# The API keys panel is a `keys.manage` surface end to end: both of its controls (mint, revoke)
       demand the permission, and the table itself is credential metadata — key names, token hints,
@@ -96,7 +96,62 @@
       capability, so their page is unchanged. %>
   <% manage_keys = repository_policy.can?(:keys_manage) %>
 
-  <div class="grid gap-4 lg:grid-cols-3">
+  <%# == The lead — one sentence, read before anything is opened.
+      The page used to open on its first panel and make the reader scroll past twenty-five of them
+      to learn whether anything needed them. This line says what the latest run was, how big it was,
+      and the two things that ask for a human; each figure that asks links into the chapter that
+      carries its basis. Every number is read off rows the chapters below already load — no new
+      query. Readable by every member: nothing here is credential metadata. %>
+  <% run = @latest_test_run %>
+  <% unstable_count = @unstable_tests&.rows&.size.to_i %>
+  <% refused_count = @rejected_ingests.rows.size %>
+  <% refusing = @rejected_ingests.refusing? %>
+  <% revoked_presented = @presented_revoked_api_keys.any? %>
+  <% slowest_row = @slowest_examples&.rows&.first %>
+  <%# Which chapters open on their own: the ones the lead sentence flagged. A repository with
+      nothing waiting on a person opens on its suite; one with something waiting opens on what is
+      waiting, and the rest stay one sentence each. %>
+  <% open_delivery = refusing || revoked_presented %>
+  <% open_changes = unstable_count.positive? %>
+  <% open_suite = !open_delivery && !open_changes %>
+  <% if run %>
+    <% band_total = run.total_specs_count.to_i %>
+    <% band_delta = (band_total - @previous_test_run.total_specs_count.to_i) if run.suite_size_measured? && @previous_test_run&.suite_size_measured? && run.assembled_like?(@previous_test_run) %>
+    <section class="dc-lead" aria-label="This repository, in one sentence">
+      <p class="dc-lead-text">
+        <span class="dc-lead-run"><span class="font-mono"><%= run.commit_sha.first(7) %></span><% if run.branch.present? %> on <%= run.branch %><% end %></span>
+        reported <strong><%= number_with_delimiter(band_total) %> tests</strong><% if band_delta %>
+        (<%= suite_size_change(band_delta) %>)<% end %>
+        <%= time_ago_in_words(run.created_at) %> ago<% if run.suite_size_measured? %>,
+        <strong><%= run.annotated_ratio %>%</strong> of them carrying an @intent<% end %>.
+        <a class="dc-lead-flag <%= unstable_count.positive? ? "dc-lead-warn" : "" %>" href="#ch-changes"><strong><%= unstable_count %></strong> <%= "test".pluralize(unstable_count) %> changed outcome</a>
+        and
+        <a class="dc-lead-flag <%= (refusing || revoked_presented) ? "dc-lead-err" : (refused_count.positive? ? "dc-lead-warn" : "") %>" href="#ch-delivery"><strong><%= refused_count %></strong> <%= "delivery".pluralize(refused_count) %> <%= refused_count == 1 ? "was" : "were" %> refused</a>.
+      </p>
+    </section>
+  <% else %>
+    <section class="dc-lead" aria-label="This repository, in one sentence">
+      <p class="dc-lead-text">No CI run has reported yet. Wire the repository up under <a class="dc-lead-flag" href="#ch-delivery">Delivery</a>; the chapters below fill in as soon as the first run lands.</p>
+    </section>
+  <% end %>
+
+  <div class="dc" data-controller="chapters">
+
+
+
+
+    <details class="dc-ch" id="ch-suite"<%= " open" if open_suite %>>
+      <summary class="dc-ch-sum">
+        <span class="dc-dot" aria-hidden="true"></span>
+        <span class="dc-ch-main">
+          <span class="dc-ch-title">Suite</span>
+          <span class="dc-ch-line"><% if run %><%= number_with_delimiter(run.total_specs_count.to_i) %> tests, <%= run.annotated_ratio %>% carrying an @intent, measured on <span class="font-mono"><%= run.commit_sha.first(7) %></span>. Overview, suite growth, and where the unannotated tests are.<% else %>Nothing measured yet — no CI run has reported.<% end %></span>
+        </span>
+        <span class="dc-ch-fig"><% if run && run.suite_size_measured? %><span class="dc-fig-n"><%= run.annotated_ratio %><span class="dc-fig-u">%</span></span><%= render UI::MeterComponent.new(value: run.annotated_specs_count.to_i, max: run.total_specs_count.to_i) %><% else %><span class="dc-fig-n">—</span><% end %></span>
+        <span class="dc-ch-chev" aria-hidden="true"></span>
+      </summary>
+      <div class="dc-ch-body">
+        <div class="grid gap-4 lg:grid-cols-3">
     <%# Suite truth, not an adoption headline. Two rules hold this panel together:
         1. the ratio never appears without the denominator it was computed over, and
         2. the count SpecGuard *cannot* see gets its own line, because that is the number the
@@ -201,7 +256,7 @@
             serializes a block on every call. %>
         <% if (anchor_notice = run_anchor_notice(@run_anchor_request, @run_anchor_run, @latest_test_run)) %>
           <div class="flex flex-wrap items-center gap-2">
-            <p class="text-xs text-app-muted" id="run-anchor-notice"><%= anchor_notice %></p>
+            <details class="dc-note"><summary>Why this older run is showing</summary><p class="text-xs text-app-muted" id="run-anchor-notice"><%= anchor_notice %></p></details>
             <%# THE WAY BACK OUT, and it belongs beside the sentence that announces the state it
                 leaves. Entering the anchor costs one click — every commit cell in "Recent runs"
                 below is a link into it — and until this button there was no gesture anywhere that
@@ -479,7 +534,7 @@
               ]) %>
 
           <% if measured_tests %>
-            <p class="text-xs text-app-muted">
+            <details class="dc-note"><summary>What the @intent share is made of</summary><p class="text-xs text-app-muted">
               <%= @latest_test_run.annotated_ratio %>% — <%= number_with_delimiter(annotated_specs) %>
               of <%= number_with_delimiter(total_specs) %> tests carry an @intent.
               <%# The @intent share is stated FIRST and unconditionally, whatever the readings say.
@@ -550,7 +605,7 @@
                 <%= "example".pluralize(readings.recorded) %> this run recorded carries an @intent
                 its author wrote — nothing here is inferred from a test's description.
               <% end %>
-            </p>
+            </p></details>
           <% else %>
             <p class="text-xs text-app-muted">
               The latest run reported no tests at all, so there is no share to take and no coverage
@@ -618,7 +673,7 @@
           <% if presented_as_sharded %>
             <% untimed_shards = @latest_test_run.untimed_shard_count %>
             <% timed_shards = @latest_test_run.timed_shard_count %>
-            <p class="text-xs text-app-muted">
+            <details class="dc-note"><summary>Why the run arrived in pieces</summary><p class="text-xs text-app-muted">
               Assembled from <%= shard_count %> shard reports — what SpecGuard recorded, which is
               not necessarily <%= shard_count %> distinct CI jobs if a shard did not name itself.
               <% if untimed_shards.zero? %>
@@ -653,7 +708,7 @@
                 all <%= shard_count %> would put the floor below where it belongs and overstate the
                 gap by exactly the same margin. Both are withheld rather than estimated.
               <% end %>
-            </p>
+            </p></details>
 
             <%# The wall clock, decomposed across the shards that produced it. Everything here is
                 arithmetic over rows already stored — the MAX the headline figure came from,
@@ -692,7 +747,7 @@
                   same overclaim the labels one section up refuse, in the one place the arithmetic
                   cannot catch it. %>
               <% imbalanced = @latest_test_run.wall_clock_excess_material? %>
-              <p id="wall-clock-decomposition" class="text-xs text-app-muted">
+              <details class="dc-note"><summary>How the wall clock decomposes</summary><p id="wall-clock-decomposition" class="text-xs text-app-muted">
                 <% if imbalanced %>
                   The slowest was <%= @latest_test_run.longest_shard_label %>, at
                   <%= @latest_test_run.duration_label %>.
@@ -739,7 +794,7 @@
                   about the run: a slice that never arrived leaves no trace in them, and a missing
                   slice is likelier to be a slow one than a fast one.
                 <% end %>
-              </p>
+              </p></details>
 
               <%# WHICH of the two things that spread is, which is the half a reader can act on.
                   `duration = test count x cost per test`, so a shard that ran long did so because
@@ -772,7 +827,7 @@
                   below-threshold figures is not. Same discipline `TestRun#wall_clock_coverage`
                   applies to the word "slowest". %>
               <% if imbalanced %>
-                <p id="shard-imbalance-cause" class="text-xs text-app-muted">
+                <details class="dc-note"><summary>Why the shards took different times</summary><p id="shard-imbalance-cause" class="text-xs text-app-muted">
                   <% if @latest_test_run.unsized_shard_count.positive? %>
                     <%# The zero-denominator case, stated rather than divided. `total_specs_count`
                         is `null: false, default: 0`, so a shard that loaded no specs is an ordinary
@@ -837,7 +892,7 @@
                       misled by wording alone. %>
                   A shard is an arbitrary slice of the suite rather than a directory, so this says
                   which partition of the run was expensive and not which code.
-                </p>
+                </p></details>
               <% end %>
 
               <%# The distribution itself, so the shape is visible rather than compressed into the
@@ -896,7 +951,7 @@
                   no completeness claim is available: see `TestRun#shard_delivery_settled?` for why
                   a quiet period is the only observable that separates the two, and for what it
                   does and does not catch. %>
-              <p id="wall-clock-decomposition-pending" class="text-xs text-app-muted">
+              <details class="dc-note"><summary>Why no wall clock is shown yet</summary><p id="wall-clock-decomposition-pending" class="text-xs text-app-muted">
                 A shard report arrived in the last
                 <%= distance_of_time_in_words(TestRun::SHARD_DELIVERY_SETTLING_PERIOD) %>, so more
                 may still be on their way — a run's parts arrive one POST at a time and nothing in
@@ -905,7 +960,7 @@
                 own count would put the floor wherever the run happens to have reached. The
                 decomposition waits until the reports stop coming rather than describing a run
                 mid-delivery.
-              </p>
+              </p></details>
             <% end %>
           <% end %>
 
@@ -931,7 +986,7 @@
               It renders in every one of those states rather than only when there is a number.
               Silence would be read as "the suite has not changed" — the one thing none of these
               states says. %>
-          <p class="text-xs text-app-muted" id="suite-size-basis">
+          <details class="dc-note"><summary>How the suite-size change is measured</summary><p class="text-xs text-app-muted" id="suite-size-basis">
             <% if suite_size_delta %>
               <%# Names the run compared against, not just its age: the previous run on a branch
                   can be days old, and "since 3 hours ago" with no commit behind it is not
@@ -973,7 +1028,7 @@
               reported so far, which climbs while a sharded build is still arriving; a difference
               taken across two compositions would report a change no commit made.
             <% end %>
-          </p>
+          </p></details>
 
           <%# The cost delta's own basis, on the rule the paragraph above is the other half of:
               every figure on this panel names its own coverage, and a change names what it is a
@@ -992,7 +1047,7 @@
               the one the size delta has no equivalent of, because the size delta's denominator is
               `shard_count` and the runtime's is `timed_shard_count`. %>
           <% if comparison_assembled_like %>
-            <p class="text-xs text-app-muted" id="runtime-basis">
+            <details class="dc-note"><summary>How the runtime change is measured</summary><p class="text-xs text-app-muted" id="runtime-basis">
               <% if wall_clock_delta %>
                 <%# Named for the row it modifies, which is "Wall clock" on a sharded run and
                     "Total runtime" on every other — the same figure under two labels, and a basis
@@ -1048,7 +1103,7 @@
                 timed-out job, which is usually the slowest one: differencing the two would report
                 a speed-up produced by the missing telemetry rather than by the suite.
               <% end %>
-            </p>
+            </p></details>
           <% end %>
         <% end %>
 
@@ -1066,12 +1121,6 @@
         </p>
       </div>
     <% end %>
-
-<%= render "repositories/api_keys", has_api_keys: has_api_keys, manage_keys: manage_keys -%>
-<%= render "repositories/agent_keys", manage_keys: manage_keys -%>
-
-<%= render "repositories/rejected_ingests" -%>
-
 <%= render "repositories/suite_growth" -%>
 
 <%# Directly under the growth panel and ahead of the wall-clock family below it, because this is the
@@ -1088,21 +1137,29 @@
     sits under the list it opens off. It rides `?spec_directory=` / `?spec_file=` and mints no
     parameter of its own — see the panel, and the rule stated at "Areas that grew or shrank" below. %>
 <%= render "repositories/unannotated_examples" -%>
-
-<%= render "repositories/slowest_tests" -%>
-
-<%= render "repositories/heaviest_spec_files" -%>
-
-<%= render "repositories/examples_in_this_spec_file" -%>
-
-<%= render "repositories/heaviest_spec_directories" -%>
-
-<%= render "repositories/spec_files_in_this_directory" -%>
-
 <%= render "repositories/descriptions_recorded_more_than_once" -%>
 
 <%= render "repositories/examples_under_this_description" -%>
+        </div>
+      </div>
+    </details>
 
+
+    <details class="dc-ch <%= unstable_count.positive? ? "dc-ch-warn" : "" %>" id="ch-changes"<%= " open" if open_changes %>>
+      <summary class="dc-ch-sum">
+        <span class="dc-dot" aria-hidden="true"></span>
+        <span class="dc-ch-main">
+          <span class="dc-ch-title">Changes</span>
+          <span class="dc-ch-line"><%= unstable_count.positive? ? "#{unstable_count} #{"test".pluralize(unstable_count)} changed outcome across the window." : "No test changed outcome across the window." %> Also: which areas grew, shrank, slowed or sped up.</span>
+        </span>
+        <span class="dc-ch-fig"><span class="dc-fig-n <%= unstable_count.positive? ? "dc-fig-warn" : "" %>"><%= unstable_count %></span><span class="dc-fig-l">changed</span></span>
+        <span class="dc-ch-chev" aria-hidden="true"></span>
+      </summary>
+      <div class="dc-ch-body">
+        <div class="grid gap-4 lg:grid-cols-3">
+<%= render "repositories/unstable_tests" -%>
+
+<%= render "repositories/unstable_test_runs" -%>
     <%# == Which AREAS of the suite grew or shrank since the previous run on this branch
         The first panel here to read the per-example table across TWO runs, and the boundary it
         crosses is worth being precise about, because the panel directly above says panels here are
@@ -1146,7 +1203,7 @@
               SUM over shard reports and the two can legitimately differ. `SpecDirectoryGrowth`
               holds the rows and this sentence together, so the caption cannot end up describing a
               different row set from the table below it. %>
-          <p class="text-xs text-app-muted mb-3" id="spec-directory-growth-basis">
+          <details class="dc-note"><summary>What this comparison covers</summary><p class="text-xs text-app-muted mb-3" id="spec-directory-growth-basis">
             <%# The list is CAPPED, so its own length says nothing about how much of the comparison
                 it covers. The total rides back on the same grouped aggregate, counted before the
                 LIMIT, so stating it costs no extra query. %>
@@ -1181,7 +1238,7 @@
             <%= number_with_delimiter(@spec_directory_growth.latest_recorded_count) %> example rows
             the two runs recorded here, which may legitimately differ from the suite size on the
             Overview panel above.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(columns: ["Directory", "Examples then", "Examples now", "Change"],
                                             describedby: "spec-directory-growth-basis") do %>
             <% @spec_directory_growth.rows.each do |area| %>
@@ -1369,7 +1426,7 @@
               stopped reporting timings loses time in this table without anything having got
               faster. `SpecDirectoryRuntimeGrowth` holds the rows and this sentence together, so the
               caption cannot end up describing a different row set from the table below it. %>
-          <p class="text-xs text-app-muted mb-3" id="spec-directory-runtime-growth-basis">
+          <details class="dc-note"><summary>What this comparison covers</summary><p class="text-xs text-app-muted mb-3" id="spec-directory-runtime-growth-basis">
             <%# The list is CAPPED, so its own length says nothing about how much of the comparison
                 it covers. The total rides back on the same grouped aggregate, counted before the
                 LIMIT, so stating it costs no extra query. %>
@@ -1410,7 +1467,7 @@
             <%= number_with_delimiter(@spec_directory_runtime_growth.latest_recorded_count) %>
             example rows the two runs recorded here that reported a timing — never the run wall
             clock on the Overview panel above, which is a maximum over the run's shards.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(columns: ["Directory", "Time then", "Time now", "Change", "Timed"],
                                             describedby: "spec-directory-runtime-growth-basis") do %>
             <% @spec_directory_runtime_growth.rows.each do |area| %>
@@ -1623,7 +1680,7 @@
               comparand is "the previous run on this branch" and there is only one candidate; here
               it was WALKED past whatever could not be compared, so a reader who is not told which
               run it landed on has been handed a figure over an unknown window. %>
-          <p class="text-xs text-app-muted mb-3" id="spec-directory-window-growth-basis">
+          <details class="dc-note"><summary>What this comparison covers</summary><p class="text-xs text-app-muted mb-3" id="spec-directory-window-growth-basis">
             <%# The list is CAPPED, so its own length says nothing about how much of the comparison
                 it covers. The total rides back on the same grouped aggregate, counted before the
                 LIMIT, so stating it costs no extra query. %>
@@ -1665,7 +1722,7 @@
             <%= number_with_delimiter(window_growth.anchor_recorded_count) %> example rows the two
             ends recorded here, which may legitimately differ from the suite size on the Overview
             panel above.
-          </p>
+          </p></details>
           <%= render UI::TableComponent.new(columns: ["Directory", "Examples at baseline", "Examples now",
                                                       "Change across window"],
                                             describedby: "spec-directory-window-growth-basis") do %>
@@ -1782,11 +1839,32 @@
         <% end %>
       <% end %>
     <% end %>
+        </div>
+      </div>
+    </details>
 
-<%= render "repositories/unstable_tests" -%>
 
-<%= render "repositories/unstable_test_runs" -%>
+    <details class="dc-ch " id="ch-speed">
+      <summary class="dc-ch-sum">
+        <span class="dc-dot" aria-hidden="true"></span>
+        <span class="dc-ch-main">
+          <span class="dc-ch-title">Speed</span>
+          <span class="dc-ch-line"><% if slowest_row %>Slowest test this run: <span class="dc-ch-quote"><%= truncate(slowest_row.label.to_s, length: 70) %></span> at <%= slowest_row.duration_label %>.<% else %>No per-test timings recorded for the latest run.<% end %> Heaviest files and directories, and the slowest tests over the window.</span>
+        </span>
+        <span class="dc-ch-fig"><% if run %><span class="dc-fig-n dc-fig-sm"><%= test_run_duration(run) %></span><span class="dc-fig-l"><%= run.multi_shard? ? "wall clock" : "runtime" %></span><% else %><span class="dc-fig-n">—</span><% end %></span>
+        <span class="dc-ch-chev" aria-hidden="true"></span>
+      </summary>
+      <div class="dc-ch-body">
+        <div class="grid gap-4 lg:grid-cols-3">
+<%= render "repositories/slowest_tests" -%>
 
+<%= render "repositories/heaviest_spec_files" -%>
+
+<%= render "repositories/examples_in_this_spec_file" -%>
+
+<%= render "repositories/heaviest_spec_directories" -%>
+
+<%= render "repositories/spec_files_in_this_directory" -%>
     <%# The other half of the window's per-test story, and the wall-clock half. The "Tests whose
         outcome changed" panel says which tests CHANGED THEIR OUTCOME across this window; this one
         says which of them COST it most, matched by the same durable identity rather than by
@@ -1794,7 +1872,65 @@
         single-run duration rankings whose boundary it deliberately crosses. See the partial for the
         argument. %>
     <%= render "repositories/slowest_tests_over_window" -%>
+        </div>
+      </div>
+    </details>
 
+
+    <details class="dc-ch " id="ch-runs">
+      <summary class="dc-ch-sum">
+        <span class="dc-dot" aria-hidden="true"></span>
+        <span class="dc-ch-main">
+          <span class="dc-ch-title">Runs</span>
+          <span class="dc-ch-line"><% if @recent_test_runs.any? %>Latest report <%= time_ago_in_words(@recent_test_runs.first.created_at) %> ago, across every branch CI reports from.<% else %>No run has been ingested yet.<% end %></span>
+        </span>
+        <span class="dc-ch-fig"><span class="dc-fig-n"><%= number_with_delimiter(@repository.test_runs.count) %></span><span class="dc-fig-l">runs</span></span>
+        <span class="dc-ch-chev" aria-hidden="true"></span>
+      </summary>
+      <div class="dc-ch-body">
+        <div class="grid gap-4 lg:grid-cols-3">
 <%= render "repositories/recent_runs" -%>
+        </div>
+      </div>
+    </details>
+
+    <details class="dc-ch <%= revoked_presented || refusing ? "dc-ch-err" : (refused_count.positive? ? "dc-ch-warn" : "") %>" id="ch-delivery"<%= " open" if open_delivery %>>
+      <summary class="dc-ch-sum">
+        <span class="dc-dot" aria-hidden="true"></span>
+        <span class="dc-ch-main">
+          <span class="dc-ch-title">Delivery</span>
+          <span class="dc-ch-line"><% if revoked_presented %>A revoked key is still being presented to the API.<% elsif refusing %>Deliveries are being refused — nothing has been accepted since.<% elsif @last_api_request_at.present? %>CI last reached this repository <%= time_ago_in_words(@last_api_request_at) %> ago.<% else %>No API key has been used yet.<% end %> Wiring instructions and the delivery log.</span>
+        </span>
+        <span class="dc-ch-fig"><span class="dc-fig-n <%= (refusing || revoked_presented) ? "dc-fig-err" : (refused_count.positive? ? "dc-fig-warn" : "") %>"><%= refused_count %></span><span class="dc-fig-l">rejected</span></span>
+        <span class="dc-ch-chev" aria-hidden="true"></span>
+      </summary>
+      <div class="dc-ch-body">
+        <div class="grid gap-4 lg:grid-cols-3">
+<%= render "repositories/wire_up_this_repository", has_api_keys: has_api_keys -%>
+<%= render "repositories/rejected_ingests" -%>
+        </div>
+      </div>
+    </details>
+    <% if manage_keys %>
+
+    <details class="dc-ch " id="ch-credentials">
+      <summary class="dc-ch-sum">
+        <span class="dc-dot" aria-hidden="true"></span>
+        <span class="dc-ch-main">
+          <span class="dc-ch-title">Credentials<span class="dc-ch-lock"><svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1.5 1.5 0 0 0-1.5 1.5v5A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5v-5A1.5 1.5 0 0 0 12 6h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z"/></svg> keys.manage</span></span>
+          <span class="dc-ch-line"><%= pluralize(@api_keys.size, "live API key") %>, <%= pluralize(@agent_api_keys.size, "agent key") %><% if @revoked_api_keys.any? %>, <%= @revoked_api_keys.size %> revoked<% end %>. Names, token hints, last use — and the controls that mint, regenerate and revoke.</span>
+        </span>
+        <span class="dc-ch-fig"><span class="dc-fig-n"><%= @api_keys.size + @agent_api_keys.size %></span><span class="dc-fig-l">live keys</span></span>
+        <span class="dc-ch-chev" aria-hidden="true"></span>
+      </summary>
+      <div class="dc-ch-body">
+        <div class="grid gap-4 lg:grid-cols-2">
+<%= render "repositories/api_keys", has_api_keys: has_api_keys, manage_keys: manage_keys -%>
+<%= render "repositories/agent_keys", manage_keys: manage_keys -%>
+        </div>
+      </div>
+    </details>
+
+    <% end %>
   </div>
 <% end %>
