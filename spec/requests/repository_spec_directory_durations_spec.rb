@@ -47,6 +47,15 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
   def row_paths = rows.map { |row| row[:path] }
 
+  # The "Declared layers" cell of each row, keyed by area. Kept out of `rows` so the existing
+  # four-column row assertions keep stating exactly what they stated.
+  def layer_cells
+    panel.all("tbody tr").to_h do |row|
+      cells = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      [cells.first, cells.fifth]
+    end
+  end
+
   # The panel one rung down, on the same page and off the same rows — read here so the two grains
   # can be compared in the assertions that exist to prove they are two grains.
   def file_row_paths
@@ -553,6 +562,51 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   # read the page makes. The panel's own query is the thing under test, so a check written through
   # it would agree with itself by construction; this one groups the rows in Ruby, off the records,
   # and compares what the reader is shown to what the run actually wrote.
+  # The "Declared layers" column: how many of each listed area's examples DECLARED each layer in
+  # their own `@intent`, and how many declared none. Counted off the stored column only — never
+  # inferred from the path — and undeclared is always printed, so a run that declared nothing reads
+  # "undeclared N" rather than a blank that could be taken for "no tests".
+  describe "the declared layers each area carries" do
+    # `spec/models` declares in TWO layers and leaves one undeclared; `spec/requests` declares
+    # nothing at all, so its examples are `undeclared` — NOT `request`, whatever the path says.
+    def layered_run
+      repository = create_repository(user: @user)
+      ingest(repository,
+             [annotated_spec(file_path: "spec/models/a_spec.rb", line_number: 1, duration: 5.0, layer: "unit"),
+              annotated_spec(file_path: "spec/models/a_spec.rb", line_number: 2, duration: 5.0, layer: "unit"),
+              annotated_spec(file_path: "spec/models/b_spec.rb", line_number: 3, duration: 5.0, layer: "request"),
+              example_spec(file_path: "spec/models/b_spec.rb", duration: 5.0, line_number: 4),
+              example_spec(file_path: "spec/requests/c_spec.rb", duration: 1.0, line_number: 5),
+              example_spec(file_path: "spec/requests/c_spec.rb", duration: 1.0, line_number: 6)])
+      repository
+    end
+
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "render declared layers", "behavior": "spec/models reads unit 2 · request 1 · undeclared 1 and spec/requests reads undeclared 2 with no request count, so a request-declared example under models counts as request and undeclared examples under requests do not", "layer": "request"}
+    it "prints each area's declared layers, with undeclared counted as undeclared and never as the path's layer" do
+      get repository_path(layered_run)
+
+      layers = layer_cells
+
+      expect(layers.fetch("spec/models")).to eq("unit 2 · request 1 · undeclared 1")
+      expect(layers.fetch("spec/requests")).to eq("undeclared 2")
+      expect(layers.fetch("spec/requests")).not_to include("request")
+    end
+
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "render declared layers on a zero-declaration run", "behavior": "a run declaring no layer prints undeclared N in every row rather than a blank cell, and the basis paragraph states what the column counts over", "layer": "request"}
+    it "prints undeclared on a run that declared nothing, rather than hiding it" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: "spec/models/a_spec.rb", duration: 2.0, line_number: 1),
+                          example_spec(file_path: "spec/models/a_spec.rb", duration: 2.0, line_number: 2),
+                          example_spec(file_path: "spec/system/s_spec.rb", duration: 1.0, line_number: 3)])
+
+      get repository_path(repository)
+
+      expect(layer_cells.values).to eq(["undeclared 2", "undeclared 1"])
+      expect(basis_line).to have_text("Declared layers", normalize_ws: true)
+      expect(basis_line).to have_text("not the whole run", normalize_ws: true)
+    end
+  end
+
   describe "what the rendered figures are" do
     # @intent: {"entity": "SpecDirectoryDurations", "action": "verify against independent grouping", "behavior": "every rendered cell equals a Ruby-side regrouping of the run's own SpecObservation rows across four areas, each descriptions cell reading 5 of 6 over six examples", "layer": "request"}
     it "matches an independent grouping of the run's own rows" do

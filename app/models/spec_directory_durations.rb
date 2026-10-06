@@ -68,9 +68,13 @@
 class SpecDirectoryDurations
   def self.for(test_run, limit: SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)
     tuples = SpecObservation.directory_durations_in(test_run, limit: limit)
-    rows = tuples.map do |path, total, recorded, timed, distinct_names, named, _directory_count|
+    rows = tuples.map do |path, total, recorded, timed, distinct_names, named, _directory_count, *layers|
+      # The five trailing operands ride in `SpecObservation::DECLARED_LAYER_KEYS` order — the closed
+      # layer enum, then undeclared — and are zipped by that list, never by position at the call site.
+      layer_counts = SpecObservation::DECLARED_LAYER_KEYS.zip(layers.map(&:to_i)).to_h
       Row.new(path: path, total_seconds: total, recorded_count: recorded.to_i, timed_count: timed.to_i,
-              distinct_name_count: distinct_names.to_i, named_count: named.to_i)
+              distinct_name_count: distinct_names.to_i, named_count: named.to_i,
+              layer_counts: layer_counts)
     end
 
     # Off any row, because the window carries the same total on all of them; `to_i` on the nil of
@@ -152,7 +156,24 @@ class SpecDirectoryDurations
   # One directory's share of one run's wall clock, what that share was measured over, and how many
   # distinct descriptions the examples it was measured over carry.
   Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, :distinct_name_count,
-                   :named_count, keyword_init: true) do
+                   :named_count, :layer_counts, keyword_init: true) do
+    # How many of this area's examples DECLARED each layer, plus how many declared none — operands,
+    # never a label or verdict. `{unit:, integration:, request:, system:, undeclared:}`, a measured
+    # zero where nothing declared that layer (never nil), summing to `recorded_count`. Counted off the
+    # stored `intent_layer` only: no path inference, and a derived intent is never counted as declared.
+    #
+    # `undeclared` is `intent_layer IS NULL` and nothing more, so it is "no @intent declared a layer",
+    # NOT "SpecGuard cannot read this test" (that is `DerivedIntent`'s `unreadable`).
+
+    # Spelled for the panel: `unit 31 · request 4 · undeclared 12`. Zero layers are omitted EXCEPT
+    # undeclared, which is always printed so a run declaring nothing reads "undeclared N" rather than
+    # a blank cell that could be taken for "no tests".
+    def layer_counts_label
+      layer_counts.filter_map do |layer, count|
+        "#{layer} #{count}" if count.positive? || layer == :undeclared
+      end.join(" · ")
+    end
+
     # This area has a measured total. False when every one of its examples went untimed, which is
     # SQL NULL out of the aggregate and stays nil all the way to the cell.
     def timed? = !total_seconds.nil?

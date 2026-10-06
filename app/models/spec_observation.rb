@@ -2109,7 +2109,34 @@ class SpecObservation < ApplicationRecord
       .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql("SUM(duration_seconds)"),
              Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
              Arel.sql("COUNT(DISTINCT name)"), Arel.sql("COUNT(name)"),
-             Arel.sql("COUNT(*) OVER ()"))
+             Arel.sql("COUNT(*) OVER ()"), *directory_layer_count_expressions)
+  end
+
+  # The per-area DECLARED-layer operands `.directory_durations_in` appends AFTER its
+  # `COUNT(*) OVER ()` (so `SpecDirectoryDurations::DIRECTORY_COUNT_INDEX` keeps its meaning): one
+  # `COUNT(*) FILTER (WHERE intent_layer = '<layer>')` per member of `SpecIntent::LAYERS`, in that
+  # order, then `FILTER (WHERE intent_layer IS NULL)` for the undeclared. Derived from the closed
+  # enum rather than retyped, and quoted through the connection so no layer name is ever spliced raw.
+  #
+  # NO INFERENCE, by construction: the predicate is the stored column and nothing else. A
+  # `layer: "request"` example under `spec/models/` counts under `request` there, and an undeclared
+  # example under `spec/requests/` counts under undeclared — the path is never consulted, and
+  # `DerivedIntent`'s directory-derived layer is never stored in `intent_layer`, so it is never
+  # counted as declared. The five FILTERs partition the area's rows (the column is validated against
+  # the enum at ingest, or NULL), so they sum to `COUNT(*)`; the spec pins that per area.
+  #
+  # No index and no extra query: the filters are aggregates over the rows the grouped read already
+  # scans through `index_spec_observations_on_test_run_id`.
+  # The keys of those operands, in the order they are plucked: the closed layer enum, then undeclared.
+  DECLARED_LAYER_KEYS = [*SpecIntent::LAYERS.map(&:to_sym), :undeclared].freeze
+
+  def self.directory_layer_count_expressions
+    @directory_layer_count_expressions ||= [
+      *SpecIntent::LAYERS.map do |layer|
+        Arel.sql("COUNT(*) FILTER (WHERE intent_layer = #{connection.quote(layer)})")
+      end,
+      Arel.sql("COUNT(*) FILTER (WHERE intent_layer IS NULL)")
+    ].freeze
   end
 
   # The spec FILES of ONE code area in ONE run, heaviest first — the rung between the by-directory

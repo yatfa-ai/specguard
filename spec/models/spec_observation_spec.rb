@@ -2162,10 +2162,50 @@ RSpec.describe SpecObservation do
         observe(run, duration: 0.5, line_number: 5, spec_file_path: "spec/system/smoke_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [["spec/requests", 13.0, 2, 2, 2, 2, 3],
-           ["spec/models", 4.0, 2, 2, 2, 2, 3],
-           ["spec/system", 0.5, 1, 1, 1, 1, 3]]
+          [["spec/requests", 13.0, 2, 2, 2, 2, 3, 0, 0, 0, 0, 2],
+           ["spec/models", 4.0, 2, 2, 2, 2, 3, 0, 0, 0, 0, 2],
+           ["spec/system", 0.5, 1, 1, 1, 1, 3, 0, 0, 0, 0, 1]]
         )
+      end
+
+      # THE per-area declared-layer operands, appended AFTER `COUNT(*) OVER ()` so the directory-count
+      # index keeps its meaning. A mixed fixture: `spec/models` declares in TWO layers (and has an
+      # undeclared row), `spec/requests` declares nothing. Per area the five operands sum to the
+      # area's row count — the FILTERs partition the rows — and the layer order is the closed enum's.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each area's declared-layer counts follow SpecIntent::LAYERS then undeclared and sum to the area's row count", layer: "unit" }
+      it "counts each area's examples per declared layer, summing with undeclared to the row count" do
+        observe(run, duration: 4.0, line_number: 1, spec_file_path: "spec/models/a_spec.rb", intent_layer: "unit")
+        observe(run, duration: 3.0, line_number: 2, spec_file_path: "spec/models/a_spec.rb", intent_layer: "unit")
+        observe(run, duration: 2.0, line_number: 3, spec_file_path: "spec/models/b_spec.rb", intent_layer: "request")
+        observe(run, duration: 1.0, line_number: 4, spec_file_path: "spec/models/b_spec.rb", intent_layer: nil)
+        observe(run, duration: 0.5, line_number: 5, spec_file_path: "spec/requests/c_spec.rb", intent_layer: nil)
+
+        tuples = described_class.directory_durations_in(run)
+        layer_tail = ->(path) { tuples.find { |t| t.first == path }.last(5) }
+
+        # unit, integration, request, system, undeclared
+        expect(layer_tail.call("spec/models")).to eq([2, 0, 1, 0, 1])
+        expect(layer_tail.call("spec/requests")).to eq([0, 0, 0, 0, 1])
+        expect(SpecObservation::DECLARED_LAYER_KEYS).to eq(%i[unit integration request system undeclared])
+        tuples.each do |tuple|
+          expect(tuple.last(5).sum).to eq(tuple[2]), "layer operands must sum to the row count for #{tuple.first}"
+        end
+        expect(tuples.first.fetch(SpecDirectoryDurations::DIRECTORY_COUNT_INDEX)).to eq(2)
+      end
+
+      # NEGATIVE-FIRST: no inference from the path. An example declaring `request` under `spec/models/`
+      # counts as `request` THERE; an undeclared example under `spec/requests/` counts undeclared, not
+      # `request`. `undeclared` is `intent_layer IS NULL` and nothing else.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an undeclared example under spec/requests counts as undeclared and a request-declared example under spec/models counts as request, never inferred from the path", layer: "unit" }
+      it "never infers a layer from the directory" do
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/requests/orders_spec.rb", intent_layer: nil)
+        observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/order_spec.rb", intent_layer: "request")
+
+        tuples = described_class.directory_durations_in(run).to_h { |t| [t.first, t.last(5)] }
+
+        expect(tuples.fetch("spec/requests")).to eq([0, 0, 0, 0, 1])
+        expect(tuples.fetch("spec/requests")[2]).to eq(0)
+        expect(tuples.fetch("spec/models")).to eq([0, 0, 1, 0, 0])
       end
 
       # The IMMEDIATE parent, not an ancestor and not the whole prefix: `spec/models/orders` is its
@@ -2178,8 +2218,8 @@ RSpec.describe SpecObservation do
         observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/orders/refund_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [["spec/models/orders", 2.0, 1, 1, 1, 1, 2],
-           ["spec/models", 1.0, 1, 1, 1, 1, 2]]
+          [["spec/models/orders", 2.0, 1, 1, 1, 1, 2, 0, 0, 0, 0, 1],
+           ["spec/models", 1.0, 1, 1, 1, 1, 2, 0, 0, 0, 0, 1]]
         )
       end
 
@@ -2194,8 +2234,8 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [[".", 3.0, 1, 1, 1, 1, 2],
-           ["spec/models", 1.0, 1, 1, 1, 1, 2]]
+          [[".", 3.0, 1, 1, 1, 1, 2, 0, 0, 0, 0, 1],
+           ["spec/models", 1.0, 1, 1, 1, 1, 2, 0, 0, 0, 0, 1]]
         )
       end
 
@@ -2231,8 +2271,8 @@ RSpec.describe SpecObservation do
 
         directories = described_class.directory_durations_in(run)
 
-        expect(directories).to eq([["spec/models", 0.25, 1, 1, 1, 1, 2],
-                                   ["spec/system", nil, 2, 0, 2, 2, 2]])
+        expect(directories).to eq([["spec/models", 0.25, 1, 1, 1, 1, 2, 0, 0, 0, 0, 1],
+                                   ["spec/system", nil, 2, 0, 2, 2, 2, 0, 0, 0, 0, 2]])
         expect(directories.last[1]).to be_nil
       end
 
@@ -2246,7 +2286,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: nil, line_number: 3, spec_file_path: "spec/models/refund_spec.rb")
 
-        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 3, 1, 3, 3, 1]])
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 3, 1, 3, 3, 1, 0, 0, 0, 0, 3]])
       end
 
       # THE third figure, and the one the panel's headline sentence needs: how many distinct
@@ -2264,7 +2304,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 4, name: "refuses a negative total",
                      spec_file_path: "spec/models/refund_spec.rb")
 
-        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 4, 4, 2, 4, 1]])
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 4, 4, 2, 4, 1, 0, 0, 0, 0, 4]])
       end
 
       # THE inverted Vacuous Green this pair of aggregates exists to refuse. `COUNT(DISTINCT name)`
@@ -2279,7 +2319,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 2, name: nil, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: 1.0, line_number: 3, name: nil, spec_file_path: "spec/models/refund_spec.rb")
 
-        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 3.0, 3, 3, 0, 0, 1]])
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 3.0, 3, 3, 0, 0, 1, 0, 0, 0, 0, 3]])
       end
 
       # The partial case, and the one a whole-area check passes straight over: the distinct count is
@@ -2298,7 +2338,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 4, name: nil, spec_file_path: "spec/models/refund_spec.rb")
         observe(run, duration: 1.0, line_number: 5, name: nil, spec_file_path: "spec/models/refund_spec.rb")
 
-        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 5.0, 5, 5, 2, 3, 1]])
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 5.0, 5, 5, 2, 3, 1, 0, 0, 0, 0, 5]])
       end
 
       # One description in two AREAS is one distinct behavior in each of them, not one across the
@@ -2312,8 +2352,8 @@ RSpec.describe SpecObservation do
                      spec_file_path: "spec/requests/order_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [["spec/models", 2.0, 1, 1, 1, 1, 2],
-           ["spec/requests", 1.0, 1, 1, 1, 1, 2]]
+          [["spec/models", 2.0, 1, 1, 1, 1, 2, 0, 0, 0, 0, 1],
+           ["spec/requests", 1.0, 1, 1, 1, 1, 2, 0, 0, 0, 0, 1]]
         )
       end
 
@@ -2323,7 +2363,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/ours/a_spec.rb")
         observe(other, duration: 99.0, line_number: 1, spec_file_path: "spec/theirs/a_spec.rb")
 
-        expect(described_class.directory_durations_in(run)).to eq([["spec/ours", 1.0, 1, 1, 1, 1, 1]])
+        expect(described_class.directory_durations_in(run)).to eq([["spec/ours", 1.0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1]])
       end
 
       # Its OWN limit, not the by-file one. The two constants happen to be equal today, which is
@@ -2347,8 +2387,8 @@ RSpec.describe SpecObservation do
       it "reports how many directories the run touched in total, whatever the limit returns" do
         12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/d#{i}/a_spec.rb") }
 
-        expect(described_class.directory_durations_in(run, limit: 3).map(&:last)).to eq([12, 12, 12])
-        expect(described_class.directory_durations_in(run, limit: 100).map(&:last).uniq).to eq([12])
+        expect(described_class.directory_durations_in(run, limit: 3).map { |t| t.fetch(SpecDirectoryDurations::DIRECTORY_COUNT_INDEX) }).to eq([12, 12, 12])
+        expect(described_class.directory_durations_in(run, limit: 100).map { |t| t.fetch(SpecDirectoryDurations::DIRECTORY_COUNT_INDEX) }.uniq).to eq([12])
       end
 
       # Groups, not rows and not FILES: twelve examples in twelve files under two directories
@@ -2360,7 +2400,7 @@ RSpec.describe SpecObservation do
           observe(run, duration: 1.0, line_number: i + 1, spec_file_path: "spec/d#{i % 2}/f#{i}_spec.rb")
         end
 
-        expect(described_class.directory_durations_in(run).map(&:last)).to eq([2, 2])
+        expect(described_class.directory_durations_in(run).map { |t| t.fetch(SpecDirectoryDurations::DIRECTORY_COUNT_INDEX) }).to eq([2, 2])
       end
 
       # Two areas totalling the same is ordinary, so the order has to be total, or two requests
