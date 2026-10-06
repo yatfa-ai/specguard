@@ -107,6 +107,17 @@
         Each group counts its members (distinct test texts) and its examples (every run row those
         texts resolved to) separately: a table-driven loop is one member and several examples.
       </p>
+      <%# THE LAYER PROVENANCE, stated ONCE for the panel and never per cluster. `layer_source` is the
+          census's own stamp: non-nil only when at least one clustered member declared a layer, so a
+          suite that declared nothing gets no layer text anywhere on this panel. %>
+      <% if census["layer_source"].present? %>
+        <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-layer-source">
+          Layers shown below are as declared by each test's <code>@intent</code>
+          (<%= census["layer_source"] %>), never inferred from file paths. A test that declared two
+          layers is listed under both, so a layer group can hold more tests than its cluster has
+          members.
+        </p>
+      <% end %>
       <ul class="space-y-4" id="near-duplicate-cluster-list">
         <% census["clusters"].each do |cluster| %>
           <li class="rounded-md border border-app-border p-3" data-near-duplicate-cluster>
@@ -130,20 +141,36 @@
             </p>
             <p class="text-xs text-app-muted mt-1">
               matched on <%= cluster["signal_source"] %>
-              <% declared_layers = cluster["layer_groups"].count { |group| group["layer"] } %>
+              <%# The layer cut is read off the STORED `layer_groups` (members grouped by the layer their
+                  examples declared, alphabetical, the undeclared `layer: null` group last). A cluster
+                  whose `layer_redundancy` is nil declared nothing, so it renders no layer text at all
+                  — never one "no layer declared" group per cluster. %>
+              <% layer_groups = Array(cluster["layer_groups"]) %>
+              <% show_layers = cluster["layer_redundancy"].present? && layer_groups.any? %>
+              <% declared_layers = layer_groups.filter_map { |group| group["layer"] } %>
               <% case cluster["layer_redundancy"] %>
               <% when "cross_layer" %>
-                · spans <%= declared_layers %> declared <%= "layer".pluralize(declared_layers) %>
+                · spans <%= declared_layers.size %> declared <%= "layer".pluralize(declared_layers.size) %>:
+                <%= declared_layers.join(", ") %>
               <% when "same_layer" %>
-                · one layer
+                · one layer: <%= declared_layers.join(", ") %>
               <% end %>
               <% if cluster["unobserved_members"] %>
                 · lists a test the weighed run did not observe
               <% end %>
             </p>
-            <ul class="mt-2 space-y-1">
-              <% cluster["members"].each do |member| %>
-                <li class="font-mono text-xs text-app-content break-words">
+            <% if show_layers %>
+              <%# Grouped by declared layer INSTEAD of the flat list: every member sits in at least one
+                  group, an undeclared member under "no layer declared", and a member declaring two
+                  layers under both (group sizes can exceed `member_count` — the census's own rule). %>
+              <% layer_groups.each do |group| %>
+                <div class="mt-2" data-near-duplicate-layer-group>
+                  <p class="text-xs font-medium text-app-content">
+                    <%= group["layer"] || "no layer declared" %>
+                  </p>
+                  <ul class="mt-1 space-y-1">
+                    <% group["members"].each do |member| %>
+                      <li class="font-mono text-xs text-app-content break-words">
                   <%= member["file_path"] %>:<%= member["line_number"] %>
                   <span class="font-sans"><%= member["text"] %></span>
                   <span class="text-app-muted tabular-nums">
@@ -151,8 +178,24 @@
                     <%= "example".pluralize(member["example_count"].to_i) %>)
                   </span>
                 </li>
+                    <% end %>
+                  </ul>
+                </div>
               <% end %>
-            </ul>
+            <% else %>
+              <ul class="mt-2 space-y-1">
+                <% cluster["members"].each do |member| %>
+                  <li class="font-mono text-xs text-app-content break-words">
+                  <%= member["file_path"] %>:<%= member["line_number"] %>
+                  <span class="font-sans"><%= member["text"] %></span>
+                  <span class="text-app-muted tabular-nums">
+                    (<%= number_with_delimiter(member["example_count"]) %>
+                    <%= "example".pluralize(member["example_count"].to_i) %>)
+                  </span>
+                </li>
+                <% end %>
+              </ul>
+            <% end %>
           </li>
         <% end %>
       </ul>
