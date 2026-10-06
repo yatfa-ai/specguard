@@ -283,4 +283,61 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
     expect(wire.find(:xpath, ".//tr[td[normalize-space()='404']]").text.squish).to include("answered identically"),
           "the 404 row does not state that outside-the-set and nonexistent are indistinguishable"
   end
+
+  # ⛔ The MCP bridge (npm `specguard-mcp`) is NOT bundled with this application — unlike the gem
+  # above it cannot be read at test time, so this list is a hand-pinned COPY of the bridge's tool
+  # names and credential families, and all it does is narrow drift to one named place: the bridge
+  # gaining or dropping a tool does NOT redden this suite by itself. Whoever bumps the pinned
+  # version must re-read the bridge README's environment-variable table (`npm pack
+  # specguard-mcp@<version>`, then `package/README.md`) and reconcile this list and the #mcp panel.
+  MCP_BRIDGE_VERSION = "0.1.39"
+  MCP_BRIDGE_TOOLS = %w[
+    get_repository_overview near_duplicate_clusters find_tests_near_behavior
+    lint_intent_annotations get_intent_schema get_server_version
+    list_repositories registrable_repositories add_repository rename_repository remove_repository
+    create_repository_api_key list_repository_api_keys revoke_repository_api_key
+    list_repository_agent_keys list_repository_agent_keys_presented_revoked revoke_repository_agent_key
+    list_repository_members add_repository_member update_repository_member_permissions
+    remove_repository_member
+  ].freeze
+  MCP_BRIDGE_VARIABLES = %w[
+    SPECGUARD_API_KEY SPECGUARD_USER_API_KEY SPECGUARD_AGENT_API_KEY SPECGUARD_TIMEOUT_MS
+  ].freeze
+
+  # @intent: {"entity": "GET /docs/integrate", "action": "document the MCP bridge's tools and credential slots", "behavior": "the #mcp panel no longer says the bridge exposes two things, names every one of the 21 tools of the pinned specguard-mcp version and each of the SPECGUARD_API_KEY, SPECGUARD_USER_API_KEY, SPECGUARD_AGENT_API_KEY and SPECGUARD_TIMEOUT_MS variables, and states the credential per tool family: sgk_ for the default repository reads, sga_ preferred or sgu_ for repository-keyed reads and administration, sgu_ for registration, and no key for the contract tools", "layer": "request"}
+  it "documents every tool and credential slot of the pinned MCP bridge in the #mcp panel" do
+    expect(MCP_BRIDGE_TOOLS.size).to eq(21)
+
+    get integration_guide_path
+    panel = Capybara.string(response.body).find(:css, "#mcp")
+    text = panel.text.squish
+    reread = "re-read the specguard-mcp@#{MCP_BRIDGE_VERSION} README environment-variable table " \
+             "(npm pack specguard-mcp@#{MCP_BRIDGE_VERSION}) and bring the #mcp panel and " \
+             "MCP_BRIDGE_TOOLS in line"
+
+    expect(text).not_to include("two things"),
+          "the #mcp panel is back to describing a two-tool bridge — #{reread}"
+
+    missing_tools = MCP_BRIDGE_TOOLS.reject { |tool| text.include?(tool) }
+    expect(missing_tools).to be_empty,
+          "the #mcp panel does not name #{missing_tools.join(', ')} — #{reread}"
+
+    missing_variables = MCP_BRIDGE_VARIABLES.reject { |name| text.include?(name) }
+    expect(missing_variables).to be_empty,
+          "the #mcp panel does not mention #{missing_variables.join(', ')} — #{reread}"
+
+    # The three credential families, each read from the tool's own row: a reader who sets the
+    # wrong key slot gets a "not set"-class refusal, so the row must say which slot it wants.
+    credential = lambda do |tool|
+      panel.find(:xpath, ".//tr[td[normalize-space()='#{tool}']]").text.squish
+    end
+    expect(credential.call("get_repository_overview")).to include("sgk_").and(include("sga_")),
+          "get_repository_overview answers the sgk_ key by default and sga_/sgu_ with a repository — #{reread}"
+    expect(credential.call("list_repository_members")).to include("sga_ (preferred)").and(include("sgu_")),
+          "the members tools answer sga_ (preferred) or sgu_ — #{reread}"
+    expect(credential.call("add_repository")).to include("sgu_").and(satisfy { |row| !row.include?("sga_") }),
+          "add_repository needs a person's sgu_ key only — #{reread}"
+    expect(credential.call("get_intent_schema")).to include("no key"),
+          "get_intent_schema sends no key — #{reread}"
+  end
 end

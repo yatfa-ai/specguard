@@ -273,6 +273,11 @@ module IntegrationGuideHelper
     SHELL
   end
 
+  # `SPECGUARD_API_KEY` (sgk_, one repository) stays the default. `SPECGUARD_AGENT_API_KEY`
+  # (sga_, a granted repository set) is the optional second slot: an agent holding only an sga_ key
+  # needs it for the discovery/administration tools, and the bridge prefers it wherever a tool
+  # answers either credential. `SPECGUARD_USER_API_KEY` (a person's key) is deliberately left out
+  # of the copy-paste block — the panel prose names it for the reader who needs it.
   def integration_guide_mcp_config_snippet(endpoint)
     <<~JSON.strip
       {
@@ -283,6 +288,7 @@ module IntegrationGuideHelper
             "env": {
               "SPECGUARD_ENDPOINT": "#{endpoint}",
               "SPECGUARD_API_KEY": "sgk_…",
+              "SPECGUARD_AGENT_API_KEY": "sga_…",
               "SPECGUARD_LINT_COMMAND": "bundle exec specguard-lint"
             }
           }

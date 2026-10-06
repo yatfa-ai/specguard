@@ -1149,9 +1149,22 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
           package: it answers a stdio initialize handshake. %>
       <p class="text-sm text-app-content-secondary">
         <code>specguard-mcp</code> is a small MCP server that gives an AI coding agent direct access
-        to two things: your repository's SpecGuard overview, and the annotation linter. It reuses
-        <code>SPECGUARD_ENDPOINT</code> and <code>SPECGUARD_API_KEY</code> — the same two variables
-        the gem uses — so a repository that is already reporting runs is already configured for it.
+        to SpecGuard: reading what a repository's suite looks like, the annotation linter and the
+        contract it checks against, and — for the repositories and people around it — registration,
+        CI keys and membership. It reuses <code>SPECGUARD_ENDPOINT</code> and
+        <code>SPECGUARD_API_KEY</code> — the same two variables the gem uses — so a repository that
+        is already reporting runs is already configured for its repository-level reads.
+      </p>
+      <p class="text-sm text-app-content-secondary">
+        Which key a tool needs depends on what it does, and SpecGuard decides from the token's
+        prefix: <code>SPECGUARD_API_KEY</code> (<code>sgk_…</code>) is one repository's CI key;
+        <code>SPECGUARD_AGENT_API_KEY</code> (<code>sga_…</code>) is a key with an explicit set of
+        granted repositories and permissions, which speaks for nobody — the one to give an automated
+        agent, and the one the bridge prefers wherever a tool answers either it or a person key;
+        <code>SPECGUARD_USER_API_KEY</code> (<code>sgu_…</code>) is a person's key. Set only the
+        ones your tools need; each tool names what it needs, and what is missing, when it is called.
+        <code>SPECGUARD_TIMEOUT_MS</code> (default <code>30000</code>) bounds how long a call to
+        SpecGuard may take, and <code>SPECGUARD_LINT_COMMAND</code> selects the linter client.
       </p>
 
       <div class="space-y-2" data-controller="copy-text">
@@ -1161,27 +1174,151 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
 
       <div class="space-y-2" data-controller="copy-text">
         <p class="section-label text-app-content-secondary">Register it with your agent</p>
+        <p class="text-sm text-app-content-secondary">
+          Keep the key slot you hold and delete the other: <code>sgk_…</code> for one repository's
+          reads, <code>sga_…</code> for an agent that works across a granted set.
+        </p>
         <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_mcp_config_snippet(endpoint) %><% end %>
       </div>
 
-      <div class="space-y-2">
+      <div class="space-y-4">
         <p class="section-label text-app-content-secondary">What it exposes</p>
-        <%= render UI::TableComponent.new(columns: ["Tool", "What it does"]) do %>
-          <tr>
-            <td class="px-3 py-2 font-mono text-xs text-app-content">lint_intent_annotations</td>
-            <td class="px-3 py-2 text-app-content-secondary">
-              Runs your project's own <code>specguard-lint</code> and returns the findings. Needs no
-              endpoint and no key.
-            </td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2 font-mono text-xs text-app-content">get_repository_overview</td>
-            <td class="px-3 py-2 text-app-content-secondary">
-              The repository's latest run, heaviest files and directories, slowest examples, repeated
-              descriptions and run history — the dashboard, without a browser. Needs both variables.
-            </td>
-          </tr>
-        <% end %>
+        <p class="text-sm text-app-content-secondary">
+          Twenty-one tools, grouped by what they are for. Administration tools need a key that
+          carries the matching permission on the repository; a call that lacks one is refused by
+          name. Per-tool arguments are in the
+          <a class="underline" href="https://www.npmjs.com/package/specguard-mcp">specguard-mcp README</a>.
+        </p>
+        <div class="space-y-2">
+          <p class="text-sm font-medium text-app-content">Read this repository</p>
+          <%= render UI::TableComponent.new(columns: ["Tool", "What it does", "Credential"]) do %>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">get_repository_overview</td>
+              <td class="px-3 py-2 text-app-content-secondary">The repository's latest run, heaviest files and directories, slowest examples, repeated descriptions and run history — the dashboard, without a browser.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sgk_</code> key; with a <code>repository</code> argument, <code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">near_duplicate_clusters</td>
+              <td class="px-3 py-2 text-app-content-secondary">The stored near-duplicate census: which tests read alike, clustered by similarity, before you delete or merge anything.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sgk_</code> key; with a <code>repository</code> argument, <code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">find_tests_near_behavior</td>
+              <td class="px-3 py-2 text-app-content-secondary">Asks which stored tests are nearest a behaviour you describe in plain words — the way to check whether something is already tested before writing a test for it.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sgk_</code> key; with a <code>repository</code> argument, <code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+          <% end %>
+        </div>
+        <div class="space-y-2">
+          <p class="text-sm font-medium text-app-content">Contract and lint</p>
+          <%= render UI::TableComponent.new(columns: ["Tool", "What it does", "Credential"]) do %>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">lint_intent_annotations</td>
+              <td class="px-3 py-2 text-app-content-secondary">Runs your project's own <code>specguard-lint</code> and returns the findings.</td>
+              <td class="px-3 py-2 text-app-content-secondary">No endpoint and no key</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">get_intent_schema</td>
+              <td class="px-3 py-2 text-app-content-secondary">Serves the annotation schema document the linter checks against, with the digest the deployment enforces.</td>
+              <td class="px-3 py-2 text-app-content-secondary">Endpoint only — no key</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">get_server_version</td>
+              <td class="px-3 py-2 text-app-content-secondary">Reports which build of the SpecGuard deployment is answering.</td>
+              <td class="px-3 py-2 text-app-content-secondary">Endpoint only — no key</td>
+            </tr>
+          <% end %>
+        </div>
+        <div class="space-y-2">
+          <p class="text-sm font-medium text-app-content">Discover and register repositories</p>
+          <%= render UI::TableComponent.new(columns: ["Tool", "What it does", "Credential"]) do %>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">list_repositories</td>
+              <td class="px-3 py-2 text-app-content-secondary">Lists the repositories your key may open, with each one's delivery health and latest run.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">registrable_repositories</td>
+              <td class="px-3 py-2 text-app-content-secondary">Lists the GitHub repositories you could register, and which are already taken.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">add_repository</td>
+              <td class="px-3 py-2 text-app-content-secondary">Registers a repository and returns its first CI key, shown once.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">rename_repository</td>
+              <td class="px-3 py-2 text-app-content-secondary">Renames a registered repository without losing its keys or runs. Owner only.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">remove_repository</td>
+              <td class="px-3 py-2 text-app-content-secondary">Deletes a repository with every key, run and intent on it. Irreversible.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+          <% end %>
+        </div>
+        <div class="space-y-2">
+          <p class="text-sm font-medium text-app-content">CI and agent keys</p>
+          <%= render UI::TableComponent.new(columns: ["Tool", "What it does", "Credential"]) do %>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">create_repository_api_key</td>
+              <td class="px-3 py-2 text-app-content-secondary">Mints a CI key (<code>sgk_…</code>) for a repository, shown once.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">list_repository_api_keys</td>
+              <td class="px-3 py-2 text-app-content-secondary">Lists a repository's CI keys with when each last authenticated.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">revoke_repository_api_key</td>
+              <td class="px-3 py-2 text-app-content-secondary">Revokes one CI key; every other key keeps working.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">list_repository_agent_keys</td>
+              <td class="px-3 py-2 text-app-content-secondary">Lists the agent keys (<code>sga_…</code>) covering a repository. Agent keys are minted on the web, not here.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">list_repository_agent_keys_presented_revoked</td>
+              <td class="px-3 py-2 text-app-content-secondary">Lists revoked agent keys whose token is still arriving — the verify step of offboarding.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">revoke_repository_agent_key</td>
+              <td class="px-3 py-2 text-app-content-secondary">Revokes an agent key on every repository it covers, not only this one.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+          <% end %>
+        </div>
+        <div class="space-y-2">
+          <p class="text-sm font-medium text-app-content">Members</p>
+          <%= render UI::TableComponent.new(columns: ["Tool", "What it does", "Credential"]) do %>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">list_repository_members</td>
+              <td class="px-3 py-2 text-app-content-secondary">Lists who has access to a repository and with which permissions.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">add_repository_member</td>
+              <td class="px-3 py-2 text-app-content-secondary">Grants a person access by their GitHub handle.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">update_repository_member_permissions</td>
+              <td class="px-3 py-2 text-app-content-secondary">Replaces one member's whole permission set.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">remove_repository_member</td>
+              <td class="px-3 py-2 text-app-content-secondary">Revokes one person's access. Their minted CI keys keep working.</td>
+              <td class="px-3 py-2 text-app-content-secondary"><code>sga_</code> (preferred) or <code>sgu_</code></td>
+            </tr>
+          <% end %>
+        </div>
       </div>
     </div>
   <% end %>
