@@ -296,6 +296,76 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     end
   end
 
+  # The stored `similarity_range` and census-level `saturated_identity_count`, rendered from the
+  # stored Hash. Membership is transitive and similarity is not, so the stretch is stated.
+  describe "the similarity stretch and the saturation caveat" do
+    before { ingest(repository, pair_specs) }
+
+    let(:census) { NearDuplicateCensus.find_by!(repository_id: repository.id) }
+    let(:cluster) { census.payload["clusters"].sole }
+    let(:caveat) { "may be part of a larger one" }
+
+    def store(cluster_overrides: {}, drop: [], census_overrides: {})
+      stored = cluster.merge(cluster_overrides).except(*drop)
+      census.update!(payload: census.payload.merge("clusters" => [stored]).merge(census_overrides))
+    end
+
+    def cluster_text = panel.find("[data-near-duplicate-cluster]").text(normalize_ws: true)
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "render similarity_range", "behavior": "a stored range of two different figures renders both inside that cluster, best then worst", "layer": "request"}
+    it "renders both figures of a stretched range inside the cluster" do
+      store(cluster_overrides: { "similarity_range" => [0.97, 0.86] })
+
+      get repository_path(repository)
+
+      expect(cluster_text).to include("alike at 0.97 at best, 0.86 at worst")
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "render a flat similarity_range", "behavior": "a stored range whose ends are equal renders one figure and no best/worst wording", "layer": "request"}
+    it "renders one figure when strongest equals weakest" do
+      store(cluster_overrides: { "similarity_range" => [0.89, 0.89] })
+
+      get repository_path(repository)
+
+      expect(cluster_text).to include("alike at 0.89")
+      expect(cluster_text).not_to match(/at best|at worst/)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "degrade a missing similarity_range", "behavior": "a cluster stored without similarity_range renders with no range text, no zero figure and no error", "layer": "request"}
+    it "renders no range text for a cluster stored without one" do
+      store(drop: ["similarity_range"])
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(cluster_text).not_to match(/alike at|0\.0/)
+      expect(panel).to have_css("[data-near-duplicate-cluster]", count: 1)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "render saturation caveat", "behavior": "a positive saturated_identity_count renders the fragment caveat exactly once on the panel", "layer": "request"}
+    it "states the fragment caveat once when identities were saturated" do
+      store(census_overrides: { "saturated_identity_count" => 3 })
+
+      get repository_path(repository)
+
+      expect(panel.text(normalize_ws: true).scan(caveat).size).to eq(1)
+      expect(panel).to have_css("#near-duplicate-clusters-saturation", count: 1)
+      expect(panel).to have_no_css("[data-near-duplicate-cluster] #near-duplicate-clusters-saturation")
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "omit saturation caveat at zero", "behavior": "a zero or absent saturated_identity_count renders no caveat and no count clause", "layer": "request"}
+    it "renders no caveat when nothing was saturated" do
+      [0, nil].each do |value|
+        store(census_overrides: { "saturated_identity_count" => value })
+
+        get repository_path(repository)
+
+        expect(panel.text(normalize_ws: true)).not_to include(caveat)
+        expect(panel).to have_no_css("#near-duplicate-clusters-saturation")
+      end
+    end
+  end
+
   describe "a cluster whose examples were never timed" do
     before do
       ingest(repository, pair_specs.map { |row| row.merge(duration: nil) })
