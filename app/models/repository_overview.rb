@@ -1257,12 +1257,18 @@ class RepositoryOverview
           # out of the aggregate, and a zero there would assert a file that cost nothing.
           total_seconds: row.total_seconds,
           recorded_count: row.recorded_count,
-          timed_count: row.timed_count
+          timed_count: row.timed_count,
+          # The file's declared-layer operands: one count per `SpecIntent::LAYERS` member plus
+          # `undeclared`, summing to the row's `recorded_count`. Measured zeros, never null.
+          layer_counts: row.layer_counts
         }
       end,
       file_count: files.file_count,
       recorded_count: files.recorded_count,
       timed_count: files.timed_count,
+      # The AREA's declared-layer operands, counted over the whole area before the file cap (so they
+      # sum to `recorded_count` even where the rows do not). No path inference; measured zeros.
+      layer_counts: files.layer_counts,
       limit: SpecObservation::SPEC_DIRECTORY_FILES_LIMIT
     }
   end

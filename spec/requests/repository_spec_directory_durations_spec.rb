@@ -889,6 +889,55 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
     # Rung three, reached from rung two. It already shipped — what is new is that it can now be
     # reached from an area, which is the whole point of the middle rung existing.
+    # The declared-layer mix of the area and of each file. Counted off the stored column only — an
+    # undeclared example under spec/requests is "undeclared", never "request" — and counted over the
+    # WHOLE area in the caption, not the listed files.
+    describe "the declared layers of an area and of its files" do
+      def layered_area_run
+        repository = create_repository(user: @user, github_full_name: "acme/layered-area")
+        ingest(repository,
+               [annotated_spec(file_path: "spec/models/a_spec.rb", line_number: 1, duration: 2.0, layer: "unit"),
+                annotated_spec(file_path: "spec/models/a_spec.rb", line_number: 2, duration: 2.0, layer: "request"),
+                example_spec(file_path: "spec/models/b_spec.rb", duration: 1.0, line_number: 3),
+                example_spec(file_path: "spec/requests/c_spec.rb", duration: 1.0, line_number: 4)])
+        repository
+      end
+
+      def layer_by_file
+        files_panel.all("tbody tr").to_h do |row|
+          cells = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+          [cells.first, cells.last]
+        end
+      end
+
+      # @intent: {"entity": "SpecDirectoryFiles", "action": "render declared layers per file and for the area", "behavior": "the file table gains a Declared layers column printing each file's mix and the caption states the area totals as counted over the whole area, with an undeclared file reading undeclared N and never a request count inferred from the path", "layer": "request"}
+      it "prints each file's declared layers and states the area's in the caption" do
+        get repository_path(layered_area_run, spec_directory: "spec/models")
+
+        expect(files_panel).to have_css("th", text: "Declared layers")
+        expect(layer_by_file).to eq("spec/models/a_spec.rb" => "unit 1 · request 1 · undeclared 0",
+                                    "spec/models/b_spec.rb" => "undeclared 1")
+        expect(files_basis).to have_text("unit 1 · request 1 · undeclared 1", normalize_ws: true)
+        expect(files_basis).to have_text("whole area, not only the files listed", normalize_ws: true)
+      end
+
+      # @intent: {"entity": "SpecDirectoryFiles", "action": "render undeclared without inference", "behavior": "an area whose examples declared nothing prints undeclared N in its caption and rows, never a request count from its spec/requests path", "layer": "request"}
+      it "prints undeclared, not the path's layer, where nothing was declared" do
+        get repository_path(layered_area_run, spec_directory: "spec/requests")
+
+        expect(layer_by_file).to eq("spec/requests/c_spec.rb" => "undeclared 1")
+        expect(files_basis).to have_text("undeclared 1", normalize_ws: true)
+        expect(files_basis).to have_no_text("request 1", normalize_ws: true)
+      end
+
+      # @intent: {"entity": "SpecDirectoryFiles", "action": "keep the empty area free of layer claims", "behavior": "an area the run recorded nothing for renders the empty state and no declared-layers column", "layer": "request"}
+      it "renders no layer claim for an area the run recorded nothing for" do
+        get repository_path(layered_area_run, spec_directory: "spec/ghosts")
+
+        expect(files_panel).to have_no_text("Declared layers", normalize_ws: true)
+      end
+    end
+
     describe "the way on, into one of those files" do
       # @intent: {"entity": "SpecDirectoryDurations", "action": "link file to examples", "behavior": "the refund_spec.rb row links with a spec_file parameter and the file-examples anchor into the per-example panel", "layer": "request"}
       it "links each listed file into the examples panel above" do
