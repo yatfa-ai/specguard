@@ -74,6 +74,12 @@
             ["You need a reporter", "The Ruby gem, the TypeScript package, or ~50 lines in your own language"]
           ]) %>
 
+      <p class="text-sm text-app-content-secondary" id="agent-key-pointer">
+        An <code>sga_</code> agent key covers a <em>set</em> of repositories, so it cannot say which
+        one a run belongs to: it must post to the repository-scoped route instead, which names the
+        repository in the path (<a href="#agent-key-route" class="underline">details in the wire contract</a>).
+      </p>
+
       <%# The read endpoint is on this page ONLY as a connectivity check and as the machine-readable
           read-back. It is emphatically not the integration, and until this guide existed it was the
           only thing the product's own UI showed anybody — a curl against `GET /api/v1/repository`,
@@ -218,6 +224,18 @@
             <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_API_KEY</td>
             <td class="px-3 py-2 text-xs text-app-muted">none</td>
             <td class="px-3 py-2 text-app-content-secondary">The repository's key. Present means "deliver over HTTP".</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_REPOSITORY_ID</td>
+            <td class="px-3 py-2 text-xs text-app-muted">none</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Optional, and only for an <code>sga_</code> agent key: the numeric id of the repository
+              to ingest into, which the client puts in the path of the
+              <a href="#agent-key-route" class="underline">repository-scoped route</a>. Letters,
+              digits, <code>-</code> and <code>_</code> only. Leave it unset under an
+              <code>sgk_</code> key — the server ignores it there, because that key already names its
+              repository.
+            </td>
           </tr>
           <tr>
             <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_TIMEOUT</td>
@@ -671,6 +689,25 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
         </p>
       </div>
 
+      <div class="space-y-2" id="agent-key-route">
+        <p class="section-label text-app-content-secondary">Posting with an agent key</p>
+        <%= render UI::DefListComponent.new(rows: [
+              ["Method and URL", "POST #{endpoint}/api/v1/repositories/<repository id>/ingest"],
+              ["Authorization", "Bearer &lt;your sga_ key&gt;".html_safe],
+              ["Key must hold", RepositoryMembership::RUNS_INGEST]
+            ]) %>
+        <p class="text-xs text-app-muted">
+          An <code>sga_</code> agent key covers a set of repositories, so the repository is named in
+          the path. The body, the headers and the <code>202</code> are exactly those described on
+          this page. The segment-less <code>/api/v1/ingest</code> above answers an agent key with a
+          <code>400</code> that names this form. Under an <code>sgk_</code> key the path segment is
+          ignored: that key already belongs to one repository, and the run is stored there whatever
+          id the path carries. The agent route's own refusals (<code>403</code> and
+          <code>404</code>) are in the table under
+          <a href="#response-codes" class="underline">What comes back</a>.
+        </p>
+      </div>
+
       <div class="space-y-2">
         <p class="section-label text-app-content-secondary">The envelope</p>
         <%= render UI::TableComponent.new(columns: ["Field", "Type", "Required", "Rule"]) do %>
@@ -901,7 +938,7 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
       </div>
 
       <div class="space-y-2">
-        <p class="section-label text-app-content-secondary">What comes back</p>
+        <p class="section-label text-app-content-secondary" id="response-codes">What comes back</p>
         <%= render UI::TableComponent.new(columns: ["Status", "Body", "Meaning"]) do %>
           <tr>
             <td class="px-3 py-2 font-mono text-xs text-app-content">202</td>
@@ -974,6 +1011,26 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             <td class="px-3 py-2 text-app-content-secondary">
               The key was missing, malformed, revoked or rotated. No detail about which, and nothing
               is recorded against the repository — there is no repository to record it against.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">403</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">{"error":"forbidden","message":"…"}</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <strong class="text-app-content">Agent-key route only.</strong> The <code>sga_</code>
+              key covers the repository you named but does not hold
+              <code><%= RepositoryMembership::RUNS_INGEST %></code>. Nothing was stored. Ask the
+              repository's owner to grant that permission on the key.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">404</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">{"error":"not_found","message":"…"}</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <strong class="text-app-content">Agent-key route only.</strong> The repository id in the
+              path is not one this key covers. A repository outside the key's set and one that does
+              not exist are answered identically, so a <code>404</code> cannot tell you which it is
+              — check the id against the repositories the key was granted. Nothing was stored.
             </td>
           </tr>
         <% end %>
