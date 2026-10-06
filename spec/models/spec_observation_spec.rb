@@ -2633,6 +2633,10 @@ RSpec.describe SpecObservation do
     # file's examples. The read that closes area → file → example, and the one whose absence made
     # the heaviest area on the page the hardest place in the suite to look inside.
     describe ".files_in_directory" do
+      # The first seven positions are the pre-layer contract and keep their meaning; the declared-layer
+      # operands are appended after them and pinned in their own examples at the end of this block.
+      def first_seven(rows) = rows.map { |row| row.first(7) }
+
       # THE question this read exists for, and the reason the by-file rollup could not answer it:
       # `spec/models` here holds three files none of which is the run's heaviest, and a by-file top
       # ten would surface `spec/requests/checkout_spec.rb` instead of any of them.
@@ -2643,7 +2647,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 2.0, line_number: 3, spec_file_path: "spec/models/user_spec.rb")
         observe(run, duration: 9.0, line_number: 4, spec_file_path: "spec/requests/checkout_spec.rb")
 
-        expect(described_class.files_in_directory(run, "spec/models")).to eq(
+        expect(first_seven(described_class.files_in_directory(run, "spec/models"))).to eq(
           [["spec/models/order_spec.rb", 3.5, 1, 1, 3, 3, 3],
            ["spec/models/user_spec.rb", 2.0, 1, 1, 3, 3, 3],
            ["spec/models/refund_spec.rb", 1.0, 1, 1, 3, 3, 3]]
@@ -2660,9 +2664,9 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/orders/refund_spec.rb")
 
-        expect(described_class.files_in_directory(run, "spec/models"))
+        expect(first_seven(described_class.files_in_directory(run, "spec/models")))
           .to eq([["spec/models/order_spec.rb", 1.0, 1, 1, 1, 1, 1]])
-        expect(described_class.files_in_directory(run, "spec/models/orders"))
+        expect(first_seven(described_class.files_in_directory(run, "spec/models/orders")))
           .to eq([["spec/models/orders/refund_spec.rb", 2.0, 1, 1, 1, 1, 1]])
       end
 
@@ -2674,7 +2678,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 3.0, line_number: 1, spec_file_path: "smoke_spec.rb")
         observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
 
-        expect(described_class.files_in_directory(run, ".")).to eq([["smoke_spec.rb", 3.0, 1, 1, 1, 1, 1]])
+        expect(first_seven(described_class.files_in_directory(run, "."))).to eq([["smoke_spec.rb", 3.0, 1, 1, 1, 1, 1]])
       end
 
       # Keyed on the INCLUDING file, so a shared example group's time lands on the area that RAN it
@@ -2702,7 +2706,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: nil, line_number: 1, spec_file_path: "spec/models/never_ran_spec.rb")
         observe(run, duration: 0.25, line_number: 2, spec_file_path: "spec/models/quick_spec.rb")
 
-        files = described_class.files_in_directory(run, "spec/models")
+        files = first_seven(described_class.files_in_directory(run, "spec/models"))
 
         expect(files).to eq([["spec/models/quick_spec.rb", 0.25, 1, 1, 2, 2, 1],
                              ["spec/models/never_ran_spec.rb", nil, 1, 0, 2, 2, 1]])
@@ -2714,7 +2718,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 4.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
 
-        expect(described_class.files_in_directory(run, "spec/models"))
+        expect(first_seven(described_class.files_in_directory(run, "spec/models")))
           .to eq([["spec/models/order_spec.rb", 4.0, 2, 1, 1, 2, 1]])
       end
 
@@ -2724,7 +2728,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/ours_spec.rb")
         observe(other, duration: 99.0, line_number: 1, spec_file_path: "spec/models/theirs_spec.rb")
 
-        expect(described_class.files_in_directory(run, "spec/models"))
+        expect(first_seven(described_class.files_in_directory(run, "spec/models")))
           .to eq([["spec/models/ours_spec.rb", 1.0, 1, 1, 1, 1, 1]])
       end
 
@@ -2800,9 +2804,63 @@ RSpec.describe SpecObservation do
 
         expect(described_class.files_in_directory(run, "spec/ghosts")).to eq([])
       end
+
+      # The declared-layer operands appended after the seven pre-layer positions: the FILE's five
+      # (DECLARED_LAYER_KEYS order), then the AREA's five counted before the cap.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each file's declared-layer counts and the area's are appended after the first seven positions and each set sums to its own example count", layer: "unit" }
+      it "appends the file's and the area's declared-layer counts, summing to their example counts" do
+        observe(run, duration: 3.0, line_number: 1, spec_file_path: "spec/models/a_spec.rb", intent_layer: "unit")
+        observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/a_spec.rb", intent_layer: "request")
+        observe(run, duration: 1.0, line_number: 3, spec_file_path: "spec/models/b_spec.rb", intent_layer: "unit")
+        observe(run, duration: 0.5, line_number: 4, spec_file_path: "spec/models/b_spec.rb")
+        observe(run, duration: 0.1, line_number: 5, spec_file_path: "spec/models/c_spec.rb")
+
+        rows = described_class.files_in_directory(run, "spec/models")
+
+        # unit, integration, request, system, undeclared
+        expect(rows.map { |row| [row[0], row[7, 5]] }).to eq(
+          [["spec/models/a_spec.rb", [1, 0, 1, 0, 0]],
+           ["spec/models/b_spec.rb", [1, 0, 0, 0, 1]],
+           ["spec/models/c_spec.rb", [0, 0, 0, 0, 1]]]
+        )
+        expect(rows.map { |row| row[12, 5] }.uniq).to eq([[2, 0, 1, 0, 2]])
+        rows.each { |row| expect(row[7, 5].sum).to eq(row[2]) }
+        expect(rows.first[12, 5].sum).to eq(rows.first[5])
+      end
+
+      # NO inference, negative first: the stored column and nothing else, whatever the path says.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an undeclared example under spec/requests counts as undeclared and a request-declared example under spec/models counts as request, never inferred from the path", layer: "unit" }
+      it "counts an undeclared example as undeclared whatever its directory, and a declared one as declared" do
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/requests/x_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/y_spec.rb", intent_layer: "request")
+
+        requests = described_class.files_in_directory(run, "spec/requests")
+        models = described_class.files_in_directory(run, "spec/models")
+
+        expect(requests.first[7, 5]).to eq([0, 0, 0, 0, 1])
+        expect(models.first[7, 5]).to eq([0, 0, 1, 0, 0])
+      end
+
+      # The area's mix is the AREA's, not the page's: with the cap below the file count the listed
+      # rows sum to less than the area's layer counts, which sum to the area's example count.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the area's declared-layer totals are counted before the cap so they sum to the area's example count while the listed rows sum to less", layer: "unit" }
+      it "counts the area's layer totals before the cap" do
+        4.times do |i|
+          observe(run, duration: 1.0 + i, line_number: i + 1, spec_file_path: "spec/models/f#{i}_spec.rb",
+                       intent_layer: (i.even? ? "unit" : nil))
+        end
+
+        rows = described_class.files_in_directory(run, "spec/models", limit: 2)
+
+        expect(rows.size).to eq(2)
+        expect(rows.first[12, 5]).to eq([2, 0, 0, 0, 2])
+        expect(rows.first[12, 5].sum).to eq(rows.first[5])
+        expect(rows.sum { |row| row[7, 5].sum }).to be < rows.first[5]
+      end
     end
 
-    # The one read on this table that spans two runs. Everything above is scoped to a single
+    
+# The one read on this table that spans two runs. Everything above is scoped to a single
     # `test_run_id`; this counts each area's rows in each of two runs and subtracts the integers.
     #
     # The examples deliberately never assert anything about a particular EXAMPLE surviving from one

@@ -153,6 +153,17 @@ class SpecDirectoryDurations
   # same reason: it selects which sentence the caption prints about the rows a reader can see.
   def fully_named? = recorded? && rows.none?(&:excluded_unnamed_rows?)
 
+  # The ONE spelling of a declared-layer mix — `unit 31 · request 4 · undeclared 12` — shared by this
+  # panel's rows and the `?spec_directory=` drill-in (`SpecDirectoryFiles`), so the two cannot word
+  # the same operands differently. Zero layers are omitted EXCEPT undeclared, which is always printed
+  # so a run declaring nothing reads "undeclared N" rather than a blank cell that could be taken for
+  # "no tests".
+  def self.layer_counts_label(layer_counts)
+    layer_counts.filter_map do |layer, count|
+      "#{layer} #{count}" if count.positive? || layer == :undeclared
+    end.join(" · ")
+  end
+
   # One directory's share of one run's wall clock, what that share was measured over, and how many
   # distinct descriptions the examples it was measured over carry.
   Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, :distinct_name_count,
@@ -168,11 +179,7 @@ class SpecDirectoryDurations
     # Spelled for the panel: `unit 31 · request 4 · undeclared 12`. Zero layers are omitted EXCEPT
     # undeclared, which is always printed so a run declaring nothing reads "undeclared N" rather than
     # a blank cell that could be taken for "no tests".
-    def layer_counts_label
-      layer_counts.filter_map do |layer, count|
-        "#{layer} #{count}" if count.positive? || layer == :undeclared
-      end.join(" · ")
-    end
+    def layer_counts_label = SpecDirectoryDurations.layer_counts_label(layer_counts)
 
     # This area has a measured total. False when every one of its examples went untimed, which is
     # SQL NULL out of the aggregate and stays nil all the way to the cell.

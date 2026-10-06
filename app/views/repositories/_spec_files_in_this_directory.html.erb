@@ -141,6 +141,13 @@
               this area reported a duration, so there is no wall clock to attribute to any file in
               it.
             <% end %>
+            <%# The area's declared-layer mix, counted over the WHOLE area and not the listed files —
+                the same figures as the `layer_counts` on the API block, spelled through the one
+                label the "Heaviest spec directories" rows use. "undeclared" is always printed so a
+                run declaring nothing reads as a count rather than as nothing; it means no @intent
+                declared a layer, never that the examples are absent or unreadable. %>
+            Declared layers across this whole area, not only the files listed:
+            <%= @spec_directory_files.layer_counts_label %>.
             An example that never ran has no duration to report, so a missing timing is a faithful
             record rather than a gap — and it is not a zero.
             This area is the immediate parent of the files listed, so a nested area such as a
@@ -148,7 +155,7 @@
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel above and may legitimately differ from it.
           </p>
-          <%= render UI::TableComponent.new(columns: ["Spec file", "Examples timed", "Total duration"],
+          <%= render UI::TableComponent.new(columns: ["Spec file", "Examples timed", "Total duration", "Declared layers"],
                                             describedby: "spec-directory-files-basis") do %>
             <% @spec_directory_files.rows.each do |file| %>
               <tr>
@@ -186,6 +193,11 @@
                       on this page renders through — so a file that measured nothing says "not
                       reported" rather than wearing the spelling of a zero. %>
                   <%= file.duration_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# This file's own declared-layer operands — `intent_layer` as stored, never
+                      inferred from the path. Undeclared is always printed. %>
+                  <%= file.layer_counts_label %>
                 </td>
               </tr>
             <% end %>

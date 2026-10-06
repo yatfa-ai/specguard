@@ -48,26 +48,42 @@
 class SpecDirectoryFiles
   def self.for(test_run, path, limit: SpecObservation::SPEC_DIRECTORY_FILES_LIMIT)
     tuples = SpecObservation.files_in_directory(test_run, path, limit: limit)
-    rows = tuples.map do |file_path, total, recorded, timed, *|
+    keys = SpecObservation::DECLARED_LAYER_KEYS
+    rows = tuples.map do |file_path, total, recorded, timed, _files, _area_recorded, _area_timed, *rest|
+      # The trailing operands are zipped by the shared key list, never read by index: the file's own
+      # five declared-layer counts come first, then the area's five.
       Row.new(path: file_path, total_seconds: total, recorded_count: recorded.to_i,
-              timed_count: timed.to_i)
+              timed_count: timed.to_i, layer_counts: keys.zip(rest.first(keys.size).map(&:to_i)).to_h)
     end
 
-    # Off any row, because the three windows carry the same figures on all of them; `to_i` over the
+    # Off any row, because the windows carry the same figures on all of them; `to_i` over the
     # nil of an empty read, where zero is the honest count.
-    _path, _total, _recorded, _timed, file_count, area_recorded, area_timed = tuples.first
+    _path, _total, _recorded, _timed, file_count, area_recorded, area_timed, *rest = tuples.first
+    area_layers = Array(rest).drop(keys.size)
+    layer_counts = keys.each_with_index.to_h { |key, index| [key, area_layers[index].to_i] }
 
     new(path: path, rows: rows, file_count: file_count.to_i,
-        recorded_count: area_recorded.to_i, timed_count: area_timed.to_i)
+        recorded_count: area_recorded.to_i, timed_count: area_timed.to_i, layer_counts: layer_counts)
   end
 
-  def initialize(path:, rows:, file_count:, recorded_count:, timed_count:)
+  def initialize(path:, rows:, file_count:, recorded_count:, timed_count:, layer_counts: nil)
     @path = path
     @rows = rows
     @file_count = file_count
     @recorded_count = recorded_count
     @timed_count = timed_count
+    @layer_counts = layer_counts || SpecObservation::DECLARED_LAYER_KEYS.index_with(0)
   end
+
+  # How many of this AREA's examples declared each layer, plus how many declared none — operands
+  # (`{unit:, integration:, request:, system:, undeclared:}`), measured zeros never nil, summing to
+  # `#recorded_count`. Counted over the whole area before the file cap, by the rule `#recorded_count`
+  # follows, so on a truncated area it sums to more than the listed rows do. Stored `intent_layer`
+  # only: no path inference, and `undeclared` is "no @intent declared a layer", not "unreadable".
+  attr_reader :layer_counts
+
+  # The area's mix spelled for the panel, through the one spelling `SpecDirectoryDurations::Row` uses.
+  def layer_counts_label = SpecDirectoryDurations.layer_counts_label(layer_counts)
 
   # The area that was asked for, as it was asked for. Held even when nothing came back, because the
   # empty state has to name it — "no spec files" without a subject is a sentence about nothing.
@@ -184,7 +200,11 @@ class SpecDirectoryFiles
   # question to answer, so they are not written: an unreachable method whose sibling is load-bearing
   # is an invitation to fold over the page's rows and quietly reintroduce the figure this presenter
   # exists to avoid.
-  Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, keyword_init: true) do
+  Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, :layer_counts,
+                   keyword_init: true) do
+    # This file's declared-layer operands, same shape and rule as the area's `layer_counts`.
+    def layer_counts_label = SpecDirectoryDurations.layer_counts_label(layer_counts)
+
     # The total, rendered — through the same seam one example's duration, one file's total and one
     # area's total are rendered through, so no two grains on this page can disagree about how a
     # duration is spelled, and an unmeasured file says "not reported" rather than "0.00s". A file

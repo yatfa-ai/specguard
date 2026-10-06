@@ -2210,10 +2210,18 @@ class SpecObservation < ApplicationRecord
   # rather than a tiebreak, and its own comment prices it in measured milliseconds. A read whose
   # strategy is chosen and a read whose strategy is forced are not exemplars of each other.
   #
+  # == Declared-layer operands, appended
+  #
+  # After those seven, ten more: the FILE's five declared-layer counts (`directory_layer_count_expressions`,
+  # in `DECLARED_LAYER_KEYS` order) and then the AREA's five, each the same FILTER aggregate under
+  # `SUM(...) OVER ()` — so the area's mix is counted before the `LIMIT`, by the rule `recorded_count`
+  # follows. Same grouped read, no extra query, no index; positions 0-6 keep their meaning.
+  #
   # @return [Array<Array>] `[spec_file_path, total_seconds, recorded_count, timed_count, file_count,
-  #   directory_recorded_count, directory_timed_count]` per file, heaviest first. The last three are
-  #   the same figures on every row: how many files the area holds, and how many examples it holds
-  #   and timed — all counted before the `LIMIT`.
+  #   directory_recorded_count, directory_timed_count, *file_layer_counts, *directory_layer_counts]`
+  #   per file, heaviest first. Positions 4-6 are the same figures on every row: how many files the
+  #   area holds, and how many examples it holds and timed — all counted before the `LIMIT`; the last
+  #   five are likewise area-wide.
   def self.files_in_directory(test_run, directory, limit: SPEC_DIRECTORY_FILES_LIMIT)
     where(test_run_id: test_run.id)
       .where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", directory]))
@@ -2224,7 +2232,9 @@ class SpecObservation < ApplicationRecord
              Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
              Arel.sql("COUNT(*) OVER ()"),
              Arel.sql("SUM(COUNT(*)) OVER ()"),
-             Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"))
+             Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"),
+             *directory_layer_count_expressions,
+             *directory_layer_count_expressions.map { |expression| Arel.sql("SUM(#{expression}) OVER ()") })
   end
 
   # The descriptions that MORE THAN ONE example of ONE run recorded, ranked by the wall clock those

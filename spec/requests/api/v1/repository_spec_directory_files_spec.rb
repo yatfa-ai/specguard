@@ -97,15 +97,16 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
         "path" => "spec/models",
         "rows" => [
           { "path" => "spec/models/refund_spec.rb", "total_seconds" => 5.0,
-            "recorded_count" => 1, "timed_count" => 1 },
+            "recorded_count" => 1, "timed_count" => 1, "layer_counts" => { "unit" => 0, "integration" => 0, "request" => 0, "system" => 0, "undeclared" => 1 } },
           { "path" => "spec/models/order_spec.rb", "total_seconds" => 3.5,
-            "recorded_count" => 1, "timed_count" => 1 },
+            "recorded_count" => 1, "timed_count" => 1, "layer_counts" => { "unit" => 0, "integration" => 0, "request" => 0, "system" => 0, "undeclared" => 1 } },
           { "path" => "spec/models/user_spec.rb", "total_seconds" => 2.0,
-            "recorded_count" => 2, "timed_count" => 1 }
+            "recorded_count" => 2, "timed_count" => 1, "layer_counts" => { "unit" => 0, "integration" => 0, "request" => 0, "system" => 0, "undeclared" => 2 } }
         ],
         "file_count" => 3,
         "recorded_count" => 4,
         "timed_count" => 3,
+        "layer_counts" => { "unit" => 0, "integration" => 0, "request" => 0, "system" => 0, "undeclared" => 4 },
         "limit" => SpecObservation::SPEC_DIRECTORY_FILES_LIMIT
       )
     end
@@ -119,9 +120,12 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       served = block(query: { spec_directory: "spec/models" })
 
       expect(served.keys)
-        .to contain_exactly("path", "rows", "file_count", "recorded_count", "timed_count", "limit")
+        .to contain_exactly("path", "rows", "file_count", "recorded_count", "timed_count", "limit",
+                            "layer_counts")
       expect(served["rows"].first.keys)
-        .to contain_exactly("path", "total_seconds", "recorded_count", "timed_count")
+        .to contain_exactly("path", "total_seconds", "recorded_count", "timed_count", "layer_counts")
+      expect(served["layer_counts"].keys).to eq(%w[unit integration request system undeclared])
+      expect(served["rows"].first["layer_counts"].keys).to eq(%w[unit integration request system undeclared])
     end
 
     # THE assertion that fails the moment this block is fed by the by-file rollup instead of its own
@@ -233,6 +237,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       expect(response).to have_http_status(:ok)
       expect(served).to eq("path" => "spec/ghosts", "rows" => [], "file_count" => 0,
                            "recorded_count" => 0, "timed_count" => 0,
+                           "layer_counts" => { "unit" => 0, "integration" => 0, "request" => 0,
+                                               "system" => 0, "undeclared" => 0 },
                            "limit" => SpecObservation::SPEC_DIRECTORY_FILES_LIMIT)
     end
 
@@ -467,9 +473,9 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     def panel_rows
       panel = Capybara.string(response.body).find("#spec-directory-files")
       panel.all("tbody tr").map do |row|
-        path, coverage, duration = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+        path, coverage, duration, layers = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
-        { "path" => path, "coverage" => coverage, "duration" => duration }
+        { "path" => path, "coverage" => coverage, "duration" => duration, "layers" => layers }
       end
     end
 
@@ -490,6 +496,9 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       expect(served["file_count"]).to eq(shown.file_count)
       expect(served["recorded_count"]).to eq(shown.recorded_count)
       expect(served["timed_count"]).to eq(shown.timed_count)
+      expect(served["layer_counts"]).to eq(shown.layer_counts.transform_keys(&:to_s))
+      expect(served["rows"].map { it["layer_counts"] })
+        .to eq(shown.rows.map { |row| row.layer_counts.transform_keys(&:to_s) })
     end
 
     # And the same comparison against the PAGE, which is the surface a reader actually holds. The
@@ -506,7 +515,9 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
         served["rows"].map do |row|
           { "path" => row["path"],
             "coverage" => "#{row["timed_count"]} of #{row["recorded_count"]}",
-            "duration" => SpecObservation.humanized_duration(row["total_seconds"]) }
+            "duration" => SpecObservation.humanized_duration(row["total_seconds"]),
+            "layers" => SpecDirectoryFiles::Row.new(layer_counts: row["layer_counts"].transform_keys(&:to_sym))
+                                              .layer_counts_label }
         end
       )
       # The comparison is over a NON-EMPTY list rendered by both surfaces — two empty arrays are
@@ -516,6 +527,96 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       # the "numbers, never labels" example above is refusing something real.
       expect(panel_rows.map { it["coverage"] }).to include("1 of 2")
       expect(panel_rows.map { it["duration"] }).to include("5.00s")
+    end
+  end
+
+  # The declared-layer operands, per file and for the area. A mixed fixture on its own repository:
+  # two layers declared, some examples undeclared, one file declaring nothing, and — negative first —
+  # an undeclared example under `spec/requests` beside a `request` declared under `spec/models`.
+  describe "declared-layer counts" do
+    let(:mixed_repository) { create_repository(user: @user, github_full_name: "acme/layers") }
+    let(:mixed_key) { mixed_repository.api_keys.create! }
+
+    def declared(file_path, line_number, layer)
+      example_spec(file_path: file_path, duration: 1.0, line_number: line_number,
+                   status: "annotated",
+                   intent: { entity: "Thing", action: "do", behavior: "it works", layer: layer })
+    end
+
+    def mixed_block(path, **) = block(key: mixed_key, query: { spec_directory: path }, **)
+
+    before do
+      ingest(mixed_repository,
+             [declared("spec/models/a_spec.rb", 1, "unit"),
+              declared("spec/models/a_spec.rb", 2, "request"),
+              example_spec(file_path: "spec/models/a_spec.rb", duration: 1.0, line_number: 3),
+              declared("spec/models/b_spec.rb", 1, "unit"),
+              example_spec(file_path: "spec/models/c_spec.rb", duration: 1.0, line_number: 1),
+              example_spec(file_path: "spec/requests/x_spec.rb", duration: 1.0, line_number: 1)])
+    end
+
+    # @intent: { entity: "spec_directory_files", action: "serve declared-layer operands", behavior: "each file row and the area serve layer counts that sum to their recorded_count, with a file declaring nothing reading all undeclared", layer: "request" }
+    it "sums to recorded_count per file row and for the area" do
+      served = mixed_block("spec/models")
+
+      expect(served["rows"].map { it["layer_counts"].values.sum }).to eq(served["rows"].map { it["recorded_count"] })
+      expect(served["layer_counts"].values.sum).to eq(served["recorded_count"])
+      expect(served["layer_counts"]).to eq("unit" => 2, "integration" => 0, "request" => 1, "system" => 0,
+                                           "undeclared" => 2)
+      by_path = served["rows"].to_h { [it["path"], it["layer_counts"]] }
+      expect(by_path["spec/models/a_spec.rb"]).to eq("unit" => 1, "integration" => 0, "request" => 1,
+                                                     "system" => 0, "undeclared" => 1)
+      expect(by_path["spec/models/c_spec.rb"]).to eq("unit" => 0, "integration" => 0, "request" => 0,
+                                                     "system" => 0, "undeclared" => 1)
+    end
+
+    # @intent: { entity: "spec_directory_files", action: "serve declared-layer operands", behavior: "an undeclared example under spec/requests is undeclared and a request-declared example under spec/models is request, never inferred from the path", layer: "request" }
+    it "never infers a layer from the path" do
+      expect(mixed_block("spec/requests")["layer_counts"])
+        .to eq("unit" => 0, "integration" => 0, "request" => 0, "system" => 0, "undeclared" => 1)
+      expect(mixed_block("spec/models")["layer_counts"]["request"]).to eq(1)
+    end
+
+    # @intent: { entity: "spec_directory_files", action: "serve declared-layer operands", behavior: "a run declaring no layer serves four zeros and undeclared equal to recorded_count", layer: "request" }
+    it "serves undeclared == recorded_count and four zeros when nothing declared a layer" do
+      served = block(query: { spec_directory: "spec/requests" })
+
+      expect(served["layer_counts"]).to eq("unit" => 0, "integration" => 0, "request" => 0, "system" => 0,
+                                           "undeclared" => served["recorded_count"])
+    end
+
+    # @intent: { entity: "spec_directory_files", action: "count the area layers before the cap", behavior: "on an area with more files than the cap the area layer counts sum to the area recorded_count while the listed rows sum to less", layer: "request" }
+    it "counts the area's layers before the file cap" do
+      big = create_repository(user: @user, github_full_name: "acme/big")
+      count = SpecObservation::SPEC_DIRECTORY_FILES_LIMIT + 3
+      ingest(big, Array.new(count) do |i|
+        file = "spec/big/f#{format('%03d', i)}_spec.rb"
+        i.even? ? declared(file, 1, "system") : example_spec(file_path: file, duration: 1.0, line_number: 1)
+      end)
+
+      served = block(key: big.api_keys.create!, query: { spec_directory: "spec/big" })
+
+      expect(served["rows"].length).to eq(SpecObservation::SPEC_DIRECTORY_FILES_LIMIT)
+      expect(served["layer_counts"].values.sum).to eq(count)
+      expect(served["layer_counts"].values.sum).to eq(served["recorded_count"])
+      expect(served["rows"].sum { it["layer_counts"].values.sum }).to be < count
+    end
+
+    # @intent: { entity: "spec_directory_files", action: "answer areas outside the heaviest ten", behavior: "an area outside the run's ten heaviest rollup rows answers layer counts through the spec_directory ask", layer: "request" }
+    it "answers for an area outside the ten heaviest" do
+      wide = create_repository(user: @user, github_full_name: "acme/wide")
+      ingest(wide, Array.new(12) do |i|
+        file = "spec/area#{format('%02d', i)}/thing_spec.rb"
+        example_spec(file_path: file, duration: 12.0 - i, line_number: 1,
+                     status: "annotated",
+                     intent: { entity: "Thing", action: "do", behavior: "it works", layer: "integration" })
+      end)
+      key = wide.api_keys.create!
+      listed = get_repository(key: key).dig("latest_run", "spec_directories", "rows").map { it["path"] }
+
+      expect(listed).not_to include("spec/area11")
+      expect(block(key: key, query: { spec_directory: "spec/area11" })["layer_counts"])
+        .to eq("unit" => 0, "integration" => 1, "request" => 0, "system" => 0, "undeclared" => 0)
     end
   end
 end
