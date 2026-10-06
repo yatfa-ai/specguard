@@ -2601,7 +2601,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # spec/requests/repository_unannotated_directories_spec.rb, which also carries the panel's own
       # N+1 guard: the equality across two suite sizes that an absolute count here cannot tell from
       # an ordinary widening.
-      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 25 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
+      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 26 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -2646,10 +2646,20 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # the owner. It is what keeps a repository whose runs arrive only under an `sga_` key from
         # reading "Not connected yet". 24 -> 25.
         #
+        # +1 from SPGD-1624: the "Groups of tests that read alike" panel's STORED census read —
+        # ONE `FROM "near_duplicate_censuses"` statement (`NearDuplicateCensus.stored_block_for`),
+        # unconditional, because the census is repository-wide and carries its own stamps: it is
+        # read whether or not the repository has ever ingested, and this fixture has no stored row,
+        # so the statement is priced and comes back empty (the panel's "No census yet" state). It is
+        # one statement however many clusters a stored row holds — the payload is a single `json`
+        # column rendered from a Hash — which spec/requests/repository_near_duplicate_clusters_spec.rb
+        # pins at one and at many clusters, alongside the guard that the render computes nothing
+        # live. 25 -> 26.
+        #
         # Rebaselined by two rather than carved out, because this is an ABSOLUTE page budget:
         # hiding a real new query behind a filter would be the regression this count exists to
         # catch.
-        expect(count_all_queries { get repository_path(repository) }).to eq(25)
+        expect(count_all_queries { get repository_path(repository) }).to eq(26)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

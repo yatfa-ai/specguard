@@ -1,0 +1,161 @@
+<%# == Which groups of tests READ ALIKE, off the STORED census
+    The suite-wide near-duplicate census (`NearDuplicateCensus`, taken at ingest by
+    `Ingest::NearDuplicateCensusJob` and served to agents by `GET /api/v1/repository?near_duplicates=`)
+    until now rendered on no dashboard page: a signed-in person could not see which tests read alike.
+
+    STORED READ ONLY. `@near_duplicate_census` is `NearDuplicateCensus.stored_block_for` — one
+    indexed row, a string-keyed Hash exactly as stored — and this partial renders from that Hash. It
+    never asks `NearDuplicateClusters.for`, the live minutes-scale computation: an absent row is
+    stated as absent, never computed on the request path.
+
+    Unlike the per-example panels around it this one is NOT anchored on `@latest_test_run`. The
+    census is repository-wide and has its own stamps — `weighed_run_id` (which run its weight figures
+    were measured in) and `computed_at` — so the panel dates itself instead of borrowing the
+    anchored run's date, and a reader can see when it is older than the run beside it.
+
+    Four states, each with its own text, and the order of the checks is the point:
+      (a) no stored row            — nothing was ever computed; NO numerals, because any figure here
+                                     would be a census of nothing wearing the spelling of a result;
+      (b) `recorded_count` is 0    — the weighed run recorded no per-example rows, so the census had
+                                     nothing to read and an empty list means "nobody told us";
+      (c) `clusters` is empty      — the success state: tests were read and nothing reads alike at
+                                     this floor (and the sub-case of no embedded identities, which
+                                     is not that claim and says so);
+      (d) clusters present         — the ranking, in the stored (costliest-first) order.
+
+    Presented for review and not as a finding of duplication — the claim boundary the "Descriptions
+    this run recorded more than once" panel carries, for a stronger reason here: the floor is
+    UNCALIBRATED (see `NearDuplicateClusters::SIMILARITY`), so membership is a measurement of
+    similarity at a threshold nobody has validated, never a verdict that two tests are redundant.
+
+    Outside the `manage_keys` gate, for the reason the panels around it are: read-only suite
+    telemetry, nothing credential and nothing actionable. %>
+<% census = @near_duplicate_census %>
+<%= render UI::PanelComponent.new(title: "Groups of tests that read alike",
+                                  id: "near-duplicate-clusters", class: "lg:col-span-3") do %>
+  <% if census.nil? %>
+    <div id="near-duplicate-clusters-none-yet">
+      <%= render UI::EmptyStateComponent.new(
+            title: "No census yet",
+            description: "No census yet — the first one is computed after the next ingest. Nothing " \
+                         "has been compared, so there is nothing to show here and no count to read."
+          ) %>
+    </div>
+  <% elsif census["recorded_count"].to_i.zero? %>
+    <div id="near-duplicate-clusters-unrecorded">
+      <%= render UI::EmptyStateComponent.new(
+            title: "This run recorded no per-example rows",
+            description: "The run this census weighed recorded no per-example rows, so there were no " \
+                         "tests to compare. This is not a suite where nothing reads alike — it is a " \
+                         "run this panel cannot read."
+          ) %>
+    </div>
+  <% else %>
+    <%# The basis, the floor and the age come BEFORE any cluster, for the reason the API block puts
+        `similarity_floor` and `similarity_basis` first: a cluster count without what "alike" meant
+        is a confident number over an uncalibrated threshold. %>
+    <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-basis">
+      Tests are grouped by <%= census["similarity_basis"] %>: two tests are placed together when
+      their descriptions score at least <%= census["similarity_floor"] %> against each other, a floor
+      that has not been calibrated. Presented for review and not as a finding of duplication — tests
+      that read alike can be a table-driven loop, a shared example group, or a deliberate cover of
+      the same behaviour at another level, and these rows do not decide which.
+    </p>
+    <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-stamp">
+      Taken <%= time_ago_in_words(Time.zone.parse(census["computed_at"])) %> ago
+      (<time datetime="<%= census["computed_at"] %>"><%= census["computed_at"] %></time>), weighing run
+      <%= census["weighed_run_id"] %>. Stored at ingest: this page reads it and never recomputes it, so
+      a census can be older than the run listed above.
+    </p>
+    <% if census["clusters"].empty? %>
+      <% if census["identity_count"].to_i.zero? %>
+        <div id="near-duplicate-clusters-unembedded">
+          <%= render UI::EmptyStateComponent.new(
+                title: "No tests have been compared yet",
+                description: "This run recorded " \
+                             "#{number_with_delimiter(census['recorded_count'])} " \
+                             "#{'example'.pluralize(census['recorded_count'].to_i)}, but none has a " \
+                             "text that could be compared yet, so an empty list here says nothing " \
+                             "about whether tests read alike."
+              ) %>
+        </div>
+      <% else %>
+        <div id="near-duplicate-clusters-clear">
+          <%= render UI::EmptyStateComponent.new(
+                title: "Nothing reads alike at this floor",
+                description: "SpecGuard compared " \
+                             "#{number_with_delimiter(census['identity_count'])} " \
+                             "#{'test'.pluralize(census['identity_count'].to_i)} and no two " \
+                             "of them cleared the similarity floor, so there is no group to " \
+                             "show. That is a fact about this floor and this census, not a " \
+                             "guarantee about the suite."
+              ) %>
+        </div>
+      <% end %>
+    <% else %>
+      <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-page">
+        <% if census["truncated"] %>
+          The <%= number_with_delimiter(census["clusters"].size) %> costliest of
+          <%= number_with_delimiter(census["cluster_count"]) %>
+          <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, costliest
+          first — a page of the census, not all of it.
+        <% else %>
+          All <%= number_with_delimiter(census["cluster_count"]) %>
+          <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, costliest
+          first.
+        <% end %>
+        Each group counts its members (distinct test texts) and its examples (every run row those
+        texts resolved to) separately: a table-driven loop is one member and several examples.
+      </p>
+      <ul class="space-y-4" id="near-duplicate-cluster-list">
+        <% census["clusters"].each do |cluster| %>
+          <li class="rounded-md border border-app-border p-3" data-near-duplicate-cluster>
+            <p class="text-sm text-app-content tabular-nums">
+              <%= number_with_delimiter(cluster["member_count"]) %>
+              <%= "member".pluralize(cluster["member_count"].to_i) %>
+              ·
+              <%= number_with_delimiter(cluster["example_count"]) %>
+              <%= "example".pluralize(cluster["example_count"].to_i) %>
+              ·
+              <%# NEVER a zero for an untimed group: `total_seconds` is nil when nothing was timed,
+                  and "0.00s" would be this surface inventing the measurement it is missing. %>
+              <% if cluster["total_seconds"].nil? %>
+                not timed
+              <% else %>
+                <%= SpecObservation.humanized_duration(cluster["total_seconds"]) %>
+                <% unless cluster["timed_count"].to_i == cluster["example_count"].to_i %>
+                  (<%= cluster["timed_count"] %> of <%= cluster["example_count"] %> examples timed)
+                <% end %>
+              <% end %>
+            </p>
+            <p class="text-xs text-app-muted mt-1">
+              matched on <%= cluster["signal_source"] %>
+              <% declared_layers = cluster["layer_groups"].count { |group| group["layer"] } %>
+              <% case cluster["layer_redundancy"] %>
+              <% when "cross_layer" %>
+                · spans <%= declared_layers %> declared <%= "layer".pluralize(declared_layers) %>
+              <% when "same_layer" %>
+                · one layer
+              <% end %>
+              <% if cluster["unobserved_members"] %>
+                · lists a test the weighed run did not observe
+              <% end %>
+            </p>
+            <ul class="mt-2 space-y-1">
+              <% cluster["members"].each do |member| %>
+                <li class="font-mono text-xs text-app-content break-words">
+                  <%= member["file_path"] %>:<%= member["line_number"] %>
+                  <span class="font-sans"><%= member["text"] %></span>
+                  <span class="text-app-muted tabular-nums">
+                    (<%= number_with_delimiter(member["example_count"]) %>
+                    <%= "example".pluralize(member["example_count"].to_i) %>)
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+          </li>
+        <% end %>
+      </ul>
+    <% end %>
+  <% end %>
+<% end %>

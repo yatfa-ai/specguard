@@ -94,4 +94,31 @@ RSpec.describe "The signed-out landing page", type: :request do
     # negative cannot pass on a blank page, a 500, or a deleted panel.
     expect(panel).not_to have_text("stores nothing about individual tests")
   end
+
+  # The redundancy row moved panels when the repository page started rendering the stored census:
+  # it is an answer a signed-in person can read off the dashboard today, so it belongs in
+  # `#answers-today` and nowhere in `#roadmap`. Asserted on the two NODES — a body-wide string match
+  # would pass with the row in the wrong panel — and the roadmap's last row is held to resolving to
+  # exactly the "Needs ..." rows printed above it.
+  # @intent: {"entity": "GET /", "action": "place the redundancy answer", "behavior": "the which-groups-of-tests-are-redundant row sits in #answers-today and is absent from #roadmap, whose remaining Needs rows are the ones the last row points back to", "layer": "request"}
+  it "lists the redundancy question as answered today, not as one still being built" do
+    page = Capybara.string(response.body)
+    question = "Which groups of tests are potentially redundant?"
+
+    expect(page.find("#answers-today")).to have_text(question)
+    expect(page.find("#roadmap")).to have_no_text(question)
+    expect(page.find("#roadmap")).to have_no_text("Needs a dashboard panel over the clustering")
+
+    roadmap = page.find("#roadmap").text(normalize_ws: true)
+    expect(roadmap.scan("Needs the stored per-test layer rolled up per area").size).to eq(1)
+    expect(roadmap).to include("Needs the per-area layer rollup above")
+    expect(roadmap).not_to include("Needs both of the above")
+  end
+
+  # The sidebar renders on this page too and said the engine "lands later" while the census shipped.
+  # @intent: {"entity": "GET /", "action": "agree with the shipped clustering", "behavior": "the sidebar no longer says the duplicate-detection engine lands later", "layer": "request"}
+  it "does not tell visitors the duplicate-detection engine lands later" do
+    expect(Capybara.string(response.body)).to have_css("aside", text: "Early access")
+    expect(response.body).not_to include("lands later")
+  end
 end
