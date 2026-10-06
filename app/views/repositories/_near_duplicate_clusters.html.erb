@@ -156,7 +156,8 @@
                 · one layer: <%= declared_layers.join(", ") %>
               <% end %>
               <% if cluster["unobserved_members"] %>
-                · lists a test the weighed run did not observe
+                · lists a test the weighed run did not observe (its link is pinned to the weighed
+                run and may not resolve on GitHub)
               <% end %>
             </p>
             <% if show_layers %>
@@ -170,14 +171,7 @@
                   </p>
                   <ul class="mt-1 space-y-1">
                     <% group["members"].each do |member| %>
-                      <li class="font-mono text-xs text-app-content break-words">
-                  <%= member["file_path"] %>:<%= member["line_number"] %>
-                  <span class="font-sans"><%= member["text"] %></span>
-                  <span class="text-app-muted tabular-nums">
-                    (<%= number_with_delimiter(member["example_count"]) %>
-                    <%= "example".pluralize(member["example_count"].to_i) %>)
-                  </span>
-                </li>
+                      <%= render "repositories/near_duplicate_member", member: member %>
                     <% end %>
                   </ul>
                 </div>
@@ -185,14 +179,7 @@
             <% else %>
               <ul class="mt-2 space-y-1">
                 <% cluster["members"].each do |member| %>
-                  <li class="font-mono text-xs text-app-content break-words">
-                  <%= member["file_path"] %>:<%= member["line_number"] %>
-                  <span class="font-sans"><%= member["text"] %></span>
-                  <span class="text-app-muted tabular-nums">
-                    (<%= number_with_delimiter(member["example_count"]) %>
-                    <%= "example".pluralize(member["example_count"].to_i) %>)
-                  </span>
-                </li>
+                  <%= render "repositories/near_duplicate_member", member: member %>
                 <% end %>
               </ul>
             <% end %>

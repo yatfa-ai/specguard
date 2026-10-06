@@ -163,6 +163,139 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     expect(many_reads.size).to eq(1)
   end
 
+  # @intent: {"entity": "NearDuplicateCensus", "action": "bound weighed-sha lookup", "behavior": "the page resolves the weighed run's commit sha with exactly one test_runs statement whether the census holds one cluster or several, so no per-member lookup exists", "layer": "request"}
+  it "resolves the weighed run's sha with one test_runs read at many clusters as at one" do
+    one = create_repository(user: @user, github_full_name: "acme/one-sha")
+    ingest(one, pair_specs)
+    many = create_repository(user: @user, github_full_name: "acme/many-sha")
+    ingest(many, pair_specs + [
+      spec_row(file_path: "spec/models/stock_spec.rb", line_number: 3, name: inventory,
+               id: "./spec/models/stock_spec.rb[1:1]"),
+      spec_row(file_path: "spec/models/stock_spec.rb", line_number: 7, name: "#{inventory} outright",
+               id: "./spec/models/stock_spec.rb[2:1]")
+    ])
+    weighed_lookup = ->(repo) { %r{FROM "test_runs" WHERE "test_runs"."repository_id" = \$?\d+ AND "test_runs"."id" = } }
+
+    get repository_path(one)
+    one_reads = queries_against(weighed_lookup.call(one)) { get repository_path(one) }
+    expect(panel).to have_css("[data-near-duplicate-cluster]", count: 1)
+    get repository_path(many)
+    many_reads = queries_against(weighed_lookup.call(many)) { get repository_path(many) }
+
+    expect(panel).to have_css("[data-near-duplicate-cluster]", count: 2)
+    expect(one_reads.size).to eq(1)
+    expect(many_reads.size).to eq(1)
+  end
+
+  # @intent: {"entity": "NearDuplicateCensus", "action": "skip the weighed-sha lookup", "behavior": "with no stored census the page issues no weighed-run test_runs lookup, so the page query budget is unchanged", "layer": "request"}
+  it "issues no weighed-run lookup when there is no census" do
+    weighed_lookup = %r{FROM "test_runs" WHERE "test_runs"."repository_id" = \$?\d+ AND "test_runs"."id" = }
+
+    reads = queries_against(weighed_lookup) { get repository_path(repository) }
+
+    expect(NearDuplicateCensus.find_by(repository_id: repository.id)).to be_nil
+    expect(reads).to be_empty
+  end
+
+  # SPGD-1636: each member's coordinate links to GitHub, pinned to the census's WEIGHED run.
+  describe "member definition-site links" do
+    let(:weighed_sha) { "aaaaaaaaaaaaaaaa0001" }
+    let(:latest_sha) { "bbbbbbbbbbbbbbbb0002" }
+    let(:census) { NearDuplicateCensus.find_by!(repository_id: repository.id) }
+    let(:cluster) { census.payload["clusters"].sole }
+
+    # The weighed run is older than a newer run of the same repository, so the page's latest run and
+    # the census's weighed run name DIFFERENT shas.
+    before do
+      ingest(repository, pair_specs, commit_sha: weighed_sha)
+      record_and_resolve(repository, pair_specs, commit_sha: latest_sha)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "link cluster members", "behavior": "every flat-list member row carries exactly one coordinate link equal to github_blob_url at the weighed run's sha, opening in a new tab with noopener noreferrer, and never the latest run's sha", "layer": "request"}
+    it "links each flat-list member to the weighed run's sha, not the latest run's" do
+      expect(repository.test_runs.order(:id).last.commit_sha).to eq(latest_sha)
+
+      get repository_path(repository)
+
+      members = cluster["members"]
+      rows = panel.all("[data-near-duplicate-cluster] > ul > li")
+      expect(rows.size).to eq(members.size)
+      members.each do |member|
+        href = repository.github_blob_url(member["file_path"], member["line_number"], weighed_sha)
+        links = panel.all("a[href='#{href}']")
+        expect(links.size).to eq(1)
+        expect(links.first[:target]).to eq("_blank")
+        expect(links.first[:rel]).to eq("noopener noreferrer")
+        expect(links.first.text).to eq("#{member['file_path']}:#{member['line_number']}")
+      end
+      expect(rows.sum { |row| row.all("a").size }).to eq(members.size)
+      expect(panel.native.to_html).not_to include(latest_sha)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "link layer-grouped members", "behavior": "a member stored in two layer groups links to the weighed run's sha under both, through the same row partial as the flat list", "layer": "request"}
+    it "links layer-grouped members the same way, under every group they sit in" do
+      expired_member = cluster["members"].find { |m| m["text"] == expired }
+      outright_member = cluster["members"].find { |m| m["text"] == outright }
+      census.update!(payload: census.payload.merge(
+        "layer_source" => "declared via the intent protocol",
+        "clusters" => [cluster.merge("layer_redundancy" => "cross_layer", "layer_groups" => [
+          { "layer" => "request", "members" => [expired_member] },
+          { "layer" => "unit", "members" => [expired_member, outright_member] }
+        ])]
+      ))
+
+      get repository_path(repository)
+
+      expect(panel).to have_css("[data-near-duplicate-layer-group]", count: 2)
+      expect(panel.all("[data-near-duplicate-layer-group] li").size).to eq(3)
+      expect(panel.all("[data-near-duplicate-layer-group] li a").size).to eq(3)
+      href = repository.github_blob_url(expired_member["file_path"], expired_member["line_number"], weighed_sha)
+      expect(panel.all("[data-near-duplicate-layer-group] a[href='#{href}']").size).to eq(2)
+      expect(panel.native.to_html).not_to include(latest_sha)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "degrade a deleted weighed run", "behavior": "a census whose weighed run row was deleted renders each member coordinate as plain text with no link and still answers 200", "layer": "request"}
+    it "renders plain text, not a link, when the weighed run was deleted" do
+      TestRun.where(id: census.weighed_run_id).destroy_all
+      expect(NearDuplicateCensus.find_by!(repository_id: repository.id).weighed_run_id).to be_present
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      rows = panel.all("[data-near-duplicate-cluster] > ul > li")
+      expect(rows.size).to eq(cluster["members"].size)
+      expect(rows.sum { |row| row.all("a").size }).to eq(0)
+      cluster["members"].each do |member|
+        expect(panel.text).to include("#{member['file_path']}:#{member['line_number']}")
+      end
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "degrade a nil weighed run id", "behavior": "a census with no weighed_run_id renders each member coordinate as plain text with no link and still answers 200", "layer": "request"}
+    it "renders plain text, not a link, when the census has no weighed_run_id" do
+      census.update_columns(weighed_run_id: nil)
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(panel.all("[data-near-duplicate-cluster] > ul > li").sum { |row| row.all("a").size }).to eq(0)
+      expect(panel).to have_text(expired)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "note an unobserved member's link", "behavior": "a cluster listing an unobserved member says its link is pinned to the weighed run and may not resolve, and still links the member", "layer": "request"}
+    it "notes that an unobserved member's link is pinned to the weighed run" do
+      census.update!(payload: census.payload.merge(
+        "clusters" => [cluster.merge("unobserved_members" => true)]
+      ))
+
+      get repository_path(repository)
+
+      text = panel.text(normalize_ws: true)
+      expect(text).to include("lists a test the weighed run did not observe")
+      expect(text).to include("pinned to the weighed run and may not resolve on GitHub")
+      expect(panel).to have_css("[data-near-duplicate-cluster] a", minimum: 1)
+    end
+  end
+
   describe "a cluster whose examples were never timed" do
     before do
       ingest(repository, pair_specs.map { |row| row.merge(duration: nil) })

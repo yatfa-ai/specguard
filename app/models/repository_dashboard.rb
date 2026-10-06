@@ -621,6 +621,16 @@ class RepositoryDashboard
     # `weighed_run_id` / `computed_at` stamps, so the read happens whether or not the repository has
     # ever ingested (one unconditional +1 on the page's query budget).
     @near_duplicate_census = NearDuplicateCensus.stored_block_for(@repository)
+    # The commit the census's members' definition-site links pin to: the WEIGHED run's, never
+    # `@latest_test_run`'s (the census can be older than the run beside it, and a member's line
+    # number describes the file as it was when that run read it). `weighed_run_id` is a bare bigint
+    # with no foreign key, so the run may be gone: the read is tenant-scoped, runs only when there
+    # IS a census with a weighed run (no census -> no extra statement, the page budget is
+    # unchanged), is one statement however many clusters render, and answers `nil` for a missing
+    # run — which the partial renders as plain text, never a link to a guessed ref.
+    weighed_run_id = @near_duplicate_census&.dig("weighed_run_id")
+    @near_duplicate_weighed_sha =
+      (TestRun.where(repository_id: @repository.id, id: weighed_run_id).pick(:commit_sha) if weighed_run_id)
     # ONE of those descriptions, opened: not that eight examples of this run say the same sentence
     # and cost ninety seconds between them, but WHICH eight — what each cost, where each sits, how
     # each ended. The rung the panel above had none of: that ranking's rows dead-ended.
