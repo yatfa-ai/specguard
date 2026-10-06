@@ -216,7 +216,7 @@ off the asset load path. It is an input to the build, not an asset: served, it w
 
 ## Related repositories
 
-- [`specguard-rspec`](https://github.com/yatfa-ai/specguard-rspec) — client Ruby gem (linter + formatter)
+- [`specguard-ruby`](https://github.com/yatfa-ai/specguard-ruby) — client Ruby gem (RSpec formatter, Minitest reporter and linter)
 - [`open-test-intent`](https://github.com/yatfa-ai/open-test-intent) — the annotation protocol SpecGuard consumes
 
 ### The annotation schema, downloadable

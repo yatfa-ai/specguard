@@ -36,7 +36,9 @@
 # a row has a size ceiling and how the row states what the ceiling cost it.
 #
 # `user_agent` is the request header, and it is here for one concrete reason rather than for
-# completeness. `specguard-rspec` sends `specguard-rspec/<version>` (`Transport::USER_AGENT`), and
+# completeness. The gem — then named `specguard-rspec`, now `specguard-ruby` — sends
+# `specguard-ruby/<version>` (`Transport::USER_AGENT`; gem versions <= 0.3.0 sent
+# `specguard-rspec/<version>`), and
 # the failure mode this table was built for is a VERSION FLOOR — a gem sending
 # `Content-Encoding: gzip` against an installation deployed before `GzipRequestBody` 400s every run
 # over 256 KiB, which is every large suite. Without the version on the row, "every delivery is

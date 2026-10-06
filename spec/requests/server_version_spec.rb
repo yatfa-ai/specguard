@@ -32,7 +32,7 @@ RSpec.describe "GET /version", type: :request do
 
   # The digest the REST OF THE FAMILY pins, introduced once, as a literal, on purpose. This is the
   # cross-repo drift signal: `open-test-intent/schema_test.go`'s `CanonicalV1SHA256`,
-  # `specguard-rspec`'s `CANONICAL_V1_SHA256` and `specguard-ts`'s `SCHEMA_CONTRACT_DIGEST` all
+  # `specguard-ruby`'s `CANONICAL_V1_SHA256` and `specguard-ts`'s `SCHEMA_CONTRACT_DIGEST` all
   # hold this same string, and two of those pins disagreeing is how a drifted copy is found. The
   # DERIVED pin above stays the primary guard — this one answers the different question of whether
   # what we serve is still the contract the siblings target, which a file-derived value cannot ask

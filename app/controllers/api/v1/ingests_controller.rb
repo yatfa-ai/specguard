@@ -31,7 +31,7 @@ class Api::V1::IngestsController < Api::BaseController
   #
   #   * `POST /api/v1/ingest` — a `sgk_` repository key. The key IS one repository, bound by
   #     `Api::BaseController` during authentication, and authentication is the authorization.
-  #     Byte-for-byte what it has always been: `specguard-rspec` and `specguard-ts` post here.
+  #     Byte-for-byte what it has always been: `specguard-ruby` and `specguard-ts` post here.
   #   * `POST /api/v1/repositories/:repository_id/ingest` — an `sga_` agent key. One key covers N
   #     repositories (`AgentApiKey#repository_ids`), so the CREDENTIAL cannot name the run's
   #     repository and the REQUEST must; the repository is a PATH SEGMENT, never a body key, so a

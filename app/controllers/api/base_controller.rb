@@ -175,7 +175,7 @@ class Api::BaseController < ActionController::API
       # the exact token can land on that hit (the lookup runs on the digest they carried). So
       # tell the holder what the platform already knows and what to do about it — "revoked"
       # forks to mint-a-replacement, the opposite remedy from "fix the token value" a generic
-      # 401 leaves them guessing at. `specguard-rspec` renders this `message` into the CI
+      # 401 leaves them guessing at. `specguard-ruby` renders this `message` into the CI
       # failure line with zero client changes; the MCP bridge and direct consumers read the
       # body raw.
       #

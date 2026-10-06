@@ -92,8 +92,9 @@ class IngestRejection < ApplicationRecord
   # exists for.
   #
   # 300 characters, matching `MAX_REASON_LENGTH`, because the bound is set where it cannot cut a
-  # genuine client string: `specguard-rspec` reports `Transport::USER_AGENT` — `specguard-rspec/`
-  # plus a version, an order of magnitude under this — so like its neighbour it only ever fires on
+  # genuine client string: `specguard-ruby` reports `Transport::USER_AGENT` — `specguard-ruby/`
+  # plus a version (rows from gem versions <= 0.3.0 carry `specguard-rspec/<version>`, the
+  # pre-rename name), an order of magnitude under this — so like its neighbour it only ever fires on
   # a pathological value. `String#truncate`'s ellipsis is what keeps that honest: a shortened
   # `user_agent` reads as visibly shortened rather than as the version the client claimed.
   MAX_USER_AGENT_LENGTH = 300
