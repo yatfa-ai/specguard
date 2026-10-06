@@ -39,35 +39,36 @@
       </div>
     <% end %>
 
-    <%# == Why this is two panels rather than one ==================================================
-        The single "What SpecGuard answers" panel this replaces led with
+    <%# == Why this page has one availability panel, and what the second one was for ==============
+        The single "What SpecGuard answers" panel this page once had led with
         ["Is this behaviour already tested?", "Prevention — /check-intent"]. Both halves of that row
         were wrong and they compounded: the route is not mounted (`config/routes.rb` carries exactly
         `get "repository"` and `post "ingest"` under api/v1), and prevention is no longer the
         product — a visitor who believed the panel went looking for a 404.
 
-        The correction is NOT to swap one unbuilt promise for the five suite-intelligence
-        deliverables, because when this split was written four of them were equally unanswerable:
-        `Ingest::RunRecorder` wrote `test_runs` and `test_run_shards` and nothing per test, so what
-        a 20,000-example run persisted was two integers.
+        The correction was NOT to swap one unbuilt promise for the five suite-intelligence
+        deliverables, so the page was split by availability: a first panel for what a signed-in user
+        can read off the dashboard or the API today, and a second, "What SpecGuard is being built to
+        answer", headed by a "Not available yet" warning, for what could not yet be answered.
 
-        That half has since shipped. `Ingest::ObservationRecorder` writes one `SpecObservation` per
-        example, and the answers standing on those rows — slowest tests, heaviest spec files,
-        heaviest spec directories — are readable off the dashboard and off `GET /api/v1/repository`,
-        so by the rule below they belong in the first panel and have moved there. The per-test
-        `layer` has since joined them: the recorder now stores the layer each annotated example
-        DECLARES, and `latest_run.slowest_examples` serves it per row. What still has nothing behind
-        it is the per-AREA rollup of that layer, which is a different question from knowing one
-        test's, and the one the second panel still names. The suite-wide duplicate clusters have
-        since joined the first panel too: the repository page renders the stored census.
+        Every row of that second panel has since shipped and moved here: the per-test write path
+        (`Ingest::ObservationRecorder`) behind slowest tests and the heaviest files and directories;
+        the stored per-test layer; the suite-wide duplicate clusters, which the repository page
+        renders from the stored census; and last, the per-AREA rollup of that layer, which the
+        heaviest-directories panel and `latest_run.spec_directories` serve as `layer_counts`. With
+        no row left the panel and its warning are gone — an alert over an empty list would be a
+        "not available yet" claim about nothing.
 
-        So availability is the axis the page is split on, and the split is carried by the panel
-        TITLES and by a warning at the top of the second one — never by a footnote or by a change of
-        tense, which is what a hurried reader skips. The rule for anything added here: a row belongs
-        in the first panel only if a signed-in user can go and read that figure off the dashboard or
-        the API today.
+        The rule for anything added here is unchanged: a row belongs in this panel only if a
+        signed-in user can go and read that figure off the dashboard or the API today. A question
+        that cannot be answered yet does NOT go on this panel; it earns a "Not available yet" panel
+        of its own back, with its own warning, and `spec/requests/home_page_spec.rb` is the place
+        its containment guard goes. The `id:` on this panel is load-bearing, not decoration: that
+        spec asserts the moved rows sit INSIDE it, and a text window cut out of the response body
+        cannot express containment at any length. Same `id:` + `Capybara.string(...).find`
+        convention the dashboard panels use.
 
-        The telemetry half of the old panel survives in substance; it was directionally right.
+        The telemetry half of the very first panel survives in substance; it was directionally right.
      %>
     <%= render UI::PanelComponent.new(title: "What SpecGuard answers today", id: "answers-today") do %>
       <div class="space-y-3">
@@ -82,6 +83,8 @@
               ["Which tests are slow, and which areas dominate the clock?", "Per test, per spec file and per directory"],
               ["Is the suite growing, and how fast?", "Run over run, per branch"],
               ["Which groups of tests are potentially redundant?", "Groups of tests that read alike, from the stored census, on the repository page"],
+              ["What already exists for this area, and at which layers?", "Declared layers per area, in the heaviest-directories panel and latest_run.spec_directories"],
+              ["Which of those duplicates is safe to collapse?", "The census's per-group layer redundancy beside the per-area layer counts; whether a group is safe to collapse is yours to judge"],
               ["Can an agent read that without a browser?", "GET /api/v1/repository"]
             ]) %>
 
@@ -92,62 +95,4 @@
       </div>
     <% end %>
   </div>
-
-  <%# The `id:` on this panel and on the one above is load-bearing, not decoration: the guard in
-      `spec/requests/home_page_spec.rb` has to assert that the "Not available yet" warning sits
-      INSIDE this panel, and a text window cut out of the response body cannot express containment
-      at any length. Same `id:` + `Capybara.string(...).find` convention the dashboard panels use. %>
-  <%= render UI::PanelComponent.new(title: "What SpecGuard is being built to answer", id: "roadmap") do %>
-    <div class="space-y-4">
-      <%# Leading with the warning rather than closing on it, because this panel's rows read exactly
-          like the ones above and the whole point is that they are not the same kind of claim. %>
-      <%= render UI::AlertComponent.new(tone: :warning, title: "Not available yet") do %>
-        This is the product's direction, not its feature list. Ingestion does now record a row per
-        example, and the timing answers built on those rows are in the panel above — as is the layer
-        each annotated test declares, which ingestion now stores and the API now serves, and as is
-        the suite-wide clustering, which the repository page now renders as a panel and
-        `GET /api/v1/repository?near_duplicates=` serves behind an opt-in ask. What is left here is
-        blocked on work that has not been done rather than on data alone: rolling that per-test
-        layer up into a per-area picture. No panel answers it today.
-      <% end %>
-
-      <%# NUMBERED BY WHAT RENDERS, and that is a correction rather than a style choice. This comment
-          used to count a fourth row that had already moved to `#answers-today` — "Which tests are
-          slow, and which areas dominate the clock?", gone when the per-test write path shipped — so
-          its "row 3" and "row 4" named the rows a reader counts as 2 and 3, and the instruction at
-          the foot of this comment sent that reader to the wrong pair. The departed row is described
-          here, but it is no longer COUNTED: the numbers below are the rendered ones.
-
-          Row 1 of the previous revision — "Which groups of tests are potentially redundant?" — has
-          MOVED to `#answers-today`, and it is no longer counted here. It stayed a "Needs a dashboard
-          panel over the clustering" row for exactly as long as no panel existed: the rule at the top
-          of the first panel is that a row belongs there only if a signed-in user can read the figure
-          off the dashboard or the API today, and an agent could (the endpoint) while a person browsing
-          the dashboard could not. The repository page now renders the stored census, so the row
-          holds the first panel's rule and keeping it here would be the checkable-claim-that-does-not-
-          hold defect this panel was edited to remove.
-
-          Row 1's rationale (the per-area layer rollup) is narrowed AGAIN, to the half that is still
-          genuinely open. It used to read "which ingestion does not read", and that went false when
-          `Ingest::ObservationRecorder`
-          began storing `intent_layer` — the layer each annotated example declares is now persisted
-          and served per row by `latest_run.slowest_examples`. What is still missing is the ROLLUP:
-          knowing one test's layer is not knowing which layers already cover an AREA, and no panel
-          and no endpoint groups the stored layers that way. That is the blocker this row now names.
-
-          That rationale has to stay phrased as a BLOCKER ("Needs ..."), not as a status report,
-          because the last row's "the one above" resolves to the single need printed above it. A
-          rationale that opens by naming something which already ships would leave row 2 pointing at
-          a shipped capability — the same checkable-claim-that-does-not-hold defect this panel was
-          edited to remove. That is exactly why storing the layer did NOT promote this row to
-          `#answers-today`: the row has to stay here, and stay a "Needs ...", for the last row to
-          keep resolving to it. Row 2 used to need "both of the above" — the clustering panel and
-          the layer rollup — and lost half its referent when the clustering panel shipped; it is
-          reworded to name what remains. Re-read row 2 against row 1 whenever either is reworded. %>
-      <%= render UI::DefListComponent.new(rows: [
-            ["What already exists for this area, and at which layers?", "Needs the stored per-test layer rolled up per area"],
-            ["Which of those duplicates is safe to collapse?", "Needs the per-area layer rollup above"]
-          ]) %>
-    </div>
-  <% end %>
 <% end %>

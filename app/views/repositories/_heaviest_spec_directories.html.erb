@@ -106,12 +106,32 @@
               here: not one of their examples reported a description, so there is nothing to count
               distinct rather than nothing distinct to count.
             <% end %>
+            <%# The "Declared layers" column — see the comment below the paragraph: counted from each
+                example's own declared `@intent` layer, never inferred from the path, and a claim
+                about the LISTED areas only. In THIS paragraph so `aria-describedby` on the table
+                reaches it. %>
+            The "Declared layers" column is how many of each listed directory's examples declared
+            each layer in their own <code>@intent</code>, counted over every example the run recorded
+            in that directory. "Undeclared" is the examples that declared no layer — never a layer
+            inferred from the path. Counts are for the directories listed, not the whole run.
           </p>
-          <%# "Distinct descriptions" LAST, in the order the area-grain reading is said in: this
-              area carries N examples ("Examples timed"), costs this much wall clock ("Total
-              duration"), for this many distinct behaviors. %>
+          <%# What the "Declared layers" column was counted over — the same kind of sentence as the
+              two above, and a claim about the LISTED areas only (the cap sentence at the head of
+              this paragraph stays a claim about them too: this does not widen it to the run).
+
+              The counts are the layer each example's own `@intent` DECLARED, read off the stored
+              column, never inferred from the directory: an example under `spec/requests/` that
+              declared nothing is counted undeclared, and one declaring `request` under
+              `spec/models/` is counted `request` there. Undeclared is printed in every row — a run
+              that declared no layer reads "undeclared N", not a blank that could be taken for "no
+              tests" — and is not "unreadable": SpecGuard may still read such a test from its
+              description. The counts per area sum to that area's examples. %>
+          <%# "Distinct descriptions" before "Declared layers": the area-grain reading is said in
+              order — this area carries N examples ("Examples timed"), costs this much wall clock
+              ("Total duration"), for this many distinct behaviors — and the layers they declare
+              close it. %>
           <%= render UI::TableComponent.new(columns: ["Directory", "Examples timed", "Total duration",
-                                                      "Distinct descriptions"],
+                                                      "Distinct descriptions", "Declared layers"],
                                             describedby: "spec-directory-durations-basis") do %>
             <% @spec_directory_durations.rows.each do |directory| %>
               <tr>
@@ -190,6 +210,9 @@
                       (<%= directory.unnamed_count %> unnamed)
                     </span>
                   <% end %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= directory.layer_counts_label %>
                 </td>
               </tr>
             <% end %>

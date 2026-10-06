@@ -21,15 +21,18 @@ require "rails_helper"
 RSpec.describe "The signed-out landing page", type: :request do
   before { get "/" }
 
-  # Both panels, asserted as nodes rather than as two strings anywhere in the body: the split is the
-  # product change, so "one panel that happens to contain both titles" has to fail here.
-  # @intent: {"entity": "GET /", "action": "render availability panels", "behavior": "the landing page returns 200 and carries two distinct nodes, #answers-today titled What SpecGuard answers today and #roadmap titled What SpecGuard is being built to answer", "layer": "request"}
-  it "answers with the two availability panels" do
+  # The availability panel, asserted as a node rather than as a string anywhere in the body. The
+  # second ("being built to answer") panel is retired — every row it listed now has an answer — so
+  # its node must be absent too, which a body-wide string match could not distinguish from a
+  # panel that merely lost its title.
+  # @intent: {"entity": "GET /", "action": "render the availability panel", "behavior": "the landing page returns 200 and carries the #answers-today node titled What SpecGuard answers today and no #roadmap node", "layer": "request"}
+  it "answers with the one availability panel and no roadmap panel" do
     expect(response).to have_http_status(:ok)
 
     page = Capybara.string(response.body)
     expect(page).to have_css("#answers-today", text: "What SpecGuard answers today")
-    expect(page).to have_css("#roadmap", text: "What SpecGuard is being built to answer")
+    expect(page).to have_no_css("#roadmap")
+    expect(page).to have_no_text("What SpecGuard is being built to answer")
   end
 
   # @intent: {"entity": "GET /", "action": "omit unmounted endpoint claims", "behavior": "with the answers panel proven present, the body contains neither the string check-intent nor any match of /prevention/i", "layer": "request"}
@@ -61,58 +64,35 @@ RSpec.describe "The signed-out landing page", type: :request do
     expect(advertised - mounted).to be_empty
   end
 
-  # The warning is only worth anything if it sits WITH the rows it qualifies, so the window has to
-  # be the panel itself. An earlier revision cut the window out of the response body with
-  # `/What SpecGuard is being built to answer.*?\z/m` — lazy, but anchored at `\z`, so the engine is
-  # forced to consume to the end of the document and the "panel" was really the whole tail of the
-  # page. Verified: move the alert out of the panel and down the page and that version stays green,
-  # because the string is still somewhere in the tail.
-  #
-  # The fix is not a better regex. Containment is a structural property, and a text window cannot
-  # express it at any length — so this selects the panel's own DOM node (`id:` + `Capybara.string`,
-  # the convention `repositories_spec.rb` uses) and the scoping is guaranteed by the parser rather
-  # than by where the panel happens to sit on the page. `find` raises if `#roadmap` is missing, so
-  # there is no vacuous path: the node has to render for the assertions to mean anything.
-  # @intent: {"entity": "GET /", "action": "label unavailable answers", "behavior": "the #roadmap node says Not available yet and no longer claims it stores nothing about individual tests, a sentence false since the per-test write path shipped", "layer": "request"}
-  it "labels the answers it cannot give yet as unavailable, on the panel that lists them" do
-    panel = Capybara.string(response.body).find("#roadmap")
+  # No "Not available yet" claim may remain that the page can now answer. Every row the retired
+  # roadmap panel listed has moved into `#answers-today`, so neither the warning nor the "Needs ..."
+  # rationales may survive anywhere on the page. Non-vacuous: `find("#answers-today")` raises if the
+  # panel did not render, and the positive text assertions prove it carries the moved rows.
+  # @intent: {"entity": "GET /", "action": "retire the unavailable-answers claims", "behavior": "the page carries no Not available yet warning and none of the Needs rationales, while #answers-today holds the two rows that used to be listed as unavailable", "layer": "request"}
+  it "no longer claims the per-area layer answers are unavailable" do
+    page = Capybara.string(response.body)
+    answers = page.find("#answers-today")
 
-    expect(panel).to have_text("Not available yet")
-    # This line used to assert the panel SAID "stores nothing about individual tests" — true when
-    # written, and false from the moment `Ingest::ObservationRecorder` shipped the per-test write
-    # path. Asserting the sentence is what held the falsehood green: the guard meant to catch the
-    # drift was pinning it instead, so the storefront stayed wrong across a green suite.
-    #
-    # So what is pinned here is the CONTRACT rather than the copy. The panel is free to describe
-    # what is still unbuilt however it likes; what it may not do is go on telling visitors that
-    # per-test data is unstored, because it is stored, and both the JSON API and the repository
-    # page read those rows. Deliberately uncounted, for the reason given at :50: a numeral here
-    # would size a roster this spec never observes, so it would have to be revised the day another
-    # key or panel is added — re-arming, one line below its own description of it, exactly the trap
-    # :77-80 describes. Non-vacuous per the rule at :17-20 — `find` raises if `#roadmap` is missing
-    # and the positive assertion above proves the panel rendered with its own content, so this
-    # negative cannot pass on a blank page, a 500, or a deleted panel.
-    expect(panel).not_to have_text("stores nothing about individual tests")
+    expect(answers).to have_text("What already exists for this area, and at which layers?")
+    expect(answers).to have_text("Which of those duplicates is safe to collapse?")
+    expect(answers).to have_text("latest_run.spec_directories")
+
+    expect(response.body).not_to include("Not available yet")
+    expect(response.body).not_to include("Needs the stored per-test layer rolled up per area")
+    expect(response.body).not_to include("Needs the per-area layer rollup above")
+    expect(response.body).not_to include("Needs a dashboard panel over the clustering")
+    expect(response.body).not_to include("stores nothing about individual tests")
   end
 
   # The redundancy row moved panels when the repository page started rendering the stored census:
   # it is an answer a signed-in person can read off the dashboard today, so it belongs in
-  # `#answers-today` and nowhere in `#roadmap`. Asserted on the two NODES — a body-wide string match
-  # would pass with the row in the wrong panel — and the roadmap's last row is held to resolving to
-  # exactly the "Needs ..." rows printed above it.
-  # @intent: {"entity": "GET /", "action": "place the redundancy answer", "behavior": "the which-groups-of-tests-are-redundant row sits in #answers-today and is absent from #roadmap, whose remaining Needs rows are the ones the last row points back to", "layer": "request"}
-  it "lists the redundancy question as answered today, not as one still being built" do
+  # `#answers-today`. Asserted on the node — a body-wide string match would pass with the row in
+  # the wrong panel — beside the two rows that moved with the per-area layer counts.
+  # @intent: {"entity": "GET /", "action": "place the redundancy answer", "behavior": "the which-groups-of-tests-are-redundant row sits inside #answers-today", "layer": "request"}
+  it "lists the redundancy question as answered today" do
     page = Capybara.string(response.body)
-    question = "Which groups of tests are potentially redundant?"
 
-    expect(page.find("#answers-today")).to have_text(question)
-    expect(page.find("#roadmap")).to have_no_text(question)
-    expect(page.find("#roadmap")).to have_no_text("Needs a dashboard panel over the clustering")
-
-    roadmap = page.find("#roadmap").text(normalize_ws: true)
-    expect(roadmap.scan("Needs the stored per-test layer rolled up per area").size).to eq(1)
-    expect(roadmap).to include("Needs the per-area layer rollup above")
-    expect(roadmap).not_to include("Needs both of the above")
+    expect(page.find("#answers-today")).to have_text("Which groups of tests are potentially redundant?")
   end
 
   # The sidebar renders on this page too and said the engine "lands later" while the census shipped.

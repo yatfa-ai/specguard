@@ -1256,15 +1256,19 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       #   - `spec/models` carries THREE examples over TWO descriptions and `spec/requests` FOUR over
       #     four, so the distinct-description count is not the example count in either area and a
       #     serializer that served `recorded_count` twice under two names is red on the first row.
+      #   - Declared layers are MIXED and deliberately disagree with the directories: `spec/models`
+      #     declares `unit` twice and `request` once (none undeclared), while `spec/requests` declares
+      #     `integration` once and leaves three examples undeclared — so no path-based inference
+      #     could produce these counts, and `request` is counted under `spec/models`.
       observe(run, path: "spec/models/user_spec.rb", duration: 4.0, line_number: 1,
-                   name: "User is valid with a handle")
+                   name: "User is valid with a handle", intent_layer: "unit")
       observe(run, path: "spec/models/user_spec.rb", duration: 5.0, line_number: 2,
-                   name: "User is valid with a handle")
+                   name: "User is valid with a handle", intent_layer: "unit")
       observe(run, path: "spec/models/invoice_spec.rb", duration: 1.5, line_number: 1,
-                   name: "Invoice finalize locks the line items")
+                   name: "Invoice finalize locks the line items", intent_layer: "request")
       4.times do |index|
         observe(run, path: "spec/requests/thing_#{index}_spec.rb", duration: 3.0, line_number: 1,
-                     name: "Thing #{index} responds")
+                     name: "Thing #{index} responds", intent_layer: (index.zero? ? "integration" : nil))
       end
       run
     end
@@ -1280,10 +1284,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         [
           { "path" => "spec/requests", "total_seconds" => 12.0,
             "recorded_count" => 4, "timed_count" => 4,
-            "distinct_name_count" => 4, "named_count" => 4 },
+            "distinct_name_count" => 4, "named_count" => 4,
+            "layer_counts" => { "unit" => 0, "integration" => 1, "request" => 0, "system" => 0,
+                                "undeclared" => 3 } },
           { "path" => "spec/models", "total_seconds" => 10.5,
             "recorded_count" => 3, "timed_count" => 3,
-            "distinct_name_count" => 2, "named_count" => 3 }
+            "distinct_name_count" => 2, "named_count" => 3,
+            "layer_counts" => { "unit" => 2, "integration" => 0, "request" => 1, "system" => 0,
+                                "undeclared" => 0 } }
         ]
       )
       expect(spec_directories["directory_count"]).to eq(2)
@@ -1322,7 +1330,42 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(spec_directories.keys).to contain_exactly("rows", "directory_count", "limit")
       expect(spec_directories["rows"].first.keys)
         .to contain_exactly("path", "total_seconds", "recorded_count", "timed_count",
-                            "distinct_name_count", "named_count")
+                            "distinct_name_count", "named_count", "layer_counts")
+      expect(spec_directories["rows"].first["layer_counts"].keys)
+        .to eq(%w[unit integration request system undeclared])
+    end
+
+    # Per row, the five operands sum to `recorded_count`, and `request` under `spec/models` is a
+    # DECLARED request (no inference from the path in either direction: `spec/requests` carries zero
+    # `request` while three of its examples declared nothing).
+    # @intent: { entity: "Spec directories rollup", action: "serve declared-layer operands", behavior: "each area's layer_counts sum to its recorded_count and count only the layer an example declared, never one inferred from its directory", layer: "request" }
+    it "serves layer counts that sum to recorded_count and are never inferred from the path" do
+      by_path = spec_directories["rows"].to_h { |row| [row["path"], row] }
+
+      spec_directories["rows"].each do |row|
+        expect(row["layer_counts"].values.sum).to eq(row["recorded_count"])
+      end
+      expect(by_path.dig("spec/requests", "layer_counts", "request")).to eq(0)
+      expect(by_path.dig("spec/requests", "layer_counts", "undeclared")).to eq(3)
+      expect(by_path.dig("spec/models", "layer_counts", "request")).to eq(1)
+    end
+
+    # A run declaring no layer at all: measured zeros and `undeclared == recorded_count`, never null.
+    # @intent: { entity: "Spec directories rollup", action: "serve declared-layer operands", behavior: "a run declaring no layers serves four zeros and undeclared equal to recorded_count, never null", layer: "request" }
+    it "serves four zeros and undeclared == recorded_count when no example declared a layer" do
+      run = create_test_run(repository: repository, commit_sha: "nolayers00001", branch: "other",
+                            total_specs_count: 2, duration_seconds: 2.0)
+      observe(run, path: "spec/foo/a_spec.rb", duration: 1.0, line_number: 1, name: "a")
+      observe(run, path: "spec/foo/a_spec.rb", duration: 1.0, line_number: 2, name: "b")
+
+      rows = get_repository(query: { commit_sha: "nolayers00001" }).dig("latest_run", "spec_directories", "rows")
+
+      expect(rows).to eq(
+        [{ "path" => "spec/foo", "total_seconds" => 2.0, "recorded_count" => 2, "timed_count" => 2,
+           "distinct_name_count" => 2, "named_count" => 2,
+           "layer_counts" => { "unit" => 0, "integration" => 0, "request" => 0, "system" => 0,
+                               "undeclared" => 2 } }]
+      )
     end
 
     # AC5. Read off the same presenter `repositories#show` assigns rather than re-stating the

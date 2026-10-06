@@ -942,7 +942,12 @@ class RepositoryOverview
           # subtract to see what was excluded. No verdict here for the same reason there is none on
           # the Row: the reading is the client's.
           distinct_name_count: row.distinct_name_count,
-          named_count: row.named_count
+          named_count: row.named_count,
+          # What each area's examples DECLARED, as operands: one count per `SpecIntent::LAYERS`
+          # member plus `undeclared` (`intent_layer IS NULL`), summing to `recorded_count`. Measured
+          # zeros, never null, and no label or verdict — a layer is counted only where an annotation
+          # declared it, never inferred from the directory.
+          layer_counts: row.layer_counts
         }
       end,
       directory_count: durations.directory_count,
