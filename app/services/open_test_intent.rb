@@ -42,7 +42,7 @@ module OpenTestIntent
 
     # The SHA-256 of the bytes this process actually validates against, hex-encoded and lowercase
     # — the digest the rest of the family compares with, pinned independently in three sibling
-    # repos (`open-test-intent`'s `CanonicalV1SHA256`, `specguard-rspec`'s `CANONICAL_V1_SHA256`,
+    # repos (`open-test-intent`'s `CanonicalV1SHA256`, `specguard-ruby`'s `CANONICAL_V1_SHA256`,
     # `specguard-ts`'s `SCHEMA_CONTRACT_DIGEST`). It is deliberately a DIFFERENT algorithm from
     # `SCHEMA_BLOB_SHA` above, and both are kept: the blob SHA-1 is the in-repo guard against the
     # file's *git* identity drifting from its publisher, while this one is the cross-repo one —

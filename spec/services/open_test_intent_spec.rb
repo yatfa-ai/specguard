@@ -39,7 +39,7 @@ RSpec.describe OpenTestIntent do
   # `SCHEMA_BLOB_SHA` is a git blob SHA-1: it catches a local edit forking this file from its
   # publisher, and it is comparable with nothing outside this repository. `schema_sha256` is the
   # digest the rest of the family holds — `open-test-intent`'s `CanonicalV1SHA256`,
-  # `specguard-rspec`'s `CANONICAL_V1_SHA256`, `specguard-ts`'s `SCHEMA_CONTRACT_DIGEST` — and is
+  # `specguard-ruby`'s `CANONICAL_V1_SHA256`, `specguard-ts`'s `SCHEMA_CONTRACT_DIGEST` — and is
   # what `GET /version` serves so a client can check which contract this server ENFORCES. Both are
   # kept: neither answers the other's question.
   describe ".schema_sha256" do

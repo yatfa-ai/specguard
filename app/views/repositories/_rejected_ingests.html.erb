@@ -139,7 +139,9 @@
               </td>
               <td class="px-3 py-2 align-top text-app-content-secondary">
                 <%# The client's `User-Agent`. This column is the whole reason the header is on the
-                    row: `specguard-rspec` sends `specguard-rspec/<version>`, and the concrete
+                    row: the gem sends `specguard-ruby/<version>` (gem versions <= 0.3.0, before the
+                    rename from `specguard-rspec`, sent `specguard-rspec/<version>`, so a window
+                    spanning the rename legitimately shows BOTH), and the concrete
                     failure this panel was built for is a VERSION FLOOR — a gem sending
                     `Content-Encoding: gzip` against an installation deployed before
                     `GzipRequestBody` is refused on every run over 256 KiB, i.e. every large suite.
@@ -153,7 +155,7 @@
               </td>
               <td class="px-3 py-2 align-top text-app-content-secondary">
                 <%# WHICH BUILD refused this delivery — the other half of the version-floor
-                    question. `specguard-rspec/<version>` beside this column makes "the old gem"
+                    question. `specguard-ruby/<version>` beside this column makes "the old gem"
                     and "the old installation" distinguishable pictures: the founding scenario
                     (`CreateIngestRejections`) is a gem gzipping against an installation deployed
                     before `GzipRequestBody`, and without the server build on the row a window

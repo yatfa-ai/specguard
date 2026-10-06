@@ -154,7 +154,7 @@ In the target repository's `Gemfile`:
 
 ```ruby
 group :test do
-  gem "specguard-rspec", require: false
+  gem "specguard-ruby", require: false
 end
 ```
 
