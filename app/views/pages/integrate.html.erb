@@ -1204,7 +1204,7 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             </tr>
             <tr>
               <td class="px-3 py-2 font-mono text-xs text-app-content">find_tests_near_behavior</td>
-              <td class="px-3 py-2 text-app-content-secondary">Asks which stored tests are nearest a behaviour you describe in plain words — the way to check whether something is already tested before writing a test for it.</td>
+              <td class="px-3 py-2 text-app-content-secondary">Ranks the stored tests nearest a behaviour you describe in plain words, with similarity, last-known path and weight — a ranked read, not a coverage verdict: a near hit is not proof the behaviour is tested, and an empty answer is not proof it isn&rsquo;t.</td>
               <td class="px-3 py-2 text-app-content-secondary"><code>sgk_</code> key; with a <code>repository</code> argument, <code>sga_</code> (preferred) or <code>sgu_</code></td>
             </tr>
           <% end %>
