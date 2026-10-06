@@ -611,6 +611,16 @@ class RepositoryDashboard
     # suite: the grouped ranking, and the description-presence counts it must exclude before it can
     # group (see `SpecObservation.description_presence_in` for why those cannot ride the same read).
     @repeated_descriptions = RepeatedDescriptions.for(@latest_test_run) if @latest_test_run
+    # The suite-wide near-duplicate census, read from its STORED row — ONE indexed statement
+    # against `near_duplicate_censuses` for the whole page, however many clusters it holds, and
+    # `nil` when nothing was ever stored. Never `NearDuplicateClusters.for`: that is the live,
+    # minutes-scale computation the census exists to take off the request path, so an absent row is
+    # stated as absent by the panel and never computed here.
+    #
+    # Deliberately NOT behind `@latest_test_run`: the census is repository-wide and carries its own
+    # `weighed_run_id` / `computed_at` stamps, so the read happens whether or not the repository has
+    # ever ingested (one unconditional +1 on the page's query budget).
+    @near_duplicate_census = NearDuplicateCensus.stored_block_for(@repository)
     # ONE of those descriptions, opened: not that eight examples of this run say the same sentence
     # and cost ninety seconds between them, but WHICH eight — what each cost, where each sits, how
     # each ended. The rung the panel above had none of: that ranking's rows dead-ended.

@@ -57,8 +57,9 @@
         so by the rule below they belong in the first panel and have moved there. The per-test
         `layer` has since joined them: the recorder now stores the layer each annotated example
         DECLARES, and `latest_run.slowest_examples` serves it per row. What still has nothing behind
-        it is duplicate clusters — and the per-AREA rollup of that layer, which is a different
-        question from knowing one test's, and the one the second panel still names.
+        it is the per-AREA rollup of that layer, which is a different question from knowing one
+        test's, and the one the second panel still names. The suite-wide duplicate clusters have
+        since joined the first panel too: the repository page renders the stored census.
 
         So availability is the axis the page is split on, and the split is carried by the panel
         TITLES and by a warning at the top of the second one — never by a footnote or by a change of
@@ -80,6 +81,7 @@
               ["Where does the wall-clock go?", "Per run and per shard"],
               ["Which tests are slow, and which areas dominate the clock?", "Per test, per spec file and per directory"],
               ["Is the suite growing, and how fast?", "Run over run, per branch"],
+              ["Which groups of tests are potentially redundant?", "Groups of tests that read alike, from the stored census, on the repository page"],
               ["Can an agent read that without a browser?", "GET /api/v1/repository"]
             ]) %>
 
@@ -103,10 +105,10 @@
         This is the product's direction, not its feature list. Ingestion does now record a row per
         example, and the timing answers built on those rows are in the panel above — as is the layer
         each annotated test declares, which ingestion now stores and the API now serves, and as is
-        the suite-wide clustering, which `GET /api/v1/repository?near_duplicates=` now serves behind
-        an opt-in ask. What is left here is blocked on work that has not been done rather than on
-        data alone: rolling that clustering into a dashboard panel, and rolling that per-test layer
-        up into a per-area picture. No panel answers these today.
+        the suite-wide clustering, which the repository page now renders as a panel and
+        `GET /api/v1/repository?near_duplicates=` serves behind an opt-in ask. What is left here is
+        blocked on work that has not been done rather than on data alone: rolling that per-test
+        layer up into a per-area picture. No panel answers it today.
       <% end %>
 
       <%# NUMBERED BY WHAT RENDERS, and that is a correction rather than a style choice. This comment
@@ -116,35 +118,35 @@
           the foot of this comment sent that reader to the wrong pair. The departed row is described
           here, but it is no longer COUNTED: the numbers below are the rendered ones.
 
-          Row 1's rationale is narrowed to the half that is still genuinely open, the same way
-          Row 2's below is: suite-wide clustering now EXISTS — `GET /api/v1/repository?near_duplicates=`
-          serves it, opt-in, via `NearDuplicateClusters` — so the blocker this row names is no
-          longer the clustering itself but the dashboard PANEL over it. The row stays here, and
-          stays a "Needs ...", because no panel exists and moving it to `#answers-today` would be
-          the same checkable-claim-that-does-not-hold defect this panel was edited to remove: the
-          rule at the top of the first panel is that a row belongs there only if a signed-in user
-          can read the figure off the dashboard or the API today — an agent can, via the endpoint,
-          but a signed-in human browsing the dashboard cannot, and this panel's rows are the
-          questions a person reads off the dashboard.
+          Row 1 of the previous revision — "Which groups of tests are potentially redundant?" — has
+          MOVED to `#answers-today`, and it is no longer counted here. It stayed a "Needs a dashboard
+          panel over the clustering" row for exactly as long as no panel existed: the rule at the top
+          of the first panel is that a row belongs there only if a signed-in user can read the figure
+          off the dashboard or the API today, and an agent could (the endpoint) while a person browsing
+          the dashboard could not. The repository page now renders the stored census, so the row
+          holds the first panel's rule and keeping it here would be the checkable-claim-that-does-not-
+          hold defect this panel was edited to remove.
 
-          Row 2's rationale is narrowed AGAIN, to the half that is still genuinely open. It used to
-          read "which ingestion does not read", and that went false when `Ingest::ObservationRecorder`
+          Row 1's rationale (the per-area layer rollup) is narrowed AGAIN, to the half that is still
+          genuinely open. It used to read "which ingestion does not read", and that went false when
+          `Ingest::ObservationRecorder`
           began storing `intent_layer` — the layer each annotated example declares is now persisted
           and served per row by `latest_run.slowest_examples`. What is still missing is the ROLLUP:
           knowing one test's layer is not knowing which layers already cover an AREA, and no panel
           and no endpoint groups the stored layers that way. That is the blocker this row now names.
 
           That rationale has to stay phrased as a BLOCKER ("Needs ..."), not as a status report,
-          because the last row's "both of the above" resolves to the two needs printed above it. A
-          rationale that opens by naming something which already ships would leave row 3 pointing at
+          because the last row's "the one above" resolves to the single need printed above it. A
+          rationale that opens by naming something which already ships would leave row 2 pointing at
           a shipped capability — the same checkable-claim-that-does-not-hold defect this panel was
           edited to remove. That is exactly why storing the layer did NOT promote this row to
-          `#answers-today`: the row has to stay here, and stay a "Needs ...", for row 3 to keep
-          resolving to two. Re-read row 3 against row 2 whenever either is reworded. %>
+          `#answers-today`: the row has to stay here, and stay a "Needs ...", for the last row to
+          keep resolving to it. Row 2 used to need "both of the above" — the clustering panel and
+          the layer rollup — and lost half its referent when the clustering panel shipped; it is
+          reworded to name what remains. Re-read row 2 against row 1 whenever either is reworded. %>
       <%= render UI::DefListComponent.new(rows: [
-            ["Which groups of tests are potentially redundant?", "Needs a dashboard panel over the clustering"],
             ["What already exists for this area, and at which layers?", "Needs the stored per-test layer rolled up per area"],
-            ["Which of those duplicates is safe to collapse?", "Needs both of the above"]
+            ["Which of those duplicates is safe to collapse?", "Needs the per-area layer rollup above"]
           ]) %>
     </div>
   <% end %>
