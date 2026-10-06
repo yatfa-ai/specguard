@@ -235,4 +235,52 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
           "both completeness surfaces (the 400 row and the refusal alert) must state that the " \
           "NUL-free resubmit gets the full list"
   end
+
+  # @intent: {"entity": "GET /docs/integrate", "action": "document the sga_ agent-key ingest route", "behavior": "the page documents the repository-scoped ingest route read from the routes table, the runs.ingest permission read from RepositoryMembership::RUNS_INGEST, a SPECGUARD_REPOSITORY_ID row in the env-var table, and 403 and 404 rows inside the wire panel", "layer": "request"}
+  it "documents the agent-key ingest route, its permission, its env var and its 403/404 refusals" do
+    get integration_guide_path
+    page = Capybara.string(response.body)
+
+    # The route is read from the routes table, not retyped: the page spells the segment as
+    # `<repository id>`, so the expectation rewrites the route's own `:repository_id` the same
+    # way and a renamed or moved route reddens this against a page still showing the old URL.
+    route = Rails.application.routes.routes.find do |candidate|
+      candidate.verb == "POST" && candidate.defaults[:controller] == "api/v1/ingests" &&
+        candidate.path.spec.to_s.include?(":repository_id")
+    end
+    expect(route).to be_present, "no repository-scoped POST route to api/v1/ingests exists any more"
+    scoped_path = route.path.spec.to_s.delete_suffix("(.:format)").sub(":repository_id", "<repository id>")
+
+    wire = page.find(:css, "#wire")
+    agent_route = wire.find(:css, "#agent-key-route")
+    expect(agent_route.text.squish).to include(scoped_path),
+          "the #wire panel does not document the repository-scoped route #{scoped_path} " \
+          "(read from the routes table) that an sga_ key must post to"
+
+    # The permission, read from the constant the server checks.
+    expect(agent_route.text.squish).to include(RepositoryMembership::RUNS_INGEST),
+          "the agent-key route does not name the #{RepositoryMembership::RUNS_INGEST} permission " \
+          "the server requires"
+
+    # ⛔ A literal on purpose, NEVER read from the bundled gem: Gemfile.lock pins specguard-ruby
+    # 0.3.2, which predates REPOSITORY_ID_KEYS, so a gem-constant read would not exist here —
+    # and `gem_environment_variables` above therefore cannot go red for this variable. This
+    # assertion is the interim guard; bumping the lock and teaching that helper to read the
+    # constant is the follow-up.
+    row = page.find(:xpath, "//tr[td[normalize-space()='SPECGUARD_REPOSITORY_ID']]")
+    expect(row.text).to include("sga_"),
+          "the SPECGUARD_REPOSITORY_ID row does not say it applies to sga_ agent keys"
+
+    # 403 and 404 rows, scoped to the wire panel (the page has no other status table) and to the
+    # agent route: the 404 wording must not claim a distinguishable "not allowed".
+    %w[403 404].each do |status|
+      status_row = wire.find(:xpath, ".//tr[td[normalize-space()='#{status}']]")
+      expect(status_row.text).to include("Agent-key route only"),
+            "the #{status} row in the #wire panel is not scoped to the agent-key route"
+    end
+    expect(wire.find(:xpath, ".//tr[td[normalize-space()='403']]").text.squish).to include("does not hold"),
+          "the 403 row does not say the key covers the repository but lacks the permission"
+    expect(wire.find(:xpath, ".//tr[td[normalize-space()='404']]").text.squish).to include("answered identically"),
+          "the 404 row does not state that outside-the-set and nonexistent are indistinguishable"
+  end
 end
