@@ -246,7 +246,7 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
     # way and a renamed or moved route reddens this against a page still showing the old URL.
     route = Rails.application.routes.routes.find do |candidate|
       candidate.verb == "POST" && candidate.defaults[:controller] == "api/v1/ingests" &&
-        candidate.path.spec.to_s.include(":repository_id")
+        candidate.path.spec.to_s.include?(":repository_id")
     end
     expect(route).to be_present, "no repository-scoped POST route to api/v1/ingests exists any more"
     scoped_path = route.path.spec.to_s.delete_suffix("(.:format)").sub(":repository_id", "<repository id>")
