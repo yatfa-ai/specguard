@@ -318,9 +318,18 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
     expect(text).not_to include("two things"),
           "the #mcp panel is back to describing a two-tool bridge — #{reread}"
 
-    missing_tools = MCP_BRIDGE_TOOLS.reject { |tool| text.include?(tool) }
+    # Compare the SET of tools the panel's table rows name against the pin. A substring test
+    # would be vacuous for names that are prefixes of other tools (remove_repository inside
+    # remove_repository_member, list_repository_agent_keys inside ..._presented_revoked,
+    # add_repository inside add_repository_member), and a set comparison also catches a tool
+    # added to the panel but not to the pin.
+    panel_tools = panel.all(:xpath, ".//tr/td[1]").map { |cell| cell.text.squish }
+    missing_tools = MCP_BRIDGE_TOOLS - panel_tools
+    extra_tools = panel_tools - MCP_BRIDGE_TOOLS
     expect(missing_tools).to be_empty,
           "the #mcp panel does not name #{missing_tools.join(', ')} — #{reread}"
+    expect(extra_tools).to be_empty,
+          "the #mcp panel lists #{extra_tools.join(', ')}, which MCP_BRIDGE_TOOLS does not pin — #{reread}"
 
     missing_variables = MCP_BRIDGE_VARIABLES.reject { |name| text.include?(name) }
     expect(missing_variables).to be_empty,
