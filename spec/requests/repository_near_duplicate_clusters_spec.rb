@@ -290,4 +290,92 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       end
     end
   end
+
+  # The layer cut, rendered from the STORED `layer_groups`. The stored payload is rewritten the way
+  # the wording example above does it, but with REAL members in the groups, so a panel printing one
+  # layer for every member (or dropping a group) fails.
+  describe "the declared-layer cut" do
+    before { ingest(repository, pair_specs) }
+
+    let(:census) { NearDuplicateCensus.find_by!(repository_id: repository.id) }
+    let(:cluster) { census.payload["clusters"].sole }
+    let(:expired_member) { cluster["members"].find { |m| m["text"] == expired } }
+    let(:outright_member) { cluster["members"].find { |m| m["text"] == outright } }
+
+    def store_layers(redundancy:, groups:, layer_source: "declared via the intent protocol")
+      census.update!(payload: census.payload.merge(
+        "layer_source" => layer_source,
+        "clusters" => [cluster.merge("layer_redundancy" => redundancy, "layer_groups" => groups)]
+      ))
+      get repository_path(repository)
+    end
+
+    def location(member) = "#{member['file_path']}:#{member['line_number']}"
+
+    def group_text(layer)
+      panel.all("[data-near-duplicate-layer-group]").find { |node| node.find("p").text.strip == layer }
+           &.text(normalize_ws: true)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "render the declared layers of a cluster", "behavior": "a cross-layer cluster names both stored layers and lists each member under the layer it was grouped in", "layer": "request"}
+    it "names both layers and puts each member under its own layer" do
+      store_layers(redundancy: "cross_layer", groups: [
+        { "layer" => "request", "members" => [expired_member] },
+        { "layer" => "unit", "members" => [outright_member] }
+      ])
+
+      text = panel.find("[data-near-duplicate-cluster]").text(normalize_ws: true)
+      expect(text).to include("spans 2 declared layers: request, unit")
+      expect(group_text("request")).to include(location(expired_member))
+      expect(group_text("request")).not_to include(location(outright_member))
+      expect(group_text("unit")).to include(location(outright_member))
+      expect(group_text("unit")).not_to include(location(expired_member))
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "render a member declaring two layers", "behavior": "a member stored in two layer groups renders under both, and the undeclared group reads no layer declared with its members", "layer": "request"}
+    it "renders a two-layer member under both and the undeclared group as text" do
+      store_layers(redundancy: "cross_layer", groups: [
+        { "layer" => "request", "members" => [expired_member] },
+        { "layer" => "unit", "members" => [expired_member] },
+        { "layer" => nil, "members" => [outright_member] }
+      ])
+
+      expect(group_text("request")).to include(location(expired_member))
+      expect(group_text("unit")).to include(location(expired_member))
+      expect(group_text("no layer declared")).to include(location(outright_member))
+      expect(panel.all("[data-near-duplicate-cluster] li", text: location(expired_member)).size).to eq(2)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "state layer provenance", "behavior": "a census with a layer_source states once that layers are declared and never inferred from paths, not once per cluster", "layer": "request"}
+    it "states the declared-not-inferred provenance once for the panel" do
+      other = cluster.merge("layer_redundancy" => "same_layer",
+                            "layer_groups" => [{ "layer" => "unit", "members" => cluster["members"] }])
+      census.update!(payload: census.payload.merge(
+        "layer_source" => "declared via the intent protocol",
+        "clusters" => [cluster.merge("layer_redundancy" => "same_layer",
+                                     "layer_groups" => [{ "layer" => "unit", "members" => cluster["members"] }]),
+                       other]
+      ))
+
+      get repository_path(repository)
+
+      expect(panel.all("[data-near-duplicate-cluster]").size).to eq(2)
+      expect(panel.all("#near-duplicate-clusters-layer-source").size).to eq(1)
+      expect(panel.text(normalize_ws: true).scan("never inferred from file paths").size).to eq(1)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "render a layer-free census", "behavior": "a census whose layer_source is nil and whose clusters declared nothing renders no layer name, no declared wording and no no-layer-declared text", "layer": "request"}
+    it "renders no layer text when the suite declared nothing" do
+      store_layers(redundancy: nil, layer_source: nil, groups: [
+        { "layer" => nil, "members" => cluster["members"] }
+      ])
+
+      text = panel.find("[data-near-duplicate-cluster]").text(normalize_ws: true)
+      expect(text).to include(location(expired_member), location(outright_member))
+      expect(text).not_to match(/declared|no layer|\b(unit|integration|request|system)\b/i)
+      expect(panel).to have_no_css("#near-duplicate-clusters-layer-source")
+      expect(panel).to have_no_css("[data-near-duplicate-layer-group]")
+      expect(panel.text(normalize_ws: true)).not_to include("declared")
+    end
+  end
 end
