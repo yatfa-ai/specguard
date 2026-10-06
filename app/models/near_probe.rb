@@ -8,7 +8,7 @@
 # census — which answers "which pairs are redundant with each other", never "what is near X". The
 # probe embeds the caller's phrase once (through the shipped provider and shipped cache), ranks
 # the repository's identities through the single tenant-filtered ANN seam, and returns the
-# top-N (10 unasked, up to `RequestedLimitParam::MAX_LIMIT` on ask) with per-hit similarity,
+# top-N (10 unasked, up to `MAX_NEAR_LIMIT` on ask) with per-hit similarity,
 # signal source, last-known path and the weight the latest run measured. It is served by `RepositoryOverview` behind the `?near=` opt-in — see
 # `RequestedNearParam` for the ask's guard and `repository_near_probe_spec.rb` for the wire
 # contract.
