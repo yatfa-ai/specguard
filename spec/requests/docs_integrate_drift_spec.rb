@@ -349,4 +349,17 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
     expect(credential.call("get_intent_schema")).to include("no key"),
           "get_intent_schema sends no key — #{reread}"
   end
+
+  # @intent: {"entity": "GET /docs/integrate", "action": "describe the find_tests_near_behavior tool in the #mcp panel", "behavior": "the find_tests_near_behavior row presents the tool as a ranked read that is not a coverage verdict and never as a way to check whether something is already tested, matching the tool's own description, the bridge README and NearProbe, which all disclaim that verdict", "layer": "request"}
+  it "does not sell find_tests_near_behavior as an already-tested check in the #mcp panel" do
+    get integration_guide_path
+    panel = Capybara.string(response.body).find(:css, "#mcp")
+    row = panel.find(:xpath, ".//tr[td[normalize-space()='find_tests_near_behavior']]").text.squish
+
+    expect(row).not_to match(/already tested/i),
+          "the find_tests_near_behavior row promises an 'already tested' check, a verdict the tool " \
+          "never gives (see NearProbe, the bridge README and the tool description)"
+    expect(row).to include("a ranked read, not a coverage verdict"),
+          "the find_tests_near_behavior row must carry the disclaimer that a near hit is not coverage"
+  end
 end
