@@ -67,6 +67,15 @@
       <%= census["weighed_run_id"] %>. Stored at ingest: this page reads it and never recomputes it, so
       a census can be older than the run listed above.
     </p>
+    <%# SATURATION, stated ONCE for the panel and never per cluster (the stored count is census-level).
+        Rendered only when positive and there is a group to qualify: a "0 tests" clause would be
+        arithmetic, against this panel's convention. %>
+    <% if census["saturated_identity_count"].to_i.positive? && census["clusters"].present? %>
+      <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-saturation">
+        Some tests had a full ten neighbours at or above the floor, and only ten are kept per test,
+        so a group listed here may be part of a larger one.
+      </p>
+    <% end %>
     <% if census["clusters"].empty? %>
       <% if census["identity_count"].to_i.zero? %>
         <div id="near-duplicate-clusters-unembedded">
@@ -154,6 +163,19 @@
                 <%= declared_layers.join(", ") %>
               <% when "same_layer" %>
                 · one layer: <%= declared_layers.join(", ") %>
+              <% end %>
+              <%# The stretch of the group, from the STORED `similarity_range` ([strongest, weakest]).
+                  Membership is transitive and similarity is not, so the weakest figure can sit well
+                  below the strongest. A cluster stored before the key existed (or a malformed pair)
+                  renders nothing — never a "0.0". %>
+              <% range = cluster["similarity_range"] %>
+              <% if range.is_a?(Array) && range.size == 2 && range.all?(Numeric) %>
+                <% best, worst = range %>
+                <% if best == worst %>
+                  · alike at <%= format("%.2f", best) %>
+                <% else %>
+                  · alike at <%= format("%.2f", best) %> at best, <%= format("%.2f", worst) %> at worst
+                <% end %>
               <% end %>
               <% if cluster["unobserved_members"] %>
                 · lists a test the weighed run did not observe (its link is pinned to the weighed
