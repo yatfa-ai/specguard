@@ -507,6 +507,7 @@ RSpec.describe "The public administration guide", type: :request do
       expect(published_page).to include("?role=owned")
       expect(published_page).to include("?role=shared")
       expect(published_page).to include("?sort=stale")
+      expect(published_page).to include("?sort=annotated")
     end
 
     it "names the credential block by its path" do
@@ -560,6 +561,25 @@ RSpec.describe "The public administration guide", type: :request do
       get_repositories(user_api_key.raw_token, params: { sort: "stale" })
 
       expect(full_names).to eq(["acme/zeta-tools", "acme/my_ledger", "acme/billing-service"])
+    end
+
+    # The annotated-share claim: least-annotated first, a repository with no run last (never as 0%).
+    # The fixture's annotated order (my_ledger 10%, billing 50%, never-ingested zeta last) differs
+    # from the default name order (billing, my_ledger, zeta), so an implementation that ignored
+    # the ask goes red; the second read pins the same-URL-same-order promise.
+    it "documents ?sort=annotated the way the server answers it" do
+      create_test_run(repository: owned, commit_sha: "gide1659a", total_specs_count: 10,
+                      annotated_specs_count: 5)
+      create_test_run(repository: shared, commit_sha: "gide1659b", total_specs_count: 10,
+                      annotated_specs_count: 1)
+
+      get_repositories(user_api_key.raw_token, params: { sort: "annotated" })
+
+      expect(full_names).to eq(["acme/my_ledger", "acme/billing-service", "acme/zeta-tools"])
+
+      get_repositories(user_api_key.raw_token, params: { sort: "annotated" })
+
+      expect(full_names).to eq(["acme/my_ledger", "acme/billing-service", "acme/zeta-tools"])
     end
 
     # The clamp, from the reader's side: both role asks answer the whole granted set with a 200 —

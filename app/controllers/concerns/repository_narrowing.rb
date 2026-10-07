@@ -110,4 +110,31 @@ module RepositoryNarrowing
       [run.nil? ? 0 : 1, run&.created_at || Time.zone.at(0), repository.github_full_name]
     end
   end
+
+  # THE `?sort=annotated` ORDERING — least-annotated suite first, by the latest run's
+  # `TestRun#annotated_fraction` ascending, the same share the card prints.
+  #
+  # APPLIED OVER THE LOADED SET, exactly as `stale_first` is and for the same reason: every figure
+  # read here is a column on a run the caller already resolved in `latest_runs`, so the ordering
+  # costs no query on either surface.
+  #
+  # THE UNMEASURED LIMB IS LAST RATHER THAN SORTED AS ZERO. A repository with no run, or whose
+  # latest run reported no tests (`suite_size_measured?` false, so `annotated_fraction` is nil),
+  # has no share at all — the card renders it as "No runs yet" or prints no share line — and
+  # ranking it as 0% would put a suite nobody measured ahead of one measured at 0-of-N. A measured
+  # 0-of-N IS a real `0.0` and sorts first, which is the point of the ordering. (Mirror image of
+  # `stale_first`, whose never-ingested limb is first because there the unreached suite IS the
+  # stalest.)
+  #
+  # THE TUPLE IS `[limb, Float, name]` ON EVERY BRANCH: limb `0` is measured, `1` unmeasured, and
+  # the unmeasured limb carries `0.0` as a sentinel that is never actually compared against a
+  # measured fraction (limbs differ first; within limb `1` the term is equal on both sides and the
+  # name decides) — so no `nil` is ever compared with a Float. `github_full_name` breaks ties so a
+  # `?sort=annotated` URL is deterministic and shareable.
+  def annotated_first(repositories, latest_runs)
+    repositories.sort_by do |repository|
+      fraction = latest_runs[repository.id]&.annotated_fraction
+      [fraction.nil? ? 1 : 0, fraction || 0.0, repository.github_full_name]
+    end
+  end
 end

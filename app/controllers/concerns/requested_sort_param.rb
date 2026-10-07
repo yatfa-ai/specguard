@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
 # `?sort=` read as an ordering ask for the repositories index — `stale`, last-ingested recency
-# with never-ingested first — or `nil` for "no ask" (the page's default `github_full_name` order).
+# with never-ingested first, or `annotated`, the latest run's annotated share with the
+# least-annotated suite first and the unmeasured last — or `nil` for "no ask" (the page's default
+# `github_full_name` order).
 #
 # Deliberately its own module rather than a widening of any sibling `Requested*Param`, and one
 # module per parameter is the point of the split — the argument `RequestedSpecFileParam` makes for
@@ -29,7 +31,7 @@ module RequestedSortParam
   # The orderings the page offers beyond its default. Each word names ONE ordering and the method
   # that applies it, so adding one is adding both — there is no word for "the default", which nil
   # already means.
-  SORTS = %w[stale].freeze
+  SORTS = %w[stale annotated].freeze
 
   private
 
