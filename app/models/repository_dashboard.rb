@@ -629,8 +629,10 @@ class RepositoryDashboard
     # unchanged), is one statement however many clusters render, and answers `nil` for a missing
     # run — which the partial renders as plain text, never a link to a guessed ref.
     weighed_run_id = @near_duplicate_census&.dig("weighed_run_id")
-    @near_duplicate_weighed_sha =
-      (TestRun.where(repository_id: @repository.id, id: weighed_run_id).pick(:commit_sha) if weighed_run_id)
+    # The same statement also reads the run's branch (SPGD-1642), so the panel's stamp can name the
+    # weighed run by commit and branch instead of a bare bigint: still one statement, no new query.
+    @near_duplicate_weighed_sha, @near_duplicate_weighed_branch =
+      (TestRun.where(repository_id: @repository.id, id: weighed_run_id).pick(:commit_sha, :branch) if weighed_run_id)
     # ONE of those descriptions, opened: not that eight examples of this run say the same sentence
     # and cost ninety seconds between them, but WHICH eight — what each cost, where each sits, how
     # each ended. The rung the panel above had none of: that ranking's rows dead-ended.
