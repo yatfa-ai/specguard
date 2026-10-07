@@ -133,6 +133,8 @@
         <% end %>
         Each group counts its members (distinct test texts) and its examples (every run row those
         texts resolved to) separately: a table-driven loop is one member and several examples.
+        A member's time counts only its timed examples in the weighed run, so for a partially timed
+        member the figure is a floor.
       </p>
       <%# THE LAYER PROVENANCE, stated ONCE for the panel and never per cluster. `layer_source` is the
           census's own stamp: non-nil only when at least one clustered member declared a layer, so a

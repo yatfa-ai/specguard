@@ -114,6 +114,32 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       expect(panel.text(normalize_ws: true)).to include("2 members · 4 examples")
     end
 
+    # @intent: {"entity": "NearDuplicateCensus", "action": "render member time", "behavior": "each flat-list member row shows its own stored total_seconds through SpecObservation.humanized_duration, after its example count", "layer": "request"}
+    it "shows each member's stored total_seconds in its row" do
+      get repository_path(repository)
+
+      members = NearDuplicateCensus.stored_block_for(repository)["clusters"].sole["members"]
+      rows = panel.all("[data-near-duplicate-cluster] > ul > li")
+      expect(rows.size).to eq(members.size)
+      members.each do |member|
+        row = rows.find { |r| r.text(normalize_ws: true).include?("#{member['file_path']}:#{member['line_number']}") }
+        expect(member["total_seconds"]).to be_a(Numeric)
+        expect(row.text(normalize_ws: true)).to include(SpecObservation.humanized_duration(member["total_seconds"]))
+        expect(row.text(normalize_ws: true)).not_to include("not timed")
+      end
+      expect(rows.map { |r| r.text(normalize_ws: true)[/\d+\.\d\ds\z/] }).to contain_exactly("0.60s", "0.40s")
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "caption member time", "behavior": "the panel basis states that a member's time counts only its timed examples in the weighed run, so a partially timed figure is a floor", "layer": "request"}
+    it "captions that a member's time is a floor over its timed examples" do
+      get repository_path(repository)
+
+      expect(panel.text(normalize_ws: true)).to include(
+        "A member's time counts only its timed examples in the weighed run",
+        "the figure is a floor"
+      )
+    end
+
     # @intent: {"entity": "NearDuplicateCensus", "action": "render for a view member", "behavior": "a member without keys.manage sees the same panel, because the census is read-only suite telemetry outside the manage_keys gate", "layer": "request"}
     it "renders for a view-only member too" do
       member = create_user(github_uid: "9990", github_handle: "viewer")
@@ -461,6 +487,20 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       expect(cluster.text(normalize_ws: true)).to include("not timed")
       expect(cluster.text).not_to match(/0\.00s|\b0s\b/)
     end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "render untimed members", "behavior": "a member with total_seconds nil reads not timed in its own row and never prints a zero duration", "layer": "request"}
+    it "says not timed on every member row, never a zero" do
+      get repository_path(repository)
+
+      members = NearDuplicateCensus.stored_block_for(repository)["clusters"].sole["members"]
+      rows = panel.all("[data-near-duplicate-cluster] > ul > li")
+      expect(members.map { |m| m["total_seconds"] }).to all(be_nil)
+      expect(rows.size).to eq(members.size)
+      rows.each do |row|
+        expect(row.text(normalize_ws: true)).to include("not timed")
+        expect(row.text).not_to match(/0\.00s|\b0s\b/)
+      end
+    end
   end
 
   describe "the four states" do
@@ -614,6 +654,21 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       expect(group_text("request")).not_to include(location(outright_member))
       expect(group_text("unit")).to include(location(outright_member))
       expect(group_text("unit")).not_to include(location(expired_member))
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "render member time in layer groups", "behavior": "layer-grouped member rows show the same stored total_seconds, and a member stored untimed reads not timed, through the same partial as the flat list", "layer": "request"}
+    it "renders member time identically in layer groups, with not timed for a nil member" do
+      untimed = outright_member.merge("total_seconds" => nil)
+      store_layers(redundancy: "cross_layer", groups: [
+        { "layer" => "request", "members" => [expired_member] },
+        { "layer" => "unit", "members" => [expired_member, untimed] }
+      ])
+
+      expect(group_text("request")).to include(SpecObservation.humanized_duration(expired_member["total_seconds"]))
+      expect(group_text("unit")).to include(SpecObservation.humanized_duration(expired_member["total_seconds"]))
+      untimed_row = panel.all("[data-near-duplicate-layer-group] li", text: location(untimed)).sole
+      expect(untimed_row.text(normalize_ws: true)).to include("not timed")
+      expect(untimed_row.text).not_to match(/0\.00s|\b0s\b/)
     end
 
     # @intent: {"entity": "NearDuplicateCensus", "action": "render a member declaring two layers", "behavior": "a member stored in two layer groups renders under both, and the undeclared group reads no layer declared with its members", "layer": "request"}
