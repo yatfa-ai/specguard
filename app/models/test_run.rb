@@ -44,7 +44,17 @@ class TestRun < ApplicationRecord
   #
   # Memoized, because the Overview panel, the API's `latest_run` block and the areas panel all ask on
   # one page load and the answer is one aggregate over one run.
-  def intent_readings = @intent_readings ||= SpecObservation.reading_counts_in(self)
+  def intent_readings = run_counts.first
+
+  # The run-wide DECLARED-LAYER mix beside {#intent_readings} — `{unit:, integration:, request:,
+  # system:, undeclared:}` over every recorded example of the run (not the ten listed areas), or NIL
+  # when the run recorded no per-example rows. Taken from the SAME single aggregate row as
+  # `intent_readings`, so it costs the page no query of its own. Operands only; the path is never
+  # consulted, and an undeclared example is not an unreadable one.
+  def layer_counts = run_counts.last
+
+  def run_counts = @run_counts ||= SpecObservation.run_counts_in(self)
+  private :run_counts
 
   # Share of this run's suite that carries an @intent annotation — the headline dashboard metric.
   #

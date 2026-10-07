@@ -1366,10 +1366,44 @@ class SpecObservation < ApplicationRecord
   # per page. No GROUP BY, so `pick` returns the single row the four aggregates produce — the same
   # shape and the same reasoning as `TestRun#shard_totals`.
   def self.reading_counts_in(test_run)
-    counts = where(test_run_id: test_run.id).pick(*RUN_READING_COUNTS.map { |sql| Arel.sql(sql) })
+    run_counts_in(test_run).first
+  end
 
-    IntentReadings.new(authored: counts[0].to_i, derived: counts[1].to_i, unreadable: counts[2].to_i,
-                       recorded: counts[3].to_i)
+  # The RUN-grain declared-layer mix — how many of the run's recorded examples DECLARED each layer in
+  # their `@intent`, plus how many declared none: `{unit:, integration:, request:, system:,
+  # undeclared:}` in {DECLARED_LAYER_KEYS} order, a measured zero where nothing declared that layer
+  # (never nil), summing to `IntentReadings#recorded`. NIL for a run with no recorded per-example rows:
+  # a run that stored no detail has no mix to state, and five zeros would read as a measurement of an
+  # empty suite. Operands only, no verdict — and the path is never consulted (see
+  # {.directory_layer_count_expressions}).
+  #
+  # The SAME aggregate row as {.reading_counts_in}, not a second read: see {.run_counts_in}.
+  def self.layer_counts_in(test_run)
+    run_counts_in(test_run).last
+  end
+
+  # The five {.directory_layer_count_expressions}, ALIASED for the run grain — `run_layer_<key>_count`.
+  #
+  # Aliased for the reason {RUN_READING_COUNTS} is: this projection rides the run-grain read, and
+  # `spec/support/observation_grain_reads.rb` partitions this endpoint's reads by SQL only one read
+  # can produce. Built lazily because the expressions quote through the live connection.
+  def self.run_layer_count_expressions
+    @run_layer_count_expressions ||= DECLARED_LAYER_KEYS.zip(directory_layer_count_expressions).map do |key, expression|
+      "#{expression} AS run_layer_#{key}_count"
+    end.freeze
+  end
+
+  # ONE single-row aggregate over ONE run answering BOTH run-grain questions — `[IntentReadings,
+  # layer_counts]` — so the page pays nothing extra for the layer mix. Both memoize on `TestRun`.
+  def self.run_counts_in(test_run)
+    counts = where(test_run_id: test_run.id)
+             .pick(*[*RUN_READING_COUNTS, *run_layer_count_expressions].map { |sql| Arel.sql(sql) })
+
+    readings = IntentReadings.new(authored: counts[0].to_i, derived: counts[1].to_i, unreadable: counts[2].to_i,
+                                  recorded: counts[3].to_i)
+    layers = DECLARED_LAYER_KEYS.zip(counts[4..].map(&:to_i)).to_h if readings.recorded?
+
+    [readings, layers]
   end
 
   # How many distinct descriptions one narrowing may hand the composition step below.

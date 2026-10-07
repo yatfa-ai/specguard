@@ -195,6 +195,16 @@ class LatestRunSerializer
       # as the annotation coverage figure — that is `annotated_ratio`, off the counters, answering
       # exactly as it did before this key existed. `authored` is here so the three sum to `recorded`.
       intent_readings: overview.serialized_intent_readings(test_run),
+      # THE RUN-WIDE DECLARED-LAYER MIX, a SIBLING of `intent_readings` (never inside it — that block
+      # is pinned at four keys) and served at the same depth. How many of the run's recorded examples
+      # DECLARED each layer in their `@intent` — `unit`, `integration`, `request`, `system` — plus
+      # `undeclared`, the ones that declared none. Whole-run, unlike the ten-area `spec_directories`.
+      # The five are measured zeros where nothing declared that layer and sum to
+      # `intent_readings.recorded`. NULL when the run recorded no per-example rows: a run that stored
+      # no detail has no mix to state, and five zeros would read as an empty suite. Never inferred
+      # from the path, and `undeclared` is NOT `intent_readings.unreadable` — an undeclared example
+      # may still be read from its description. Operands only, no pyramid verdict.
+      layer_counts: overview.serialized_layer_counts(test_run),
       # Nullable by schema. Serializing `0.0` for an unreported duration would assert the run took
       # no time — the same "not reported" vs `0.0s` distinction the Recent runs table draws.
       #

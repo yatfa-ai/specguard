@@ -467,7 +467,8 @@
               branch. %>
           <% reading_rows = if readings.recorded?
                               [["Read from the description", number_with_delimiter(readings.derived)],
-                               ["Not readable by SpecGuard", number_with_delimiter(readings.unreadable)]]
+                               ["Not readable by SpecGuard", number_with_delimiter(readings.unreadable)],
+                               ["Declared layers", SpecDirectoryDurations.layer_counts_label(@latest_test_run.layer_counts)]]
                             else
                               []
                             end %>
@@ -477,6 +478,19 @@
                 *reading_rows,
                 *cost_rows
               ]) %>
+          <%# The "Declared layers" row is the WHOLE RUN's mix (`TestRun#layer_counts`), not the ten
+              listed areas the directories panel counts, and it is gated on `readings.recorded?`
+              exactly as the two reading rows beside it: a run with no per-example rows has no mix
+              to state. Said once here rather than in the row, so the def-list stays a list. %>
+          <% if readings.recorded? %>
+            <p class="text-xs text-app-muted" id="declared-layers-basis">
+              "Declared layers" is how many of this run's <%= number_with_delimiter(readings.recorded) %>
+              recorded <%= "example".pluralize(readings.recorded) %> declared each layer in their own
+              <code>@intent</code> — never inferred from the path. "Undeclared" is the examples that
+              declared no layer, which is not "not readable by SpecGuard": such a test may still be
+              read from its description.
+            </p>
+          <% end %>
 
           <% if measured_tests %>
             <p class="text-xs text-app-muted">
