@@ -58,10 +58,16 @@ RSpec.describe "Repository spec file examples", type: :request do
   # The example's NAME, without the definition-site line rendered under it. The two share one cell,
   # so a whole-cell read would turn every ordering assertion in this file into an assertion about
   # paths as well — and the fallback row, where the name IS the location, has no span at all.
+  #
+  # And without the declared `@intent` block (`repositories/_authored_intent`), which shares the
+  # cell, carries spans of its own and is not part of the name.
   def row_name(cell)
-    site = cell.all("span").map(&:text).join
+    site = cell.all(:xpath, ".//span[not(ancestor::*[@data-authored-intent])]").map(&:text).join
+    intent = cell.first(:css, "[data-authored-intent]", minimum: 0)
 
-    cell.text.sub(site, "").gsub(/\s+/, " ").strip
+    text = cell.text
+    text = text.sub(intent.text, "") if intent
+    text.sub(site, "").gsub(/\s+/, " ").strip
   end
 
   # One ingested run, through the producer. `specs` are the wire hashes a client POSTs; the recorder
@@ -297,6 +303,81 @@ RSpec.describe "Repository spec file examples", type: :request do
       expect(panel.all("thead th").map { |th| th.text.strip }).to include("Layer")
       expect(rows.map { |row| [row[:name], row[:layer]] })
         .to eq([["Order declared", "request"], ["Order undeclared", "undeclared"]])
+    end
+  end
+
+  # The DECLARED `@intent` entity / action / behavior (`repositories/_authored_intent`), stored in
+  # `spec_observations.intent_*` and rendered by no view until now. Declared only: an unannotated
+  # row prints nothing in that cell. The negative pin comes FIRST — it fails against an
+  # implementation printing a placeholder or a derived guess.
+  describe "the declared intent each example carries" do
+    def intent_of(index) = panel.all("tbody tr")[index].first(:css, "[data-authored-intent]", minimum: 0)
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit absent intent", "behavior": "an unannotated example renders no intent block in its Test cell", "layer": "request"}
+    it "renders nothing for an unannotated row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 1,
+                                       name: "Order unannotated")])
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(intent_of(0)).to be_nil
+      expect(rows.map { |row| row[:name] }).to eq(["Order unannotated"])
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render declared intent", "behavior": "an annotated example prints its stored entity and action in mono and its behavior muted, beside an unannotated one that prints none", "layer": "request"}
+    it "prints the stored entity, action and behavior of an annotated row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(file_path: ORDER_SPEC, duration: 2.0, line_number: 1,
+                                         name: "declared", entity: "Order", action: "settle",
+                                         behavior: "closes the balance"),
+                          example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2, name: "plain")])
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      block = intent_of(0)
+      expect(block).to have_css("span.font-mono", text: "Order")
+      expect(block).to have_css("span.font-mono", text: "settle")
+      expect(block).to have_css("span.text-app-muted", text: "closes the balance")
+      expect(intent_of(1)).to be_nil
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render partial intent", "behavior": "an example with only a behavior renders just that behavior, with no empty mono spans or empty wrapper", "layer": "request"}
+    it "renders only the parts that are present" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(file_path: ORDER_SPEC, duration: 2.0, line_number: 1, name: "subset")])
+      SpecObservation.update_all(intent_entity: nil, intent_action: "", intent_behavior: "only behavior")
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      block = intent_of(0)
+      expect(block).not_to have_css("span.font-mono")
+      expect(block).not_to have_css("div")
+      expect(block.text.strip).to eq("only behavior")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "identify nameless row", "behavior": "a nameless annotated example shows its declared behavior in the Test cell beside its coordinate", "layer": "request"}
+    it "shows the declared behavior of a nameless annotated row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(file_path: ORDER_SPEC, duration: 2.0, line_number: 1,
+                                         behavior: "locks the rows").merge(name: nil)])
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(SpecObservation.first.name).to be_nil
+      expect(panel.all("tbody tr").first.all("td").first).to have_text("locks the rows")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "escape declared intent", "behavior": "markup in a stored behavior renders as literal text and never as an element", "layer": "request"}
+    it "HTML-escapes the stored values" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(file_path: ORDER_SPEC, duration: 2.0, line_number: 1, name: "x")])
+      SpecObservation.update_all(intent_behavior: "<b>bold</b>", intent_entity: "<i>E</i>")
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(intent_of(0).text).to include("<b>bold</b>", "<i>E</i>")
+      expect(intent_of(0)).not_to have_css("b, i")
     end
   end
 

@@ -163,6 +163,10 @@
                       this partial renders — `@spec_file_examples` is assigned only under
                       `@latest_test_run` — and `#github_blob_url` is string composition. %>
                   <%= render "repositories/definition_site_link", observation: observation %>
+                  <%# The DECLARED `@intent`, through `repositories/_authored_intent` — nothing at all
+                      for an unannotated row. Already in memory: `in_file` selects
+                      `spec_observations.*`. %>
+                  <%= render "repositories/authored_intent", observation: observation %>
                 </td>
                 <td class="px-3 py-2 text-app-content">
                   <%# The DECLARED layer, through `RepositoriesHelper#declared_layer_label` — the one

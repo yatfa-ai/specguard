@@ -308,6 +308,71 @@ RSpec.describe "Repository repeated description examples", type: :request do
     end
   end
 
+  # The DECLARED `@intent` entity / action / behavior (`repositories/_authored_intent`), stored in
+  # `spec_observations.intent_*` and rendered by no view until now. It sits under the "Defined at"
+  # cell, the one that names the row even where "Ran in" cannot. Declared only: an unannotated row
+  # prints nothing. (No nameless case: this panel is keyed on the description, so a row with no
+  # name cannot be in it.) The negative pin comes FIRST.
+  describe "the declared intent each example carries" do
+    def intent_of(index) = panel.all("tbody tr")[index].all("td")[1].first(:css, "[data-authored-intent]", minimum: 0)
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit absent intent", "behavior": "unannotated members of a repeated description render no intent block in their Defined at cell", "layer": "request"}
+    it "renders nothing for an unannotated row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: looped, duration: 2.0, line_number: 1),
+                          example_spec(name: looped, duration: 1.0, line_number: 2)])
+
+      get repository_path(repository, repeated_description: looped)
+
+      expect(intent_of(0)).to be_nil
+      expect(intent_of(1)).to be_nil
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render declared intent", "behavior": "an annotated member prints its stored entity and action in mono and its behavior muted, beside an unannotated one that prints none", "layer": "request"}
+    it "prints the stored entity, action and behavior of an annotated row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(name: looped, duration: 2.0, line_number: 1, file_path: order_spec,
+                                         entity: "Order", action: "settle", behavior: "closes the balance"),
+                          example_spec(name: looped, duration: 1.0, line_number: 2)])
+
+      get repository_path(repository, repeated_description: looped)
+
+      block = intent_of(0)
+      expect(block).to have_css("span.font-mono", text: "Order")
+      expect(block).to have_css("span.font-mono", text: "settle")
+      expect(block).to have_css("span.text-app-muted", text: "closes the balance")
+      expect(intent_of(1)).to be_nil
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render partial intent", "behavior": "a member with only a behavior renders just that behavior, with no empty mono spans or empty wrapper", "layer": "request"}
+    it "renders only the parts that are present" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(name: looped, duration: 2.0, line_number: 1, file_path: order_spec),
+                          example_spec(name: looped, duration: 1.0, line_number: 2)])
+      SpecObservation.update_all(intent_entity: nil, intent_action: "", intent_behavior: "only behavior")
+
+      get repository_path(repository, repeated_description: looped)
+
+      block = intent_of(0)
+      expect(block).not_to have_css("span.font-mono")
+      expect(block).not_to have_css("div")
+      expect(block.text.strip).to eq("only behavior")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "escape declared intent", "behavior": "markup in a stored behavior renders as literal text and never as an element", "layer": "request"}
+    it "HTML-escapes the stored values" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(name: looped, duration: 2.0, line_number: 1, file_path: order_spec),
+                          example_spec(name: looped, duration: 1.0, line_number: 2)])
+      SpecObservation.update_all(intent_behavior: "<b>bold</b>", intent_entity: "<i>E</i>")
+
+      get repository_path(repository, repeated_description: looped)
+
+      expect(intent_of(0).text).to include("<b>bold</b>", "<i>E</i>")
+      expect(intent_of(0)).not_to have_css("b, i")
+    end
+  end
+
   describe "the file each listed example ran in" do
     # @intent: {"entity": "GET /repositories/:id", "action": "link file drill-in", "behavior": "each row's ran-in anchor targets the spec_file ask with the #spec-file-examples fragment", "layer": "request"}
     it "links each row's file into the spec-file drill-down" do
