@@ -4943,7 +4943,101 @@ RSpec.describe "Repository registration and API keys", type: :request do
           expect(rendered_card_paths).to eq([repository_path(fresh), repository_path(stale)])
         end
 
-        it_behaves_like "a surface that treats a non-stale sort parameter as no ask"
+        it_behaves_like "a surface that treats a sort parameter outside the vocabulary as no ask"
+      end
+    end
+
+    describe "?sort=annotated — least-annotated suite first" do
+      # The fixture is arranged so the annotated order disagrees with BOTH the default name order
+      # (alpha, bravo, charlie, delta, echo, foxtrot) and the stale order (echo never ingested,
+      # then bravo, foxtrot, charlie, delta, alpha) — otherwise the example passes vacuously.
+      # charlie is a MEASURED 0-of-10 (a real 0.0, first); alpha and foxtrot tie at 50% (name
+      # tie-break); delta's run reported no tests and echo has never been ingested (both last,
+      # never as 0%).
+      def annotated_fixture
+        repos = %w[alpha bravo charlie delta echo foxtrot].index_with do |name|
+          create_repository(user: @user, github_full_name: "acme/#{name}")
+        end
+        create_test_run(repository: repos["alpha"], commit_sha: "cafe1659a", total_specs_count: 10,
+                        annotated_specs_count: 5, created_at: 1.hour.ago)
+        create_test_run(repository: repos["bravo"], commit_sha: "cafe1659b", total_specs_count: 10,
+                        annotated_specs_count: 8, created_at: 3.months.ago)
+        create_test_run(repository: repos["charlie"], commit_sha: "cafe1659c", total_specs_count: 10,
+                        annotated_specs_count: 0, created_at: 2.hours.ago)
+        create_test_run(repository: repos["delta"], commit_sha: "cafe1659d", total_specs_count: 0,
+                        annotated_specs_count: 0, created_at: 1.day.ago)
+        create_test_run(repository: repos["foxtrot"], commit_sha: "cafe1659f", total_specs_count: 10,
+                        annotated_specs_count: 5, created_at: 1.week.ago)
+        repos
+      end
+
+      def paths_for(repos, *names)
+        names.map { |name| repository_path(repos[name]) }
+      end
+
+      # @intent: { entity: "RepositoriesController", action: "order cards by annotated share", behavior: "?sort=annotated renders cards least-annotated first with a measured 0-of-N first, equal shares in name order, and runs with no measured suite or no run at all last", layer: "request" }
+      it "orders cards by ascending annotated fraction, unmeasured and never-ingested last" do
+        repos = annotated_fixture
+
+        get repositories_path, params: { sort: "annotated" }
+
+        expect(rendered_card_paths).to eq(
+          paths_for(repos, "charlie", "alpha", "foxtrot", "bravo", "delta", "echo")
+        )
+      end
+
+      it "leaves ?sort=stale and the default name order unchanged" do
+        repos = annotated_fixture
+
+        get repositories_path, params: { sort: "stale" }
+        expect(rendered_card_paths).to eq(
+          paths_for(repos, "echo", "bravo", "foxtrot", "delta", "charlie", "alpha")
+        )
+
+        get repositories_path
+        expect(rendered_card_paths).to eq(
+          paths_for(repos, "alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
+        )
+      end
+
+      it "answers two identical reads with the same sequence" do
+        annotated_fixture
+
+        get repositories_path, params: { sort: "annotated" }
+        first_read = rendered_card_paths
+        get repositories_path, params: { sort: "annotated" }
+
+        expect(rendered_card_paths).to eq(first_read)
+      end
+
+      it "offers the ordering in the sort select" do
+        create_repository(user: @user, github_full_name: "acme/one")
+
+        get repositories_path
+
+        expect(response.body).to include("Least annotated first")
+        expect(response.body).to include(%(value="annotated"))
+      end
+
+      # Equality, not `<=`: unlike the stale sort, this one is compared with the sort ask on a page
+      # whose query count the ordering must not move at all. Both reads use the same sort-bearing
+      # shape so the view's `any?` EXISTS (retired by any in-memory sort) is on the same side.
+      it "costs the same number of queries as the stale-sorted page" do
+        annotated_fixture
+
+        stale = count_queries { get repositories_path, params: { sort: "stale" } }
+        annotated = count_queries { get repositories_path, params: { sort: "annotated" } }
+
+        expect(annotated).to eq(stale)
+      end
+
+      it "costs no more than the unsorted page" do
+        annotated_fixture
+
+        unsorted = count_queries { get repositories_path }
+        annotated = count_queries { get repositories_path, params: { sort: "annotated" } }
+
+        expect(annotated).to be <= unsorted
       end
     end
 

@@ -95,7 +95,7 @@ class RepositoriesController < ApplicationController
   # narrows them for free; `shared_permissions` reads the viewer's whole membership set and is
   # unaffected either way — one query before, one query after).
   #
-  # `?sort=stale` is applied OVER THE LOADED SET rather than in SQL, deliberately: the cards
+  # `?sort=stale` and `?sort=annotated` are applied OVER THE LOADED SET rather than in SQL, deliberately: the cards
   # already materialise every run the ordering needs (`latest_test_runs`, one query for the whole
   # grid whatever it is sorted by), so a SQL spelling would have to re-derive per-repository
   # recency in a join the page then throws away — work the page has already paid for, paid a
@@ -107,6 +107,7 @@ class RepositoriesController < ApplicationController
     scope = narrow_repositories(Repository.accessible_by(current_user), current_user)
     @repositories = scope.includes(:user).order(:github_full_name)
     @repositories = stale_first(@repositories, latest_test_runs) if requested_sort == "stale"
+    @repositories = annotated_first(@repositories, latest_test_runs) if requested_sort == "annotated"
     @registration_grant_story = registration_grant_story
   end
 

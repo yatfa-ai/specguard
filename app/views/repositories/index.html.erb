@@ -237,13 +237,13 @@
                          choices: [["All", ""], ["Owned by you", "owned"], ["Shared with you", "shared"]],
                          selected: requested_role %>
         </div>
-        <%# Two orderings: the page's name default and the one recency ordering the grid has a
-            reason to offer. The default submits as a blank for the same reason `?role=`'s does
+        <%# Three orderings: the page's name default and the two the grid has a reason to offer —
+            recency (stale first) and the annotated share (least annotated first). The default submits as a blank for the same reason `?role=`'s does
             — `nil` already means "name order", and `RequestedSortParam` records why admitting a
             second word for it would invite a third the page does not offer. %>
         <div class="w-44">
           <%= form.field :sort, as: :select, label: "Sort",
-                         choices: [["Name", ""], ["Stale first", "stale"]],
+                         choices: [["Name", ""], ["Stale first", "stale"], ["Least annotated first", "annotated"]],
                          selected: requested_sort %>
         </div>
         <div class="flex items-center gap-2">

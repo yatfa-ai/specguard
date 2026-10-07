@@ -682,7 +682,85 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
           expect(full_names).to eq(["acme/billing-service", "acme/ledger"])
         end
 
-        it_behaves_like "a surface that treats a non-stale sort parameter as no ask"
+        it_behaves_like "a surface that treats a sort parameter outside the vocabulary as no ask"
+      end
+    end
+
+    describe "?sort=annotated — ordering by annotated share, least annotated first" do
+      # Annotated order disagrees with the default name order (alpha, bravo, charlie, delta, echo)
+      # so an implementation that ignored the ask goes red. charlie is a measured 0-of-10 (a real
+      # 0.0, first); alpha and bravo tie at 50% (name tie-break); delta's run reported no tests
+      # and echo was never ingested — both last, never as 0%.
+      def annotated_fixture
+        %w[alpha bravo charlie delta echo].index_with do |name|
+          create_repository(user: person, github_full_name: "acme/#{name}")
+        end.tap do |repos|
+          create_test_run(repository: repos["alpha"], commit_sha: "cafe1659a", total_specs_count: 10,
+                          annotated_specs_count: 5, created_at: 1.hour.ago)
+          create_test_run(repository: repos["bravo"], commit_sha: "cafe1659b", total_specs_count: 10,
+                          annotated_specs_count: 5, created_at: 3.months.ago)
+          create_test_run(repository: repos["charlie"], commit_sha: "cafe1659c", total_specs_count: 10,
+                          annotated_specs_count: 0, created_at: 2.hours.ago)
+          create_test_run(repository: repos["delta"], commit_sha: "cafe1659d", total_specs_count: 0,
+                          annotated_specs_count: 0, created_at: 1.day.ago)
+        end
+      end
+
+      it "serves least-annotated first, unmeasured and never-ingested last, name tie-break" do
+        annotated_fixture
+        owned_never = ["acme/billing-service", "acme/ledger"]
+
+        get_repositories(params: { sort: "annotated" })
+
+        expect(response).to have_http_status(:ok)
+        expect(full_names.first(3)).to eq(["acme/charlie", "acme/alpha", "acme/bravo"])
+        # delta (no measured suite) and every never-ingested repository share the last limb, in
+        # name order.
+        expect(full_names.drop(3)).to eq((owned_never + ["acme/delta", "acme/echo"]).sort)
+      end
+
+      it "answers two identical calls with an identical sequence" do
+        annotated_fixture
+
+        get_repositories(params: { sort: "annotated" })
+        first_read = full_names
+        get_repositories(params: { sort: "annotated" })
+
+        expect(full_names).to eq(first_read)
+      end
+
+      it "leaves the default order and ?sort=stale unchanged" do
+        annotated_fixture
+
+        get_repositories
+        expect(full_names).to eq(full_names.sort)
+
+        get_repositories(params: { sort: "stale" })
+        expect(full_names.first).to eq("acme/billing-service")
+      end
+
+      it "serves the same sequence under an sga_ agent key" do
+        annotated_fixture
+
+        get_repositories(params: { sort: "annotated" })
+        user_sequence = full_names
+
+        agent_key = create_agent_api_key(user: person, repositories: Repository.accessible_by(person).to_a,
+                                         permissions: [])
+        get_repositories(token: agent_key.raw_token, params: { sort: "annotated" })
+
+        expect(response).to have_http_status(:ok)
+        expect(full_names).to eq(user_sequence)
+      end
+
+      it "costs the same number of queries as the unsorted call" do
+        annotated_fixture
+        user_api_key # minted outside the counted block, so neither read pays for the fixture
+
+        unsorted = count_queries { get_repositories }
+        annotated = count_queries { get_repositories(params: { sort: "annotated" }) }
+
+        expect(annotated).to eq(unsorted)
       end
     end
 

@@ -8,7 +8,8 @@
 #
 # * the three malformed CONTAINER shapes: `?sort[]=x` is an Array, `?sort[a]=b` is an
 #   `ActionController::Parameters` and `?sort[][a]=b` is an Array of them. None is a String.
-# * the non-String SPELLINGS that parse and still name nothing: `?sort=` (a select submitted at
+# * the non-String SPELLINGS that parse and still name nothing (the honoured words are `stale` and
+#   `annotated`; each is proven by its own positive-path example beside the host group): `?sort=` (a select submitted at
 #   its default), `?sort=name` and `?sort=newest` (out-of-vocabulary strings — the first names
 #   the DEFAULT, which nil already means; see `RequestedSortParam` for why admitting it would
 #   invite a third word). The vocabulary clamp reads all of them as no ask, which is why they
@@ -29,18 +30,20 @@
 #       # github_full_name order
 #     end
 #
-#     it_behaves_like "a surface that treats a non-stale sort parameter as no ask"
+#     it_behaves_like "a surface that treats a sort parameter outside the vocabulary as no ask"
 #   end
 #
 # The host method is run as an ordinary example-group method, so its `let`s, hooks and fixture
 # helpers are all in scope. It must assert the NO-ASK answer specifically — the default order, a
 # claim about SEQUENCE and not merely presence — not merely a 200: a guard that swallowed every
 # value would also answer 200 on every shape here, and only the positive-path example beside the
-# host group — the one that proves `?sort=stale` IS honoured — separates the two. Keep that
+# host group — the one that proves `?sort=stale` and `?sort=annotated` ARE honoured — separates
+# the two. Keep that
 # example beside the host group.
-RSpec.shared_examples "a surface that treats a non-stale sort parameter as no ask" do
+RSpec.shared_examples "a surface that treats a sort parameter outside the vocabulary as no ask" do
   [
     ["an array", { sort: ["stale"] }],
+    ["an array naming the annotated word", { sort: ["annotated"] }],
     ["a nested hash", { sort: { a: "b" } }],
     ["an array of hashes", { sort: [{ a: "b" }] }],
     ["a blank string", { sort: "" }],
