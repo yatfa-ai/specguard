@@ -1311,6 +1311,27 @@ module RepositoriesHelper
       "here, which is a different fact from a suite in which nothing is slow."
   end
 
+  # The Layer cell of the three per-example tables ("Slowest tests", "Examples in this spec file",
+  # "Examples under this description") — ONE seam, so the three cannot word it differently.
+  #
+  # THE STORED COLUMN, VERBATIM, AND NOTHING ELSE. `spec_observations.intent_layer` is what the
+  # example's own `@intent` declared (`Ingest::ObservationRecorder#intent_attributes` stores it
+  # unconditionally and `Ingest::Payload` has already checked it against the four-token enum), so
+  # the token is printed as stored. A nil — or a blank one — is "no annotation declared a layer"
+  # and reads the muted word `undeclared`, the word `SpecDirectoryDurations.layer_counts_label`
+  # prints for the same fact at the area grain.
+  #
+  # NEVER INFERRED. Not from the spec path (a `layer: "request"` example under `spec/models/` is a
+  # request test, and an unannotated one under `spec/models/` is undeclared, not "unit") and not
+  # from `DerivedIntent`, which carries no layer by design. A guess in this cell would be read as
+  # a declaration, which is the one thing the column exists to tell apart.
+  def declared_layer_label(observation)
+    layer = observation.intent_layer
+    return layer if layer.present?
+
+    content_tag(:span, "undeclared", class: "text-app-muted")
+  end
+
   # The title of the index's FILTERED-empty state — the page a `?q=` or `?role=` ask narrowed to
   # nothing on an account that holds repositories (`RepositoriesController#narrowing_matched_nothing?`
   # is the gate; this is its words).

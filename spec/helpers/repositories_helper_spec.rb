@@ -126,4 +126,32 @@ RSpec.describe RepositoriesHelper, type: :helper do
       expect(confirmation).to include("3 repositories: acme/a (2 repositories since deleted)")
     end
   end
+
+  # SPGD-1651 — the Layer cell the three per-example tables share. Explicit-receiver calls, so a
+  # misplaced (outside-the-module or private) definition fails here rather than hiding behind the
+  # implicit-receiver call the templates make.
+  describe "#declared_layer_label" do
+    def observed(layer) = SpecObservation.new(intent_layer: layer, spec_file_path: "spec/models/a_spec.rb")
+
+    # @intent: { entity: "RepositoriesHelper", action: "define the layer cell method in the module", behavior: "the layer label method is a public instance method of the helper module and never a private patch on Object", layer: "unit" }
+    it "is defined on RepositoriesHelper and not on Object" do
+      expect(RepositoriesHelper.instance_methods).to include(:declared_layer_label)
+      expect(Object.private_method_defined?(:declared_layer_label)).to be(false)
+    end
+
+    # @intent: { entity: "RepositoriesHelper", action: "label an undeclared layer", behavior: "a nil or blank layer on a spec/models path reads the muted word undeclared and never a path-inferred layer", layer: "unit" }
+    it "reads nil and blank layers as the muted word undeclared, never inferring from the path" do
+      [nil, "", "  "].each do |layer|
+        label = helper.declared_layer_label(observed(layer))
+
+        expect(label).to have_css("span.text-app-muted", text: "undeclared", exact_text: true)
+        expect(label).not_to include("unit")
+      end
+    end
+
+    # @intent: { entity: "RepositoriesHelper", action: "label a declared layer", behavior: "a declared layer is returned verbatim whatever the spec path suggests", layer: "unit" }
+    it "returns a declared token verbatim" do
+      expect(helper.declared_layer_label(observed("request"))).to eq("request")
+    end
+  end
 end

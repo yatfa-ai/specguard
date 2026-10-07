@@ -143,7 +143,7 @@
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel above and may legitimately differ from it.
           </p>
-          <%= render UI::TableComponent.new(columns: ["Test", "Duration", "Outcome"],
+          <%= render UI::TableComponent.new(columns: ["Test", "Layer", "Duration", "Outcome"],
                                             describedby: "spec-file-examples-basis") do %>
             <% @spec_file_examples.rows.each do |observation| %>
               <tr>
@@ -163,6 +163,13 @@
                       this partial renders — `@spec_file_examples` is assigned only under
                       `@latest_test_run` — and `#github_blob_url` is string composition. %>
                   <%= render "repositories/definition_site_link", observation: observation %>
+                </td>
+                <td class="px-3 py-2 text-app-content">
+                  <%# The DECLARED layer, through `RepositoriesHelper#declared_layer_label` — the one
+                      seam the three per-example tables share, which carries why a nil reads
+                      "undeclared" and why nothing here is inferred from the path. Already in memory:
+                      `in_file` selects `spec_observations.*`. %>
+                  <%= declared_layer_label(observation) %>
                 </td>
                 <td class="px-3 py-2 text-app-content tabular-nums">
                   <%# Through `SpecObservation#duration_label`, this table's one formatting seam and
