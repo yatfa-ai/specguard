@@ -1063,7 +1063,8 @@ class RepositoryOverview
           # neither case is a default admissible: substituting a directory guess would serve an
           # inference in the field reserved for a declaration, and substituting `""` would make "not
           # declared" indistinguishable from a layer named by the empty string.
-          intent_layer: observation.intent_layer
+          intent_layer: observation.intent_layer,
+          declared_intent: serialized_declared_intent(observation)
         }
       end,
       recorded_count: slowest.recorded_count,
@@ -1300,12 +1301,12 @@ class RepositoryOverview
   # `Row#coverage_label`, so the API and the panel list the same examples of the same file of the
   # same run, in the same order, off the one read.
   #
-  # THE ROW SHAPE IS `serialized_slowest_examples`' SEVEN FIELDS, field for field, because this
+  # THE ROW SHAPE IS `serialized_slowest_examples`' EIGHT FIELDS, field for field, because this
   # endpoint's two per-example blocks describe the same rows of the same table and a client that
   # learned to read one must not have to learn a second shape to read the other. The seventh is
-  # `intent_layer` (SPGD-851), which arrived on the run-wide ranking and reached this block through
-  # exactly that rule rather than because this block asked for it — the field list below says so at
-  # the rows themselves. `duration_seconds`
+  # `intent_layer` (SPGD-851) and the eighth `declared_intent` (SPGD-1665); both arrived on the
+  # run-wide ranking and reached this block through exactly that rule rather than because this block
+  # asked for it — the field list below says so at the rows themselves. `duration_seconds`
   # is nullable and NEVER coalesced to `0.0`: an example this run recorded and did not time has no
   # duration to report — `Ingest::ObservationRecorder#attributes` writes the nil faithfully — and a
   # zero there would assert an example that cost nothing. Those rows are LISTED rather than
@@ -1349,7 +1350,7 @@ class RepositoryOverview
       # `history_window.branch`'s rule: a malformed shape is no ask at all and reaches no block, so
       # what is served here is always the path the rows were actually gathered under.
       path: examples.path,
-      # THE SAME SEVEN FIELDS `serialized_slowest_examples` SERVES, AND THE REPETITION IS CHOSEN. The
+      # THE SAME EIGHT FIELDS `serialized_slowest_examples` SERVES, AND THE REPETITION IS CHOSEN. The
       # two per-example blocks on this endpoint must agree field for field, and a shared
       # `serialized_example_row` would make that structural rather than asserted — the stronger
       # guarantee, and it is declined here for this file's standing reason: each block states its
@@ -1372,7 +1373,8 @@ class RepositoryOverview
           spec_file_path: observation.spec_file_path,
           duration_seconds: observation.duration_seconds,
           outcome: observation.outcome,
-          intent_layer: observation.intent_layer
+          intent_layer: observation.intent_layer,
+          declared_intent: serialized_declared_intent(observation)
         }
       end,
       recorded_count: examples.recorded_count,
@@ -1420,7 +1422,7 @@ class RepositoryOverview
   # `#coverage_label`, which is skipped here exactly as the two rungs above skip `Row#duration_label`
   # and `SpecFileExamples#coverage_label`: `"25 of 40"` is two integers a client cannot subtract.
   #
-  # THE ROW SHAPE IS `serialized_slowest_examples`' SEVEN FIELDS, field for field, on the rule
+  # THE ROW SHAPE IS `serialized_slowest_examples`' EIGHT FIELDS, field for field, on the rule
   # `serialized_spec_file_examples` states: this endpoint's now THREE per-example blocks describe the
   # same rows of the same table, and a client that learned to read one must not have to learn a
   # second shape to read the others. `duration_seconds` is nullable and NEVER coalesced to `0.0` —
@@ -1469,7 +1471,7 @@ class RepositoryOverview
       # block, so what is served here is always the description the rows were actually gathered
       # under.
       name: examples.name,
-      # THE SAME SEVEN FIELDS the two per-example blocks above serve, and the repetition is chosen for
+      # THE SAME EIGHT FIELDS the two per-example blocks above serve, and the repetition is chosen for
       # the reason `serialized_spec_file_examples` states in full: each block states its own contract
       # beside its own rows, and what enforces the agreement is a `contain_exactly` over these names
       # in each block's request spec, so a field added to one and not the others goes red rather than
@@ -1487,7 +1489,8 @@ class RepositoryOverview
           spec_file_path: observation.spec_file_path,
           duration_seconds: observation.duration_seconds,
           outcome: observation.outcome,
-          intent_layer: observation.intent_layer
+          intent_layer: observation.intent_layer,
+          declared_intent: serialized_declared_intent(observation)
         }
       end,
       recorded_count: examples.recorded_count,
@@ -1557,7 +1560,7 @@ class RepositoryOverview
   # adopting repository asks after every push, so asking it of an older commit is the ordinary use
   # rather than the exotic one.
   #
-  # THE ROW SHAPE IS SIX FIELDS AND DELIBERATELY NOT THE OTHER BLOCKS' SEVEN. The three per-example
+  # THE ROW SHAPE IS SIX FIELDS AND DELIBERATELY NOT THE OTHER BLOCKS' EIGHT. The three per-example
   # blocks above agree field for field on purpose — `serialized_spec_file_examples` states why, and a
   # `contain_exactly` in each of their request specs enforces it — and this block is not a fourth
   # member of that set. Those three list examples a reader has come to MEASURE, so they carry
@@ -1565,11 +1568,13 @@ class RepositoryOverview
   # carries what opens a file plus what SpecGuard already read of the row, and nothing else. `outcome`
   # would be worse than surplus here: an
   # unannotated example's outcome is a fact about the last run, and a worklist sorted for editing that
-  # also whispers "this one failed" invites the reader to do the other job. The third withheld field is
+  # also whispers "this one failed" invites the reader to do the other job. The third and fourth withheld fields are
   # `intent_layer` (SPGD-851), and it is withheld for a STRUCTURAL reason rather than an editorial one:
   # this block's population is BY DEFINITION the rows carrying no layer — an unannotated example
   # declared none, and the envelope requires `intent` to be ABSENT when `status` is `"unannotated"` —
   # so the key would be a column of guaranteed nulls, saying nothing on every row it appeared on. The
+  # same argument withholds `declared_intent` (SPGD-1665): this block already serves the OTHER half,
+  # `derived_intent`, and an unannotated row has no declaration to serve. The
   # six are `name`, `spec_file_path`, `file_path` and `line_number`, plus `reading` and
   # `derived_intent` (SPGD-711) — and of the locating four the last three are the pair
   # `serialized_spec_file_examples` keeps apart plus the line: `file_path` is where the example is
@@ -1747,13 +1752,13 @@ class RepositoryOverview
       # new query.
       spec_file: examples.spec_file,
       spec_directory: examples.spec_directory,
-      # SIX ROW FIELDS, NOT THE OTHER PER-EXAMPLE BLOCKS' SEVEN, and the difference is asserted rather
+      # SIX ROW FIELDS, NOT THE OTHER PER-EXAMPLE BLOCKS' EIGHT, and the difference is asserted rather
       # than structural on purpose — the same way their agreement is. The two sets are not nested:
-      # this block withholds three of theirs and carries two — `reading` and `derived_intent` — that
+      # this block withholds four of theirs and carries two — `reading` and `derived_intent` — that
       # none of them serves. A `contain_exactly` over these
-      # names in this block's request spec goes red if `duration_seconds`, `outcome` or `intent_layer`
-      # is added here, and the siblings' own `contain_exactly`s go red if one of theirs is dropped to
-      # match, so neither set can drift into the other unnoticed.
+      # names in this block's request spec goes red if `duration_seconds`, `outcome`, `intent_layer` or
+      # `declared_intent` is added here, and the siblings' own `contain_exactly`s go red if one of
+      # theirs is dropped to match, so neither set can drift into the other unnoticed.
       rows: examples.rows.map do |observation|
         {
           name: observation.name,
@@ -1801,6 +1806,29 @@ class RepositoryOverview
       unreadable_count: examples.unreadable_count,
       limit: SpecObservation::UNANNOTATED_EXAMPLES_LIMIT
     }
+  end
+
+  # One row's DECLARED `@intent` as three fields, or `null` when the author declared none of them
+  # (SPGD-1665) — the declared twin of `serialized_derived_intent`, served on the three per-example
+  # blocks that span annotated and unannotated rows (`slowest_examples`, `spec_file_examples`,
+  # `repeated_description_examples`) so the three call sites cannot drift.
+  #
+  # DECLARED ONLY. This reads the three `intent_*` columns the ingest recorder stored from the
+  # author's own annotation and NEVER falls back to `SpecObservation#derived_intent`: a regex guess
+  # from the description must not appear in the field reserved for the author's word (an unannotated
+  # row's guess is `unannotated_examples#derived_intent`, a different key on a different block).
+  #
+  # Each part is read with `.presence`, as `_authored_intent.html.erb` does, so an empty string is
+  # never served as a value. The parts are independent: a row declaring only `behavior` serves a
+  # non-nil object with nil `entity`/`action`. The object is `nil` — never a hash of nils — when none
+  # of the three is present. The columns are already loaded on every row source, so this adds no query.
+  def serialized_declared_intent(observation)
+    entity = observation.intent_entity.presence
+    action = observation.intent_action.presence
+    behavior = observation.intent_behavior.presence
+    return nil unless entity || action || behavior
+
+    { entity: entity, action: action, behavior: behavior }
   end
 
   # One row's derived reading as three fields, or `null` when the description yielded none.

@@ -152,11 +152,11 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # and says out loud what a new key owes this block before it ships.
     #
     # AC7 IS THE SECOND HALF OF THIS EXAMPLE. The three per-example blocks on this endpoint agree on
-    # SEVEN fields and this one serves SIX, which is a difference asserted rather than structural —
-    # exactly as their agreement is. The two sets are not nested: this block withholds three of
+    # EIGHT fields and this one serves SIX, which is a difference asserted rather than structural —
+    # exactly as their agreement is. The two sets are not nested: this block withholds four of
     # theirs and carries two — `reading` and `derived_intent` (SPGD-711) — that none of them serves.
     # Their own `contain_exactly`s go red if one of theirs is dropped
-    # to match this; this one goes red if `duration_seconds`, `outcome` or `intent_layer` is added
+    # to match this; this one goes red if `duration_seconds`, `outcome`, `intent_layer` or `declared_intent` is added
     # here to match them. Both directions are pinned, in the two places that own them.
     #
     # `intent_layer` is the third withheld field (SPGD-851) and the one whose absence is STRUCTURAL
@@ -177,13 +177,14 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       expect(served["rows"].first.keys)
         .to contain_exactly("name", "file_path", "line_number", "spec_file_path", "reading",
                             "derived_intent")
-      # Not the other blocks' seven-field per-example shape, and specifically not by accident: the
+      # Not the other blocks' eight-field per-example shape, and specifically not by accident: the
       # endpoint's other per-example block is on the same response and DOES carry all three.
       expect(served["rows"].first).not_to have_key("duration_seconds")
       expect(served["rows"].first).not_to have_key("outcome")
       expect(served["rows"].first).not_to have_key("intent_layer")
+      expect(served["rows"].first).not_to have_key("declared_intent")
       expect(latest_run(query: ask).dig("slowest_examples", "rows").first)
-        .to include("duration_seconds", "outcome", "intent_layer")
+        .to include("duration_seconds", "outcome", "intent_layer", "declared_intent")
     end
 
     # ⭐ AC2. THE ASSERTION THIS WHOLE FILE EXISTS FOR. Every figure is taken off the SAME RESPONSE
