@@ -2840,6 +2840,73 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(response.body).not_to include("0 tests")
     end
 
+    # The @intent share on the card — the sentence `show` prints, through the one
+    # `test_run_annotated_share` seam. Each example pins the card against the helper's output for
+    # the same run, so the card's markup (not a copy of its wording) is under test.
+    describe "the annotated share on each card" do
+      def share_helper = ApplicationController.helpers
+
+      # @intent: {"entity": "TestRun", "action": "print annotated share", "behavior": "a card whose newest run has 5,000 of 20,000 tests annotated prints 25.0% — 5,000 of 20,000 tests carry an @intent. equal to the shared helper's output, and show prints the same string", "layer": "request"}
+      it "prints the share sentence, equal to the shared helper's output, and show prints the same" do
+        repository = create_repository(user: @user)
+        run = create_test_run(repository: repository, commit_sha: "feedfacecafe0301",
+                              total_specs_count: 20_000, annotated_specs_count: 5_000)
+
+        get repositories_path
+
+        expect(page_text).to include("25.0% — 5,000 of 20,000 tests carry an @intent.")
+        expect(page_text).to include(share_helper.test_run_annotated_share(run))
+
+        get repository_path(repository)
+
+        expect(page_text).to include(share_helper.test_run_annotated_share(run))
+      end
+
+      # @intent: {"entity": "TestRun", "action": "print zero annotated share", "behavior": "a measured run with no annotated tests prints 0.0% — 0 of 40 tests carry an @intent. as a real zero with its denominator", "layer": "request"}
+      it "prints a real zero share, with its denominator, for a measured unannotated run" do
+        repository = create_repository(user: @user)
+        create_test_run(repository: repository, commit_sha: "feedfacecafe0302",
+                        total_specs_count: 40, annotated_specs_count: 0)
+
+        get repositories_path
+
+        expect(page_text).to include("0.0% — 0 of 40 tests carry an @intent.")
+      end
+
+      # @intent: {"entity": "TestRun", "action": "omit annotated share", "behavior": "a run with total_specs_count 0 renders no share sentence on its card and never a 0.0% share", "layer": "request"}
+      it "renders no share sentence for a run that measured no suite" do
+        create_test_run(repository: create_repository(user: @user), commit_sha: "feedfacecafe0303",
+                        total_specs_count: 0, annotated_specs_count: 0)
+
+        get repositories_path
+
+        expect(page_text).not_to match(/carry an @intent/)
+        expect(page_text).not_to include("0.0%")
+      end
+
+      # @intent: {"entity": "TestRun", "action": "omit annotated share", "behavior": "a repository with no run prints No runs yet and no share line", "layer": "request"}
+      it "renders no share line for a repository with no run" do
+        create_repository(user: @user)
+
+        get repositories_path
+
+        expect(page_text).to include("No runs yet")
+        expect(page_text).not_to match(/carry an @intent/)
+      end
+
+      # @intent: {"entity": "TestRun", "action": "print annotated share", "behavior": "a half-delivered two-shard run prints its partial share and still prints the shared delivery note", "layer": "request"}
+      it "prints the partial share of a sharded in-progress run beside the unchanged delivery note" do
+        repository = create_repository(user: @user)
+        run = sharded_run(repository, shards: 2, commit_sha: "feedfacecafe0304", branch: "main",
+                          annotated_specs_count: 2_500)
+
+        get repositories_path
+
+        expect(page_text).to include("25.0% — 2,500 of 10,000 tests carry an @intent.")
+        expect(page_text).to include(share_helper.test_run_delivery_note(run))
+      end
+    end
+
     # @intent: {"entity": "TestRun", "action": "batch latest-run loads", "behavior": "three cards load their latest runs from exactly one test_runs SELECT, no spec_intents query runs at all, and the page prints 11 tests", "layer": "request"}
     it "loads every card's latest run in one query, however long the list is" do
       ["acme/one", "acme/two", "acme/three"].each_with_index do |full_name, index|
@@ -5040,7 +5107,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
         narrowed = queries_against("test_runs") { get repositories_path, params: { q: "acme" } }
         reordered = queries_against("test_runs") { get repositories_path, params: { sort: "stale" } }
 
-        expect(page_text.scan(/10 tests/).size).to eq(3)
+        # One suite-size badge per card. `(?<!of )` because each card's annotated-share sentence
+        # ("0.0% — 0 of 10 tests carry an @intent.") now also spells "10 tests" — a second
+        # occurrence per card that this count is not about.
+        expect(page_text.scan(/(?<!of )10 tests/).size).to eq(3)
         expect(narrowed.size).to eq(1)
         expect(reordered.size).to eq(1)
       end
