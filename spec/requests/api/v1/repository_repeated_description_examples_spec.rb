@@ -143,7 +143,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
   end
 
   describe "a description that was asked for" do
-    # AC2. The block exists, its rows carry the seven operands the endpoint's other two per-example
+    # AC2. The block exists, its rows carry the eight operands the endpoint's other two per-example
     # blocks already serve, and the GROUP's two population figures sit beside them. The array is
     # asserted as a SEQUENCE — `eq`, not `match_array` — because "slowest first, untimed last" is
     # half of what this key promises, and the untimed row's position is the half a set comparison
@@ -159,16 +159,16 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
           # (a declared token beside an honest null) is pinned in `repository_latest_run_spec.rb`.
           { "name" => looped, "file_path" => order_spec, "line_number" => 4,
             "spec_file_path" => order_spec, "duration_seconds" => 4.0, "outcome" => "passed",
-            "intent_layer" => nil },
+            "intent_layer" => nil, "declared_intent" => nil },
           { "name" => looped, "file_path" => order_spec, "line_number" => 12,
             "spec_file_path" => order_spec, "duration_seconds" => 1.5, "outcome" => "failed",
-            "intent_layer" => nil },
+            "intent_layer" => nil, "declared_intent" => nil },
           { "name" => looped, "file_path" => billable_shared, "line_number" => 7,
             "spec_file_path" => refund_spec, "duration_seconds" => 0.5, "outcome" => "passed",
-            "intent_layer" => nil },
+            "intent_layer" => nil, "declared_intent" => nil },
           { "name" => looped, "file_path" => order_spec, "line_number" => 20,
             "spec_file_path" => order_spec, "duration_seconds" => nil, "outcome" => "pending",
-            "intent_layer" => nil }
+            "intent_layer" => nil, "declared_intent" => nil }
         ],
         "recorded_count" => 4,
         "timed_count" => 3,
@@ -188,7 +188,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
         .to contain_exactly("name", "rows", "recorded_count", "timed_count", "limit")
       expect(served["rows"].first.keys)
         .to contain_exactly("name", "file_path", "line_number", "spec_file_path",
-                            "duration_seconds", "outcome", "intent_layer")
+                            "duration_seconds", "outcome", "intent_layer", "declared_intent")
     end
 
     # AC5 again, and the assertion neither block's own contract can make alone: this endpoint now has

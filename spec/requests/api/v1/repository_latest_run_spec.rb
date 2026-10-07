@@ -1535,7 +1535,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     def slowest_examples = get_repository.dig("latest_run", "slowest_examples")
 
-    # AC1 + AC2. Every row carries all seven operands, and the array is asserted as a SEQUENCE —
+    # AC1 + AC2. Every row carries all eight operands, and the array is asserted as a SEQUENCE —
     # `eq`, not `match_array` — against a fixture whose insertion order it does not match.
     #
     # `intent_layer` runs the whole width of its own axis here: two rows carry a DECLARED enum token
@@ -1550,19 +1550,19 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
           { "name" => "Checkout completes an order",
             "file_path" => "spec/requests/checkout_spec.rb", "line_number" => 3,
             "spec_file_path" => "spec/requests/checkout_spec.rb",
-            "duration_seconds" => 9.5, "outcome" => "failed", "intent_layer" => "request" },
+            "duration_seconds" => 9.5, "outcome" => "failed", "intent_layer" => "request", "declared_intent" => nil },
           { "name" => "Search ranks by relevance",
             "file_path" => "spec/requests/search_spec.rb", "line_number" => 2,
             "spec_file_path" => "spec/requests/search_spec.rb",
-            "duration_seconds" => 6.25, "outcome" => nil, "intent_layer" => nil },
+            "duration_seconds" => 6.25, "outcome" => nil, "intent_layer" => nil, "declared_intent" => nil },
           { "name" => "User validates its email",
             "file_path" => "spec/models/user_spec.rb", "line_number" => 11,
             "spec_file_path" => "spec/models/user_spec.rb",
-            "duration_seconds" => 2.0, "outcome" => "passed", "intent_layer" => "unit" },
+            "duration_seconds" => 2.0, "outcome" => "passed", "intent_layer" => "unit", "declared_intent" => nil },
           { "name" => "Invoice totals its line items",
             "file_path" => "spec/models/invoice_spec.rb", "line_number" => 7,
             "spec_file_path" => "spec/models/invoice_spec.rb",
-            "duration_seconds" => 0.5, "outcome" => "pending", "intent_layer" => nil }
+            "duration_seconds" => 0.5, "outcome" => "pending", "intent_layer" => nil, "declared_intent" => nil }
         ]
       )
     end
@@ -1601,7 +1601,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "limit")
       expect(slowest_examples["rows"].first.keys)
         .to contain_exactly("name", "file_path", "line_number", "spec_file_path",
-                            "duration_seconds", "outcome", "intent_layer")
+                            "duration_seconds", "outcome", "intent_layer", "declared_intent")
     end
 
     # AC6. Read off the same presenter `repositories#show` assigns to `@slowest_examples` rather
