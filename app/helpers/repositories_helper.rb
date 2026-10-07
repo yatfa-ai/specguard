@@ -1798,4 +1798,47 @@ module RepositoriesHelper
       "window total, so a test that is cheap today and was expensive across the window falls " \
       "through it."
   end
+
+  # ⭐ What share of the suite the near-duplicate panel's groups cover, off the STORED census Hash
+  # (string keys, exactly as `NearDuplicateCensus.stored_block_for` returns it — never the live
+  # `NearDuplicateClusters`). Two grains, kept apart because the census keeps them apart:
+  #
+  #   * TESTS  — `clustered_identity_count` of `identity_count` (distinct compared test texts);
+  #   * EXAMPLES — `clustered_example_count` of `recorded_count` (every run row the weighed run
+  #     recorded). `recorded_count` INCLUDES the rows that resolved to no comparable text, so the
+  #     sentence says its denominator is the run's recorded total rather than the compared subset.
+  #
+  # nil unless all four figures are Integers and both denominators are positive: a census stored
+  # before a key existed renders no sentence, never "0 of 0" or an invented zero.
+  def near_duplicate_coverage_sentence(census)
+    return nil unless census.is_a?(Hash)
+
+    keys = %w[clustered_identity_count identity_count clustered_example_count recorded_count]
+    values = keys.map { |key| census[key] }
+    return nil unless values.all?(Integer)
+
+    clustered_tests, tests, clustered_examples, recorded = values
+    return nil unless tests.positive? && recorded.positive?
+
+    "These groups cover #{number_with_delimiter(clustered_tests)} of #{number_with_delimiter(tests)} " \
+      "compared #{"test".pluralize(tests)}, and #{number_with_delimiter(clustered_examples)} of the " \
+      "#{number_with_delimiter(recorded)} #{"example".pluralize(recorded)} the weighed run recorded " \
+      "(a total that includes examples that could not be compared)."
+  end
+
+  # The examples the census could not compare, stated where the panel would otherwise read as if
+  # every recorded example had been looked at. `unresolved_count` counts rows that reached no
+  # resolvable text; it is the sibling of `#slowest_tests_unresolved_clause` and names the same
+  # cause (matching runs just after a run lands). nil when the key is absent, not an Integer, or 0 —
+  # a "0 examples were not compared" clause would be arithmetic.
+  def near_duplicate_unresolved_clause(census)
+    return nil unless census.is_a?(Hash)
+
+    count = census["unresolved_count"]
+    return nil unless count.is_a?(Integer) && count.positive?
+
+    "#{number_with_delimiter(count)} #{"example".pluralize(count)} in the weighed run reached no " \
+      "resolvable text and #{count == 1 ? "was" : "were"} not compared; that matching runs just " \
+      "after a run lands rather than during it."
+  end
 end

@@ -107,6 +107,7 @@
               ) %>
         </div>
       <% else %>
+        <% clear_unresolved = near_duplicate_unresolved_clause(census).then { |clause| clause ? " #{clause}" : "" } %>
         <div id="near-duplicate-clusters-clear">
           <%= render UI::EmptyStateComponent.new(
                 title: "Nothing reads alike at this floor",
@@ -115,7 +116,7 @@
                              "#{'test'.pluralize(census['identity_count'].to_i)} and no two " \
                              "of them cleared the similarity floor, so there is no group to " \
                              "show. That is a fact about this floor and this census, not a " \
-                             "guarantee about the suite."
+                             "guarantee about the suite.#{clear_unresolved}"
               ) %>
         </div>
       <% end %>
@@ -136,6 +137,17 @@
         A member's time counts only its timed examples in the weighed run, so for a partially timed
         member the figure is a floor.
       </p>
+      <%# COVERAGE and the examples NOT compared, each stated ONCE for the panel off the stored Hash
+          (both helpers return nil when their keys are absent, so an older stored census renders
+          neither sentence and no zero). %>
+      <% coverage_sentence = near_duplicate_coverage_sentence(census) %>
+      <% if coverage_sentence %>
+        <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-coverage"><%= coverage_sentence %></p>
+      <% end %>
+      <% unresolved_clause = near_duplicate_unresolved_clause(census) %>
+      <% if unresolved_clause %>
+        <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-unresolved"><%= unresolved_clause %></p>
+      <% end %>
       <%# THE LAYER PROVENANCE, stated ONCE for the panel and never per cluster. `layer_source` is the
           census's own stamp: non-nil only when at least one clustered member declared a layer, so a
           suite that declared nothing gets no layer text anywhere on this panel. %>

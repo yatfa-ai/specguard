@@ -473,6 +473,111 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     end
   end
 
+  # SPGD-1649: how much of the suite the groups cover, and how many examples were not compared —
+  # both rendered from the stored Hash's figures, never recomputed.
+  describe "coverage and the examples not compared" do
+    before { ingest(repository, pair_specs) }
+
+    let(:census) { NearDuplicateCensus.find_by!(repository_id: repository.id) }
+    let(:cluster) { census.payload["clusters"].sole }
+    let(:no_text) { "reached no resolvable text" }
+
+    def store(drop: [], overrides: {}, clusters: nil)
+      payload = census.payload.merge(overrides).except(*drop)
+      payload = payload.merge("clusters" => clusters) if clusters
+      census.update!(payload: payload)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "state coverage", "behavior": "the panel states once how many compared tests and how many recorded examples the groups cover, taken from the stored census figures", "layer": "request"}
+    it "states the groups' coverage of compared tests and of recorded examples" do
+      get repository_path(repository)
+
+      stored = NearDuplicateCensus.stored_block_for(repository)
+      expect(stored.values_at("clustered_identity_count", "identity_count",
+                              "clustered_example_count", "recorded_count")).to eq([2, 3, 4, 5])
+      sentence = panel.find("#near-duplicate-clusters-coverage").text(normalize_ws: true)
+      expect(sentence).to include("2 of 3 compared tests", "4 of the 5 examples the weighed run recorded")
+      expect(panel).to have_css("#near-duplicate-clusters-coverage", count: 1)
+      expect(panel).to have_no_css("[data-near-duplicate-cluster] #near-duplicate-clusters-coverage")
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "omit a zero unresolved clause", "behavior": "an unresolved_count of 0 renders no unresolved element and no reached-no-resolvable-text wording", "layer": "request"}
+    it "renders no unresolved clause when nothing was unresolved" do
+      store(overrides: { "unresolved_count" => 0 })
+
+      get repository_path(repository)
+
+      expect(panel).to have_no_css("#near-duplicate-clusters-unresolved")
+      expect(panel.text(normalize_ws: true)).not_to include(no_text)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "state unresolved examples", "behavior": "a positive unresolved_count renders once, with the count and the matching-runs-after-ingest explanation, outside any cluster", "layer": "request"}
+    it "states the unresolved examples once when some were not compared" do
+      store(overrides: { "unresolved_count" => 3 })
+
+      get repository_path(repository)
+
+      clause = panel.find("#near-duplicate-clusters-unresolved").text(normalize_ws: true)
+      expect(clause).to include("3 examples", no_text, "were not compared", "just after a run lands")
+      expect(panel.text(normalize_ws: true).scan(no_text).size).to eq(1)
+      expect(panel).to have_no_css("[data-near-duplicate-cluster] #near-duplicate-clusters-unresolved")
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "singularize unresolved clause", "behavior": "an unresolved_count of 1 reads 1 example ... was not compared", "layer": "request"}
+    it "uses the singular for one unresolved example" do
+      store(overrides: { "unresolved_count" => 1 })
+
+      get repository_path(repository)
+
+      expect(panel.find("#near-duplicate-clusters-unresolved").text(normalize_ws: true))
+        .to include("1 example in the weighed run", "was not compared")
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "state unresolved in the clear state", "behavior": "when no group exists but examples were unresolved, the nothing-reads-alike description also names them", "layer": "request"}
+    it "appends the unresolved clause to the nothing-reads-alike state" do
+      store(overrides: { "unresolved_count" => 3 }, clusters: [])
+
+      get repository_path(repository)
+
+      clear = panel.find("#near-duplicate-clusters-clear").text(normalize_ws: true)
+      expect(clear).to include("Nothing reads alike at this floor", "3 examples", no_text)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "omit unresolved in the clear state at zero", "behavior": "the nothing-reads-alike state names no unresolved examples when the count is 0", "layer": "request"}
+    it "keeps the nothing-reads-alike state clean at zero unresolved" do
+      store(overrides: { "unresolved_count" => 0 }, clusters: [])
+
+      get repository_path(repository)
+
+      expect(panel.find("#near-duplicate-clusters-clear").text(normalize_ws: true)).not_to include(no_text)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "degrade missing coverage keys", "behavior": "a stored census lacking the clustered counts and unresolved_count renders neither element and no of-0 figure", "layer": "request"}
+    it "renders neither sentence when the stored census lacks the keys" do
+      store(drop: %w[clustered_identity_count clustered_example_count unresolved_count])
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(panel).to have_no_css("#near-duplicate-clusters-coverage")
+      expect(panel).to have_no_css("#near-duplicate-clusters-unresolved")
+      expect(panel.text(normalize_ws: true)).not_to match(/of 0\b/)
+      expect(panel).to have_css("[data-near-duplicate-cluster]", count: 1)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "keep the page query budget", "behavior": "rendering the coverage and unresolved sentences issues no census or spec_identities query beyond the single stored read", "layer": "request"}
+    it "adds no queries for the new sentences" do
+      store(overrides: { "unresolved_count" => 3 })
+
+      census_reads = queries_against('FROM "near_duplicate_censuses"') { get repository_path(repository) }
+      identity_reads = queries_against("spec_identities") { get repository_path(repository) }
+
+      expect(panel).to have_css("#near-duplicate-clusters-unresolved")
+      expect(census_reads.size).to eq(1)
+      expect(identity_reads).to be_empty
+    end
+  end
+
   describe "a cluster whose examples were never timed" do
     before do
       ingest(repository, pair_specs.map { |row| row.merge(duration: nil) })
