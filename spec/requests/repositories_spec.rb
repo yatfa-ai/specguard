@@ -1186,6 +1186,39 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(panel).to have_text("25.0% — 1 of 4 tests carry an @intent.", normalize_ws: true)
     end
 
+    # The WHOLE-RUN declared-layer mix, beside the two reading rows. Counted from each example's own
+    # declared `@intent` layer: a `unit` example under spec/requests/ is `unit`, an undeclared one is
+    # `undeclared`, and the row says so rather than letting undeclared read as "not readable".
+    # @intent: {"entity": "TestRun", "action": "show the declared layer mix", "behavior": "a run with two unit examples, one request example and one undeclared example prints Declared layers unit 2 · request 1 · undeclared 1 with the never-inferred sentence, and omits the row on a run with no per-example rows", "layer": "request"}
+    it "prints the run-wide declared layers, and omits the row on a run with no per-example rows" do
+      repository = create_repository(user: @user, github_full_name: "acme/layered-suite")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe1669", branch: "main", total_specs_count: 4,
+          annotated_specs_count: 3, duration_seconds: 60.0 },
+        specs: [annotated_spec(file_path: "spec/requests/a_spec.rb", line_number: 1, layer: "unit"),
+                annotated_spec(file_path: "spec/requests/b_spec.rb", line_number: 2, layer: "unit"),
+                annotated_spec(file_path: "spec/models/c_spec.rb", line_number: 3, layer: "request"),
+                unannotated_spec(file_path: "spec/requests/d_spec.rb", line_number: 4,
+                                 name: "Checkout rejects an expired card")].map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("Declared layers unit 2 · request 1 · undeclared 1", normalize_ws: true)
+      expect(panel).to have_text("never inferred from the path", normalize_ws: true)
+      expect(panel).to have_text("which is not \"not readable by SpecGuard\"", normalize_ws: true)
+
+      bare = create_repository(user: @user, github_full_name: "acme/totals-only")
+      bare.test_runs.create!(commit_sha: "feedfacecafe1670", branch: "main",
+                             total_specs_count: 3, annotated_specs_count: 2)
+
+      get repository_path(bare)
+
+      expect(overview_panel).to have_no_text("Declared layers")
+    end
+
     # ⭐ THE DESTINATION, AND THE SENTENCE THAT MAY NOT DESCRIBE AN EMPTY SET.
     #
     # Every other branch of this paragraph discloses what a derived reading COSTS — no preconditions,
