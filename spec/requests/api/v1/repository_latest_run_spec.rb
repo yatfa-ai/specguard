@@ -130,6 +130,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # Null, not five zeros: this run recorded no per-example rows, so it has no declared-layer mix
         # to state — the same `recorded: 0` fact the readings beside it carry.
         "layer_counts" => nil,
+        # Null for the same reason: no per-example rows, so no time-by-layer to state.
+        "layer_durations" => nil,
         "duration_seconds" => 42.5,
         # Null, not an empty block: this fixture has no shards, so there is no composition to
         # explain and the MAX the key above reports *is* the SUM. The key is still present, on the
@@ -542,7 +544,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(get_repository["latest_run"].keys)
         .to contain_exactly("commit_sha", "branch", "total_specs", "annotated_specs",
-                            "annotated_ratio", "intent_readings", "layer_counts", "duration_seconds", "shards",
+                            "annotated_ratio", "intent_readings", "layer_counts", "layer_durations", "duration_seconds",
+                            "shards",
                             "spec_files",
                             "spec_directories", "slowest_examples", "repeated_descriptions",
                             "spec_directory_files", "spec_file_examples",
@@ -2558,6 +2561,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # Null, not five zeros: this run recorded no per-example rows, so it has no declared-layer mix
         # to state — the same `recorded: 0` fact the readings beside it carry.
         "layer_counts" => nil,
+        # Null for the same reason: no per-example rows, so no time-by-layer to state.
+        "layer_durations" => nil,
         "duration_seconds" => 42.5,
         "shards" => nil, "spec_files" => nil, "spec_directories" => nil,
         "slowest_examples" => nil, "repeated_descriptions" => nil,

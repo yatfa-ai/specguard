@@ -483,6 +483,22 @@
               exactly as the two reading rows beside it: a run with no per-example rows has no mix
               to state. Said once here rather than in the row, so the def-list stays a list. %>
           <% if readings.recorded? %>
+            <%# "Time by declared layer" rides the SAME memoized aggregate row as "Declared layers"
+                (`TestRun#layer_durations`, one read for both) and is what `latest_run.layer_durations`
+                serves — the panel and the API cannot disagree. It sits under the def-list rather than
+                inside it because it is a sentence with its own basis, not a count. %>
+            <p class="text-xs text-app-content-secondary" id="layer-durations">
+              <span class="font-medium">Time by declared layer</span>:
+              <%= SpecDirectoryDurations.layer_durations_label(@latest_test_run.layer_durations,
+                                                               @latest_test_run.layer_counts) %>
+            </p>
+            <p class="text-xs text-app-muted" id="layer-durations-basis">
+              Each figure is the sum of its examples' own durations — machine time, not wall clock, so
+              it can exceed the run's wall clock when the suite runs in parallel or across shards — and
+              "timed" is how many of that layer's examples reported a duration. The layer is what each
+              example's <code>@intent</code> declared, never inferred from the path; "undeclared" is not
+              "not readable by SpecGuard".
+            </p>
             <p class="text-xs text-app-muted" id="declared-layers-basis">
               "Declared layers" is how many of this run's <%= number_with_delimiter(readings.recorded) %>
               recorded <%= "example".pluralize(readings.recorded) %> declared each layer in their own

@@ -1644,6 +1644,13 @@ class RepositoryOverview
     test_run.layer_counts
   end
 
+  # `latest_run.layer_durations` — the run-wide time by declared layer, read off the SAME memoized
+  # aggregate row as `layer_counts` (no query of its own). `nil` when the run recorded no per-example
+  # rows; `total_seconds` is `nil` (never 0) for a layer with no timed example.
+  def serialized_layer_durations(test_run)
+    test_run.layer_durations
+  end
+
   # THE SUITE-WIDE DUPLICATE CENSUS, served STORED — the first block on this endpoint whose GRAIN
   # is the repository rather than a run or a window of runs, and the one whose cost used to be the
   # reason it had to be opted into at all. Since SPGD-1474 the census is computed once per write
@@ -1944,7 +1951,8 @@ class RepositoryOverview
   public :serialized_spec_files, :serialized_spec_directories, :serialized_slowest_examples,
          :serialized_repeated_descriptions, :serialized_spec_directory_files,
          :serialized_spec_file_examples, :serialized_repeated_description_examples,
-         :serialized_intent_readings, :serialized_layer_counts, :serialized_unannotated_examples,
+         :serialized_intent_readings, :serialized_layer_counts, :serialized_layer_durations,
+         :serialized_unannotated_examples,
          :serialized_unannotated_directories
 
   # The contract the array below is served under, stated as tokens a client can compare rather

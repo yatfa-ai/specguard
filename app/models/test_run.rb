@@ -51,7 +51,15 @@ class TestRun < ApplicationRecord
   # when the run recorded no per-example rows. Taken from the SAME single aggregate row as
   # `intent_readings`, so it costs the page no query of its own. Operands only; the path is never
   # consulted, and an undeclared example is not an unreadable one.
-  def layer_counts = run_counts.last
+  def layer_counts = run_counts[1]
+
+  # The run-wide TIME by declared layer beside {#layer_counts} — `{unit: {total_seconds:, timed_count:},
+  # … undeclared: {…}}` in `SpecObservation::DECLARED_LAYER_KEYS` order — taken from the SAME single
+  # aggregate row, so it costs no query of its own. NIL when the run recorded no per-example rows
+  # (the same rule as `layer_counts`). `total_seconds` is NIL, never 0, for a layer none of whose
+  # examples carried a duration; `timed_count` says over how many of the layer's examples it was
+  # summed. A SUM OF EXAMPLE DURATIONS (machine time), not wall clock.
+  def layer_durations = run_counts[2]
 
   def run_counts = @run_counts ||= SpecObservation.run_counts_in(self)
   private :run_counts
