@@ -480,6 +480,14 @@
                   <span class="block"><%= test_run_delivery_note(run) %></span>
                 <% end %>
               </p>
+              <%# The @intent share, in the exact sentence `show` prints, through the same
+                  `test_run_annotated_share` seam. Nil for a run that measured no suite — no
+                  sentence at all rather than a `0.0%` with no denominator. Free of queries: both
+                  counters are columns on the run the grid already holds. %>
+              <% annotated_share = test_run_annotated_share(run) %>
+              <% if annotated_share %>
+                <p class="text-xs text-app-muted"><%= annotated_share %></p>
+              <% end %>
               <%# What that run COST, beside what it contains. The badge above says how BIG each
                   suite is; nothing on this grid said what any of them is worth in CI minutes, which
                   is the question a page rendering N repositories at once exists to answer — the

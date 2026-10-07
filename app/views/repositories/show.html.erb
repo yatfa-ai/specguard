@@ -480,8 +480,7 @@
 
           <% if measured_tests %>
             <p class="text-xs text-app-muted">
-              <%= @latest_test_run.annotated_ratio %>% — <%= number_with_delimiter(annotated_specs) %>
-              of <%= number_with_delimiter(total_specs) %> tests carry an @intent.
+              <%= test_run_annotated_share(@latest_test_run) %>
               <%# The @intent share is stated FIRST and unconditionally, whatever the readings say.
                   That ordering is a guard, not a habit: the known client-side failure is a scanner
                   that falls over and classifies a whole run unannotated, and on such a run the

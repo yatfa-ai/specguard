@@ -220,6 +220,23 @@ module ApplicationHelper
              class: ("text-app-muted" unless test_run.machine_seconds_reported?))
   end
 
+  # The @intent share of a run's suite, as the one sentence both surfaces print: "25.0% — 5,000 of
+  # 20,000 tests carry an @intent." `show`'s Overview panel and the repositories grid's card render
+  # THIS string, so a card cannot word the share differently from the page it links to.
+  #
+  # Nil for a run that measured no suite (`suite_size_measured?` false): a share needs a denominator,
+  # and `annotated_ratio` floors a zero one to 0.0, which would read as "nothing is annotated" for a
+  # run that reported nothing at all. A measured run with nothing annotated is a real 0.0%.
+  #
+  # `annotated_ratio` is the 0-100 percentage; `annotated_fraction` is the 0-1 API unit and would
+  # print "0.25%". Free of queries: both counters are columns on the run the caller already holds.
+  def test_run_annotated_share(test_run)
+    return nil unless test_run&.suite_size_measured?
+
+    "#{test_run.annotated_ratio}% — #{number_with_delimiter(test_run.annotated_specs_count.to_i)} " \
+      "of #{number_with_delimiter(test_run.total_specs_count.to_i)} tests carry an @intent."
+  end
+
   # What a run COST, as the rows of a definition list — the labels, the pairing with their
   # denominators, and the choice between one row and two. Every surface that states a run's cost
   # renders these: the single-repository Overview panel and the repositories grid's card.
