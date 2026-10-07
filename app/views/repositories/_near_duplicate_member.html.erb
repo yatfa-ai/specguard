@@ -26,5 +26,14 @@
   <span class="text-app-muted tabular-nums">
     (<%= number_with_delimiter(member["example_count"]) %>
     <%= "example".pluralize(member["example_count"].to_i) %>)
+    <%# The member's STORED wall clock over its timed examples in the weighed run. NEVER a zero for an
+        untimed member: `total_seconds` is nil when nothing was timed, and "0.00s" would be this
+        surface inventing the measurement it is missing (same rule as the cluster line). %>
+    ·
+    <% if member["total_seconds"].nil? %>
+      not timed
+    <% else %>
+      <%= SpecObservation.humanized_duration(member["total_seconds"]) %>
+    <% end %>
   </span>
 </li>
