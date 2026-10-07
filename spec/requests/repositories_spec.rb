@@ -1219,6 +1219,38 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(overview_panel).to have_no_text("Declared layers")
     end
 
+    # The run-wide TIME by declared layer, beside the "Declared layers" row — the same single aggregate.
+    # @intent: {"entity": "TestRun", "action": "show time by declared layer", "behavior": "a run with timed unit and request examples and an untimed undeclared one prints Time by declared layer with each layer's summed duration and timed-of-recorded coverage plus the machine-time-not-wall-clock basis, and omits the line on a run with no per-example rows", "layer": "request"}
+    it "prints the run-wide time by declared layer, and omits it on a run with no per-example rows" do
+      repository = create_repository(user: @user, github_full_name: "acme/layer-time-suite")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe1675", branch: "main", total_specs_count: 3,
+          annotated_specs_count: 2, duration_seconds: 60.0 },
+        specs: [annotated_spec(file_path: "spec/requests/a_spec.rb", line_number: 1, layer: "unit", duration: 1.5),
+                annotated_spec(file_path: "spec/models/c_spec.rb", line_number: 3, layer: "request", duration: 70.0),
+                unannotated_spec(file_path: "spec/requests/d_spec.rb", line_number: 4, name: "Checkout rejects",
+                                 duration: nil)].map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text(
+        "Time by declared layer: unit 1.50s (1 of 1 timed) · request 1m 10s (1 of 1 timed) · " \
+        "undeclared not reported (0 of 1 timed)", normalize_ws: true
+      )
+      expect(panel).to have_text("machine time, not wall clock", normalize_ws: true)
+
+      bare = create_repository(user: @user, github_full_name: "acme/totals-only-time")
+      bare.test_runs.create!(commit_sha: "feedfacecafe1676", branch: "main",
+                             total_specs_count: 3, annotated_specs_count: 2)
+
+      get repository_path(bare)
+
+      expect(overview_panel).to have_no_text("Time by declared layer")
+    end
+
     # ⭐ THE DESTINATION, AND THE SENTENCE THAT MAY NOT DESCRIBE AN EMPTY SET.
     #
     # Every other branch of this paragraph discloses what a derived reading COSTS — no preconditions,

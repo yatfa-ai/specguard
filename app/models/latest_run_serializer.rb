@@ -205,6 +205,15 @@ class LatestRunSerializer
       # from the path, and `undeclared` is NOT `intent_readings.unreadable` — an undeclared example
       # may still be read from its description. Operands only, no pyramid verdict.
       layer_counts: overview.serialized_layer_counts(test_run),
+      # WHERE THE RUN'S TIME GOES by declared layer — a SIBLING of `layer_counts` (never nested in it
+      # or in `intent_readings`, both key-pinned), computed in the same single aggregate. Per layer,
+      # in the same five-key order: `total_seconds` — the SUM of the layer's example durations, i.e.
+      # machine time and not wall clock, so it can exceed the run's wall clock on a parallel or
+      # sharded run — and `timed_count`, how many of the layer's examples that sum covers
+      # (`<= layer_counts[layer]`). `total_seconds` is NULL, never 0, for a layer none of whose
+      # examples was timed. NULL as a whole when the run recorded no per-example rows. The layer is
+      # what `@intent` declared, never the path. Operands only, no pyramid verdict.
+      layer_durations: overview.serialized_layer_durations(test_run),
       # Nullable by schema. Serializing `0.0` for an unreported duration would assert the run took
       # no time — the same "not reported" vs `0.0s` distinction the Recent runs table draws.
       #

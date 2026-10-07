@@ -164,6 +164,26 @@ class SpecDirectoryDurations
     end.join(" · ")
   end
 
+  # The ONE spelling of the run-wide TIME by declared layer — `unit 41s (1,812 of 1,812 timed) ·
+  # request 3m 2s (40 of 44 timed) · undeclared not reported (0 of 5 timed)` — beside
+  # {.layer_counts_label}. Spelled through `SpecObservation.humanized_duration` (so a layer with no
+  # timed example reads "not reported", never "0.00s") and `SpecObservation.coverage_fraction` (the
+  # one seam every single-sided coverage fraction goes through). Layers with no examples are omitted
+  # EXCEPT undeclared, on the same rule as the counts label; `layer_counts` supplies each layer's
+  # population. Operands only: the figure is a sum of example durations, not wall clock.
+  def self.layer_durations_label(layer_durations, layer_counts)
+    layer_durations.filter_map do |layer, figures|
+      recorded = layer_counts.fetch(layer)
+      next unless recorded.positive? || layer == :undeclared
+
+      "#{layer} #{SpecObservation.humanized_duration(figures[:total_seconds])} " \
+        "(#{SpecObservation.coverage_fraction(number_with_delimiter(figures[:timed_count]), number_with_delimiter(recorded))} timed)"
+    end.join(" · ")
+  end
+
+  def self.number_with_delimiter(number) = ActiveSupport::NumberHelper.number_to_delimited(number)
+  private_class_method :number_with_delimiter
+
   # One directory's share of one run's wall clock, what that share was measured over, and how many
   # distinct descriptions the examples it was measured over carry.
   Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, :distinct_name_count,
