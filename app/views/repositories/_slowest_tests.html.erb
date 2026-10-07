@@ -137,6 +137,10 @@
                   <% else %>
                     <span class="block font-mono text-xs text-app-muted">not reported</span>
                   <% end %>
+                  <%# The DECLARED `@intent`, through `repositories/_authored_intent` — nothing at all
+                      for an unannotated row, and for a nameless one the only readable identity the
+                      row has beside its coordinate. Already in memory: `slowest_in` loads whole rows. %>
+                  <%= render "repositories/authored_intent", observation: observation %>
                 </td>
                 <td class="px-3 py-2 text-app-content">
                   <%# The DECLARED layer, through `RepositoriesHelper#declared_layer_label` — the one

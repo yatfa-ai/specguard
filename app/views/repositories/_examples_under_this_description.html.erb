@@ -178,6 +178,11 @@
                               class: "underline underline-offset-2 decoration-app-border-light " \
                                      "text-app-content hover:decoration-app-content",
                               target: "_blank", rel: "noopener noreferrer" %>
+                  <%# The DECLARED `@intent`, through `repositories/_authored_intent`, under the cell
+                      that carries the example's identity (the one column that is NOT NULL). Nothing
+                      at all for an unannotated row. Already in memory: `with_description` selects
+                      `spec_observations.*`. %>
+                  <%= render "repositories/authored_intent", observation: observation %>
                 </td>
                 <td class="px-3 py-2 text-app-content">
                   <%# The DECLARED layer, through `RepositoriesHelper#declared_layer_label` — the one

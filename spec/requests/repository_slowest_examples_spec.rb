@@ -40,10 +40,12 @@ RSpec.describe "Repository slowest tests", type: :request do
   def rows
     panel.all("tbody tr").map do |row|
       label_cell, layer_cell, duration_cell, outcome_cell = row.all("td")
-      sites = label_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }
+      sites = coordinate_spans(label_cell).map { |span| span.text.gsub(/\s+/, " ").strip }
       ran_in = sites.last
       location = sites.first if sites.size > 1
       label = label_cell.text.gsub(/\s+/, " ").strip
+      intent = intent_block(label_cell)
+      label = label.delete_suffix(intent.text.gsub(/\s+/, " ").strip).strip if intent
       [ran_in, location].compact.each { |site| label = label.delete_suffix(site).strip }
 
       { label: label, location: location, ran_in: ran_in, layer: layer_cell.text.strip,
@@ -59,7 +61,13 @@ RSpec.describe "Repository slowest tests", type: :request do
   # the cell, and for an ordinary example the two coordinate lines read nearly the same, so a text
   # filter would select whichever the row happened to render first. The span is always there — a
   # path, or "not reported" — and only the path branch carries a link.
-  def ran_in_cell(row) = row.all("td").first.all("span").last
+  def ran_in_cell(row) = coordinate_spans(row.all("td").first).last
+
+  # The cell's coordinate spans, WITHOUT the declared-intent block (`repositories/_authored_intent`)
+  # that shares the cell and carries spans of its own — the intent is not a coordinate line.
+  def coordinate_spans(cell) = cell.all(:xpath, ".//span[not(ancestor::*[@data-authored-intent])]")
+
+  def intent_block(cell) = cell.first(:css, "[data-authored-intent]", minimum: 0)
 
   def ran_in_link(row) = ran_in_cell(row).find("a")
 
@@ -1214,6 +1222,79 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(panel.all("thead th").map { |th| th.text.strip }).to include("Layer")
       expect(rows.map { |row| [row[:label], row[:layer]] })
         .to eq([["declared request", "request"], ["no annotation", "undeclared"]])
+    end
+  end
+
+  # The DECLARED `@intent` entity / action / behavior (`repositories/_authored_intent`), stored in
+  # `spec_observations.intent_*` and rendered by no view until now. Declared only: a row with none
+  # of the three prints nothing in that cell — the negative pin comes FIRST, because it is the
+  # example that fails against an implementation printing a placeholder or a derived guess.
+  describe "the declared intent each ranked example carries" do
+    def intent_of(index) = panel.all("tbody tr")[index].first(:css, "[data-authored-intent]", minimum: 0)
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit absent intent", "behavior": "an unannotated row renders no intent block and no entity, action or placeholder text in its Test cell", "layer": "request"}
+    it "renders nothing for an unannotated row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "User is valid with a handle", duration: 9.0, line_number: 1)])
+
+      get repository_path(repository)
+
+      expect(intent_of(0)).to be_nil
+      expect(rows.first[:label]).to eq("User is valid with a handle")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render declared intent", "behavior": "an annotated row prints its stored entity and action in mono and its behavior muted beside an unannotated row that prints none", "layer": "request"}
+    it "prints the stored entity, action and behavior of an annotated row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(name: "declared", duration: 9.0, line_number: 1,
+                                         entity: "Ledger", action: "rebuild", behavior: "walks every entry"),
+                          example_spec(name: "plain", duration: 3.0, line_number: 2)])
+
+      get repository_path(repository)
+
+      block = intent_of(0)
+      expect(block).to have_css("span.font-mono", text: "Ledger")
+      expect(block).to have_css("span.font-mono", text: "rebuild")
+      expect(block).to have_css("span.text-app-muted", text: "walks every entry")
+      expect(intent_of(1)).to be_nil
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render partial intent", "behavior": "a row with only a behavior renders just that behavior, with no empty mono spans or empty wrapper", "layer": "request"}
+    it "renders only the parts that are present" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(name: "subset", duration: 9.0, line_number: 1)])
+      SpecObservation.update_all(intent_entity: nil, intent_action: "", intent_behavior: "only behavior")
+
+      get repository_path(repository)
+
+      block = intent_of(0)
+      expect(block).not_to have_css("span.font-mono")
+      expect(block).not_to have_css("div")
+      expect(block.text.strip).to eq("only behavior")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "identify nameless row", "behavior": "a nameless annotated row shows its declared behavior in the Test cell beside its coordinate", "layer": "request"}
+    it "shows the declared behavior of a nameless annotated row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(duration: 9.0, line_number: 1, behavior: "locks the rows")
+                            .merge(name: nil)])
+
+      get repository_path(repository)
+
+      expect(SpecObservation.first.name).to be_nil
+      expect(panel.all("tbody tr").first.all("td").first).to have_text("locks the rows")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "escape declared intent", "behavior": "markup in a stored behavior renders as literal text and never as an element", "layer": "request"}
+    it "HTML-escapes the stored values" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(name: "x", duration: 9.0, line_number: 1)])
+      SpecObservation.update_all(intent_behavior: "<b>bold</b>", intent_entity: "<i>E</i>")
+
+      get repository_path(repository)
+
+      expect(intent_of(0).text).to include("<b>bold</b>", "<i>E</i>")
+      expect(intent_of(0)).not_to have_css("b, i")
     end
   end
 

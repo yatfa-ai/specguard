@@ -1,0 +1,34 @@
+<%# == The `@intent` an author DECLARED for one example — entity, action, behavior.
+
+    Rendered by the three per-example panels ("Slowest tests", "Examples in this spec file" and
+    "Examples under this description"), which list whole `SpecObservation` rows and so already hold
+    `intent_entity`, `intent_action` and `intent_behavior` in memory: this partial issues no query
+    and takes no `repository:`/`run:` local that could invite one.
+
+    DECLARED, NEVER DERIVED. A row with none of the three prints NOTHING — no placeholder and no
+    `SpecObservation#derived_intent` guess. The "Unannotated examples" worklist is where a derived
+    reading is shown and labelled as one; printing it here would present a regex's guess as the
+    author's word. For a row whose `name` is nil the declared behavior is the only readable
+    identity beside the coordinate, which is why the three parts are independent: whichever are
+    present are printed, and an absent one leaves no separator and no empty element.
+
+    The shape is the worklist's: entity and action in mono, behavior muted on its own line.
+
+    A PARTIAL AND NOT A HELPER, on `repositories/_definition_site_link`'s argument: markup lives
+    in a view. Values go through ERB, so they are HTML-escaped. `observation` is the only local. %>
+<% entity = observation.intent_entity.presence %>
+<% action = observation.intent_action.presence %>
+<% behavior = observation.intent_behavior.presence %>
+<% if entity || action || behavior %>
+  <div class="mt-1 text-xs" data-authored-intent>
+    <% if entity || action %>
+      <div>
+        <% if entity %><span class="font-mono text-app-content"><%= entity %></span><% end %>
+        <% if action %><span class="font-mono text-app-content"><%= action %></span><% end %>
+      </div>
+    <% end %>
+    <% if behavior %>
+      <span class="block text-app-muted"><%= behavior %></span>
+    <% end %>
+  </div>
+<% end %>
