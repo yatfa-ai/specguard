@@ -668,7 +668,8 @@ RSpec.describe "Repository window slowest tests", type: :request do
       get repository_path(window_repository)
 
       per_run = Capybara.string(response.body).find("#slowest-examples").all("tbody tr").first
-      expect(per_run.all("td")[1].text.strip).to eq("3.00s")
+      # Columns: Test | Layer | Duration | Outcome — the duration is the third cell (SPGD-1651).
+      expect(per_run.all("td")[2].text.strip).to eq("3.00s")
       expect(row_named("Ledger rebuild walks every entry")[:total]).to eq("12.00s")
     end
   end

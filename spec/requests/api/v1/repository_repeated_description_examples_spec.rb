@@ -677,10 +677,10 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     def panel_rows
       panel = Capybara.string(response.body).find("#repeated-description-examples")
       panel.all("tbody tr").map do |row|
-        ran_in, defined_at, duration, outcome = row.all("td").map { it.text.gsub(/\s+/, " ").strip }
+        ran_in, defined_at, layer, duration, outcome = row.all("td").map { it.text.gsub(/\s+/, " ").strip }
 
         { "ran_in" => ran_in, "defined_at" => defined_at,
-          "duration" => duration, "outcome" => outcome }
+          "layer" => layer, "duration" => duration, "outcome" => outcome }
       end
     end
 
@@ -718,6 +718,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
         served["rows"].map do |row|
           { "ran_in" => row["spec_file_path"] || "not reported",
             "defined_at" => "#{row["file_path"]}:#{row["line_number"]}",
+            "layer" => row["intent_layer"] || "undeclared",
             "duration" => SpecObservation.humanized_duration(row["duration_seconds"]),
             "outcome" => row["outcome"] || "not reported" }
         end

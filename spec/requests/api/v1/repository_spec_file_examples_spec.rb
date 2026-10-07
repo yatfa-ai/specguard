@@ -584,9 +584,9 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     def panel_rows
       panel = Capybara.string(response.body).find("#spec-file-examples")
       panel.all("tbody tr").map do |row|
-        test, duration, outcome = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+        test, layer, duration, outcome = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
-        { "test" => test, "duration" => duration, "outcome" => outcome }
+        { "test" => test, "layer" => layer, "duration" => duration, "outcome" => outcome }
       end
     end
 
@@ -623,6 +623,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
       expect(panel_rows).to eq(
         served["rows"].map do |row|
           { "test" => "#{row["name"]} #{row["file_path"]}:#{row["line_number"]}",
+            "layer" => row["intent_layer"] || "undeclared",
             "duration" => SpecObservation.humanized_duration(row["duration_seconds"]),
             "outcome" => row["outcome"] || "not reported" }
         end

@@ -39,14 +39,14 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
   def ranking_panel = Capybara.string(response.body).find("#repeated-descriptions")
 
-  # One row as a reader meets it: where it RAN, where it is DEFINED, what it took and what CI said
+  # One row as a reader meets it: where it RAN, where it is DEFINED, the layer it declared, what it took and what CI said
   # happened to it. The two paths are separate columns rather than one cell, which is the whole point
   # of the panel's shared-example-group reading, so they are read separately here too.
   def rows
     panel.all("tbody tr").map do |row|
-      ran_in, defined_at, duration, outcome = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      ran_in, defined_at, layer, duration, outcome = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
-      { ran_in: ran_in, defined_at: defined_at, duration: duration, outcome: outcome }
+      { ran_in: ran_in, defined_at: defined_at, layer: layer, duration: duration, outcome: outcome }
     end
   end
 
@@ -282,6 +282,32 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
   # The rung that CLOSES the chain the controller has always claimed: area → file → example, and now
   # description → example → file.
+  describe "the declared layer each example carries" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "render undeclared layer", "behavior": "an unannotated example under spec/models prints undeclared and never a layer inferred from its path", "layer": "request"}
+    it "prints undeclared for a nil-layer row even when its path would infer a layer" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: looped, duration: 2.0, line_number: 1),
+                          example_spec(name: looped, duration: 1.0, line_number: 2)])
+
+      get repository_path(repository, repeated_description: looped)
+
+      expect(rows.map { |row| row[:layer] }).to eq(%w[undeclared undeclared])
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render declared layer", "behavior": "a request-layer member prints request verbatim beside an undeclared one, under a Layer column header", "layer": "request"}
+    it "prints the stored token verbatim, beside an undeclared row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(name: looped, duration: 2.0, line_number: 1,
+                                         file_path: order_spec, layer: "request"),
+                          example_spec(name: looped, duration: 1.0, line_number: 2)])
+
+      get repository_path(repository, repeated_description: looped)
+
+      expect(panel.all("thead th").map { |th| th.text.strip }).to include("Layer")
+      expect(rows.map { |row| row[:layer] }).to eq(%w[request undeclared])
+    end
+  end
+
   describe "the file each listed example ran in" do
     # @intent: {"entity": "GET /repositories/:id", "action": "link file drill-in", "behavior": "each row's ran-in anchor targets the spec_file ask with the #spec-file-examples fragment", "layer": "request"}
     it "links each row's file into the spec-file drill-down" do

@@ -39,14 +39,15 @@ RSpec.describe "Repository slowest tests", type: :request do
   # it is the last span of the cell, and a definition site exists only where there are two.
   def rows
     panel.all("tbody tr").map do |row|
-      label_cell, duration_cell, outcome_cell = row.all("td")
+      label_cell, layer_cell, duration_cell, outcome_cell = row.all("td")
       sites = label_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }
       ran_in = sites.last
       location = sites.first if sites.size > 1
       label = label_cell.text.gsub(/\s+/, " ").strip
       [ran_in, location].compact.each { |site| label = label.delete_suffix(site).strip }
 
-      { label: label, location: location, ran_in: ran_in, duration: duration_cell.text.strip,
+      { label: label, location: location, ran_in: ran_in, layer: layer_cell.text.strip,
+        duration: duration_cell.text.strip,
         outcome: outcome_cell.text.strip, outcome_class: outcome_cell.find("span")[:class] }
     end
   end
@@ -1181,6 +1182,38 @@ RSpec.describe "Repository slowest tests", type: :request do
       # Page-wide rather than panel-scoped on purpose: what must not grow is the number of times
       # ONE page walks this table, and only a count taken across the whole request can say that.
       expect(large_queries.size).to eq(12)
+    end
+  end
+
+  # The Layer column — the declared `@intent` layer, stored per example in
+  # `spec_observations.intent_layer` and served on the API since SPGD-851 but read by no per-example
+  # table until now. The cell is the stored token verbatim and a nil reads `undeclared`; it is
+  # NEVER inferred from the path. The path-inference pin comes FIRST on purpose: it is the example
+  # that fails against an implementation that guesses `unit` for a `spec/models/` file.
+  describe "the declared layer each ranked example carries" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "render undeclared layer", "behavior": "an unannotated row under spec/models prints undeclared and never a layer inferred from its path", "layer": "request"}
+    it "prints undeclared for a nil-layer row even when its path would infer a layer" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "unannotated model test", duration: 9.0, line_number: 1,
+                                       file_path: "spec/models/invoice_spec.rb")])
+
+      get repository_path(repository)
+
+      expect(rows.map { |row| row[:layer] }).to eq(["undeclared"])
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render declared layer", "behavior": "a request-layer row prints request verbatim beside an undeclared row, under a Layer column header", "layer": "request"}
+    it "prints the stored token verbatim, beside an undeclared row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(name: "declared request", duration: 9.0, line_number: 1,
+                                         file_path: "spec/models/invoice_spec.rb", layer: "request"),
+                          example_spec(name: "no annotation", duration: 3.0, line_number: 2)])
+
+      get repository_path(repository)
+
+      expect(panel.all("thead th").map { |th| th.text.strip }).to include("Layer")
+      expect(rows.map { |row| [row[:label], row[:layer]] })
+        .to eq([["declared request", "request"], ["no annotation", "undeclared"]])
     end
   end
 

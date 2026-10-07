@@ -129,7 +129,7 @@
             one definition site are one test run more than once rather than a description written
             more than once.
           </p>
-          <%= render UI::TableComponent.new(columns: ["Ran in", "Defined at", "Duration", "Outcome"],
+          <%= render UI::TableComponent.new(columns: ["Ran in", "Defined at", "Layer", "Duration", "Outcome"],
                                             describedby: "repeated-description-examples-basis") do %>
             <% @repeated_description_examples.rows.each do |observation| %>
               <tr>
@@ -178,6 +178,13 @@
                               class: "underline underline-offset-2 decoration-app-border-light " \
                                      "text-app-content hover:decoration-app-content",
                               target: "_blank", rel: "noopener noreferrer" %>
+                </td>
+                <td class="px-3 py-2 text-app-content">
+                  <%# The DECLARED layer, through `RepositoriesHelper#declared_layer_label` — the one
+                      seam the three per-example tables share, which carries why a nil reads
+                      "undeclared" and why nothing here is inferred from the path. Already in memory:
+                      `with_description` selects `spec_observations.*`. %>
+                  <%= declared_layer_label(observation) %>
                 </td>
                 <td class="px-3 py-2 text-app-content tabular-nums">
                   <%# Through `SpecObservation#duration_label`, this table's one formatting seam and

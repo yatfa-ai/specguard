@@ -34,14 +34,14 @@ RSpec.describe "Repository spec file examples", type: :request do
 
   def files_panel = Capybara.string(response.body).find("#spec-file-durations")
 
-  # One row as a reader meets it: what the example is called, where it is DEFINED, what it took and
-  # what CI said happened to it.
+  # One row as a reader meets it: what the example is called, where it is DEFINED, the layer it declared, what it
+  # took and what CI said happened to it.
   def rows
     panel.all("tbody tr").map do |row|
       cells = row.all("td")
-      test, duration, outcome = cells.map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      test, layer, duration, outcome = cells.map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
-      { test: test, name: row_name(cells.first), duration: duration, outcome: outcome }
+      { test: test, name: row_name(cells.first), layer: layer, duration: duration, outcome: outcome }
     end
   end
 
@@ -272,6 +272,34 @@ RSpec.describe "Repository spec file examples", type: :request do
   # exactly for a shared example group. A panel keyed on the first therefore lists rows defined
   # somewhere else — correctly, because this file is what RAN them — and the reader has to be able
   # to go and find them.
+  describe "the declared layer each example carries" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "render undeclared layer", "behavior": "an unannotated example under spec/models prints undeclared and never a layer inferred from its path", "layer": "request"}
+    it "prints undeclared for a nil-layer row even when its path would infer a layer" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 1,
+                                       name: "Order unannotated")])
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(rows.map { |row| row[:layer] }).to eq(["undeclared"])
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render declared layer", "behavior": "a request-layer example prints request verbatim beside an undeclared one, under a Layer column header", "layer": "request"}
+    it "prints the stored token verbatim, beside an undeclared row" do
+      repository = create_repository(user: @user)
+      ingest(repository, [annotated_spec(file_path: ORDER_SPEC, duration: 2.0, line_number: 1,
+                                         name: "Order declared", layer: "request"),
+                          example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
+                                       name: "Order undeclared")])
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(panel.all("thead th").map { |th| th.text.strip }).to include("Layer")
+      expect(rows.map { |row| [row[:name], row[:layer]] })
+        .to eq([["Order declared", "request"], ["Order undeclared", "undeclared"]])
+    end
+  end
+
   describe "an example a shared example group defines elsewhere" do
     def shared_group_run
       repository = create_repository(user: @user)
