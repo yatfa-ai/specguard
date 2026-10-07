@@ -63,8 +63,26 @@
     </p>
     <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-stamp">
       Taken <%= time_ago_in_words(Time.zone.parse(census["computed_at"])) %> ago
-      (<time datetime="<%= census["computed_at"] %>"><%= census["computed_at"] %></time>), weighing run
-      <%= census["weighed_run_id"] %>. Stored at ingest: this page reads it and never recomputes it, so
+      (<time datetime="<%= census["computed_at"] %>"><%= census["computed_at"] %></time>),
+      <%# The weighed run is named by commit and branch, as the Recent runs panel names runs, and never
+          by `weighed_run_id` (a bare bigint no person can see anywhere else on the page). The sha
+          links the way that panel's cell does. When the run row is gone or none was recorded the
+          stamp says so in words: no numeral, no guessed link. %>
+      <% weighed_sha = @near_duplicate_weighed_sha %>
+      <% if weighed_sha.present? %>
+        weighing run
+        <%= link_to weighed_sha.first(7),
+                    drill_down_path(@repository, commit_sha: weighed_sha, anchor: "overview"),
+                    class: "underline underline-offset-2 decoration-app-border-light " \
+                           "text-app-content hover:decoration-app-content" %><% if @near_duplicate_weighed_branch.present? %>
+        on <code><%= @near_duplicate_weighed_branch %></code><% end %><% if weighed_sha != @latest_test_run&.commit_sha %>
+        (not the run this page is on)<% end %>.
+      <% elsif census["weighed_run_id"].nil? %>
+        no weighed run recorded.
+      <% else %>
+        weighing a run that has since been deleted.
+      <% end %>
+      Stored at ingest: this page reads it and never recomputes it, so
       a census can be older than the run listed above.
     </p>
     <%# SATURATION, stated ONCE for the panel and never per cluster (the stored count is census-level).

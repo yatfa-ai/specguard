@@ -98,7 +98,6 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       expect(text).to include(NearDuplicateClusters::SIMILARITY_BASIS)
       expect(text).to include("at least #{NearDuplicateClusters::SIMILARITY}")
       expect(panel.find("time")[:datetime]).to eq(stored["computed_at"])
-      expect(text).to include(stored["weighed_run_id"].to_s)
       expect(text).to include("not as a finding of duplication")
       # The page stated a clean cluster list, so the three other states' text is absent.
       expect(text).not_to include("No census yet")
@@ -137,6 +136,88 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       expect(panel).to have_css("[data-near-duplicate-cluster]")
       expect(census_reads.size).to eq(1)
       expect(identity_reads).to be_empty
+    end
+  end
+
+  # SPGD-1642: the stamp names the weighed run by commit and branch, linked, never by its bigint id.
+  describe "the stamp's weighed run" do
+    let(:weighed_sha) { "aaaaaaaaaaaaaaaa0001" }
+    let(:latest_sha) { "bbbbbbbbbbbbbbbb0002" }
+    let(:census) { NearDuplicateCensus.find_by!(repository_id: repository.id) }
+
+    def stamp = panel.find("#near-duplicate-clusters-stamp")
+
+    # The stamp's prose with the timestamp element removed, so a numeral test cannot be satisfied or
+    # broken by the ISO timestamp's own digits.
+    def stamp_prose
+      doc = Capybara.string(stamp.native.to_html)
+      doc.all("time").each { |node| node.native.remove }
+      doc.text(normalize_ws: true)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "name the weighed run", "behavior": "the stamp names the weighed run by its 7-character commit sha as a link to the repository drill-down for that full sha, with its branch, and never prints the numeric weighed_run_id", "layer": "request"}
+    it "links the weighed run's short sha with its branch and prints no run id" do
+      ingest(repository, pair_specs, commit_sha: weighed_sha)
+      run_id = census.weighed_run_id
+
+      get repository_path(repository)
+
+      href = repository_path(repository, commit_sha: weighed_sha, anchor: "overview")
+      link = stamp.find("a")
+      expect(link.text).to eq(weighed_sha.first(7))
+      expect(link[:href]).to eq(href)
+      expect(stamp_prose).to include("weighing run #{weighed_sha.first(7)} on main")
+      expect(stamp_prose).not_to match(/(?<![\w-])#{run_id}(?![\w-])/)
+      expect(stamp_prose).not_to include("not the run this page is on")
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "flag an older weighed run", "behavior": "when the weighed run's sha differs from the page's latest run the stamp says it is not the run the page is on", "layer": "request"}
+    it "says the weighed run is not the run the page is on when a newer run exists" do
+      ingest(repository, pair_specs, commit_sha: weighed_sha)
+      record_and_resolve(repository, pair_specs, commit_sha: latest_sha)
+
+      get repository_path(repository)
+
+      expect(stamp_prose).to include("(not the run this page is on)")
+      expect(stamp.all("a").size).to eq(1)
+      expect(stamp.find("a").text).to eq(weighed_sha.first(7))
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "omit a nil branch", "behavior": "a weighed run with no branch renders the sha link with no branch clause and never prints nil", "layer": "request"}
+    it "omits the branch clause when the weighed run has no branch" do
+      ingest(repository, pair_specs, commit_sha: weighed_sha)
+      TestRun.where(id: census.weighed_run_id).update_all(branch: nil)
+
+      get repository_path(repository)
+
+      expect(stamp.find("a").text).to eq(weighed_sha.first(7))
+      expect(stamp_prose).not_to match(/\bon\b/)
+      expect(stamp_prose.downcase).not_to include("nil")
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "state a deleted weighed run", "behavior": "when the weighed run row was deleted the stamp has no link and no numeral and says the run has since been deleted", "layer": "request"}
+    it "says in words that the weighed run is gone, with no link and no numeral" do
+      ingest(repository, pair_specs, commit_sha: weighed_sha)
+      run_id = census.weighed_run_id
+      TestRun.where(id: run_id).destroy_all
+
+      get repository_path(repository)
+
+      expect(stamp).not_to have_css("a")
+      expect(stamp_prose).to include("a run that has since been deleted")
+      expect(stamp_prose).not_to match(/(?<![\w-])#{run_id}(?![\w-])/)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "state no weighed run", "behavior": "a census with no weighed_run_id says no weighed run was recorded, with no link and no numeral", "layer": "request"}
+    it "says no weighed run was recorded when the census has no weighed_run_id" do
+      ingest(repository, pair_specs, commit_sha: weighed_sha)
+      census.update_columns(weighed_run_id: nil)
+
+      get repository_path(repository)
+
+      expect(stamp).not_to have_css("a")
+      expect(stamp_prose).to include("no weighed run recorded")
+      expect(stamp_prose).not_to match(/\d/)
     end
   end
 
