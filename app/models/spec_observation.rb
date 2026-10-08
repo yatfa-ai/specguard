@@ -2039,6 +2039,12 @@ class SpecObservation < ApplicationRecord
   # `spec_identities`: the descriptions and paths the window actually recorded are what a reader
   # recognises, and a group wearing two of either is the move or the rename this grouping exists to
   # survive, disclosed rather than smoothed over.
+  #
+  # `intent_layers` is the DISTINCT set of layers (`@intent layer:`) the identity's examples DECLARED
+  # anywhere in the window — the same aggregate `UNSTABLE_COMPOSITION` carries, with the same
+  # `FILTER` for the same reason: without it a never-annotated identity would arrive as `[nil]`
+  # rather than `[]`. It is read off the stored column in the same grouped SELECT, so it costs no
+  # query; `SlowestTests::Row#declared_layers` is its reader.
   IDENTITY_DURATION_COMPOSITION = {
     total_seconds: "SUM(duration_seconds)",
     recorded_count: "COUNT(*)",
@@ -2046,7 +2052,8 @@ class SpecObservation < ApplicationRecord
     run_count: "COUNT(DISTINCT test_run_id)",
     slowest_seconds: "MAX(duration_seconds)",
     names: "ARRAY_AGG(DISTINCT name) FILTER (WHERE name IS NOT NULL)",
-    file_paths: "ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)"
+    file_paths: "ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)",
+    intent_layers: "ARRAY_AGG(DISTINCT intent_layer) FILTER (WHERE intent_layer IS NOT NULL)"
   }.freeze
 
   # Step two of two: how each candidate identity behaved across the whole window — over the

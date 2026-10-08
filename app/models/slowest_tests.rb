@@ -319,7 +319,7 @@ class SlowestTests
   # One durable test, across the whole window — how long it took in total, how much of the window it
   # was seen in, and every description and file it wore while it was.
   Row = Struct.new(:spec_identity_id, :total_seconds, :recorded_count, :timed_count, :run_count,
-                   :slowest_seconds, :names, :file_paths, keyword_init: true) do
+                   :slowest_seconds, :names, :file_paths, :intent_layers, keyword_init: true) do
     # Slowest first, and a test nobody timed is NOT a test that cost nothing: the nil flag leads the
     # key rather than the total being coerced to zero, which is the `DESC NULLS LAST` rule
     # {NearDuplicateClusters} and `.file_durations_in` both sort by. `recorded_count` breaks the tie
@@ -380,5 +380,13 @@ class SlowestTests
     def descriptions = Array(names).sort
 
     def files_seen = Array(file_paths).sort
+
+    # The DISTINCT layers this test's examples declared (`@intent layer:`) anywhere in the window,
+    # sorted — a set, since an identity can change layer mid-window. `[]` means no run in the
+    # window declared one: NOT unreadable and NOT a measured `unit`. A partially annotated
+    # identity lists only what was declared. Never inferred from the spec path or `DerivedIntent`.
+    # `Array()` for the same SQL-NULL reason as `files_seen`. Same semantics as
+    # {UnstableTests::Row#declared_layers}.
+    def declared_layers = Array(intent_layers).sort
   end
 end
