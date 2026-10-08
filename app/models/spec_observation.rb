@@ -1786,7 +1786,7 @@ class SpecObservation < ApplicationRecord
   # orientation and no sentence here may hardcode one — the method has exactly two callers today,
   # and their windows point in OPPOSITE directions:
   #
-  # * `RepositoryOverview#serialized_unstable_test_runs` hands the API window (`history_runs`,
+  # * `RepositoryWindowRankingSerializer#serialized_unstable_test_runs` hands the API window (`history_runs`,
   #   `Repository#recent_test_runs`) NEWEST first, so a truncated sequence keeps the RECENT runs
   #   and drops the old ones — the survivable direction: "it has failed since some point before
   #   this list starts" still names a regression.

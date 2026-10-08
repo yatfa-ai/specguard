@@ -26,7 +26,7 @@ class RepositoryGrowthSerializer
 
   # The contract the growth-by-area rows below are served under — and, when they are `null`, the
   # reason they are. Served UNCONDITIONALLY, on the key-always-present rule `latest_run.shards` and
-  # `serialized_unstable_tests_window` both argue for: a client tests one thing rather than
+  # `RepositoryWindowRankingSerializer#serialized_unstable_tests_window` both argue for: a client tests one thing rather than
   # distinguishing an absent key from a null one, and a block that explains a `null` is worthless if
   # it is itself absent whenever the `null` happens.
   #
