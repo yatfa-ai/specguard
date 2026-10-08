@@ -233,7 +233,7 @@ class UnstableTests
   # which words the runs used for what happened to it.
   Row = Struct.new(:spec_identity_id, :recorded_count, :run_count, :reported_outcome_count,
                    :failed_count, :failed_run_count, :outcomes, :file_paths, :names, :latest_name,
-                   keyword_init: true) do
+                   :intent_layers, keyword_init: true) do
     # The description a reader recognises — the identity's MOST RECENT one, which is the label the
     # drill-in (`UnstableTestRuns`, keyed positionally on `name`) resolves the row to its runs
     # under. Load-bearing for that reason: the row must keep a usable `name` even though the
@@ -303,5 +303,12 @@ class UnstableTests
     # `ARRAY_AGG(…) FILTER (…)`, which is SQL NULL rather than an empty array for a group with
     # nothing to collect — a nil the caller would otherwise have to know about at every call site.
     def files_seen = Array(file_paths).sort
+
+    # The DISTINCT layers this test's examples declared (`@intent layer:`) anywhere in the window,
+    # sorted — a set, since an identity can change layer mid-window. `[]` means no run in the
+    # window declared one: NOT unreadable and NOT a measured `unit`. A partially annotated
+    # identity lists only what was declared. Never inferred from the spec path or `DerivedIntent`.
+    # `Array()` for the same SQL-NULL reason as `files_seen`.
+    def declared_layers = Array(intent_layers).sort
   end
 end

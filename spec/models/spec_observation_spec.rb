@@ -1164,11 +1164,13 @@ RSpec.describe SpecObservation do
         )
 
         # identity, recorded, runs, reported, failed, failed runs, outcomes, files, names,
-        # latest_name — `SpecObservation::UNSTABLE_COMPOSITION`'s order, kept positional here to
-        # pin the tuple's shape; the renamed example below destructures it by meaning.
+        # latest_name, intent_layers — `SpecObservation::UNSTABLE_COMPOSITION`'s order, kept
+        # positional here to pin the tuple's shape; the renamed example below destructures it by
+        # meaning. `intent_layers` is SQL NULL (not `[]`) for this unannotated fixture: the FILTER
+        # leaves the aggregate with nothing to collect.
         expect(composed).to eq(
           [[@identity_ids[6], 6, 6, 6, 3, 3, %w[failed passed], ["spec/f7_spec.rb"],
-            ["example 7"], "example 7"]]
+            ["example 7"], "example 7", nil]]
         )
       end
 
@@ -1184,7 +1186,7 @@ RSpec.describe SpecObservation do
         )
 
         expect(composed.length).to eq(1)
-        _id, recorded, run_count, reported, failed, failed_runs, outcomes, _files, names, latest =
+        _id, recorded, run_count, reported, failed, failed_runs, outcomes, _files, names, latest, _layers =
           composed.first
         expect([recorded, run_count, reported, failed, failed_runs]).to eq([6, 6, 6, 3, 3])
         expect(outcomes.sort).to eq(%w[failed passed])
@@ -1219,7 +1221,7 @@ RSpec.describe SpecObservation do
 
         expect(composed).to eq(
           [[@identity_ids[12], 2, 2, 2, 2, 2, ["failed"], ["spec/f13_spec.rb"], ["example 13"],
-            "example 13"]]
+            "example 13", nil]]
         )
       end
 

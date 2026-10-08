@@ -48,11 +48,16 @@ RSpec.describe "Repository unstable tests", type: :request do
   def rows
     panel.all("tbody tr").map do |row|
       name_cell, seen_cell, failed_cell, outcome_cell = row.all("td")
-      files = name_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }.first
+      # The declared-layers line (marked `data-declared-layers`, and its nested `undeclared` word)
+      # is its own key, never the files note and never part of the name.
+      files = name_cell.all(:xpath, ".//span[not(ancestor-or-self::*[@data-declared-layers])]")
+                       .map { |span| span.text.gsub(/\s+/, " ").strip }.first
+      layers = name_cell.first("[data-declared-layers]")&.text&.gsub(/\s+/, " ")&.strip
       name = name_cell.text.gsub(/\s+/, " ").strip
+      name = name.delete_suffix(layers).strip if layers
       name = name.delete_suffix(files).strip if files
 
-      { name: name, files: files, seen: seen_cell.text.strip, failed: failed_cell.text.strip,
+      { name: name, files: files, layers: layers, seen: seen_cell.text.strip, failed: failed_cell.text.strip,
         outcomes: outcome_cell.all("span span").map { |badge| badge.text.strip } }
     end
   end
@@ -587,6 +592,42 @@ RSpec.describe "Repository unstable tests", type: :request do
       get repository_path(repository_with(%w[passed failed]))
 
       expect(rows.first[:files]).to be_nil
+    end
+  end
+
+  # SPGD-1693 — the declared layer(s) under a test's name: the stored `@intent layer:` values,
+  # or the muted `undeclared`, never a guess from the path.
+  describe "the declared layer line" do
+    def layered_repository(layer)
+      repository = create_repository(user: @user)
+      %w[passed failed passed].each_with_index do |outcome, index|
+        spec = if layer
+                 annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1,
+                                name: "Invoice finalize locks the line items", outcome: outcome,
+                                layer: layer)
+               else
+                 example_spec(name: "Invoice finalize locks the line items", outcome: outcome)
+               end
+        ingest(repository, [spec], commit_sha: "run#{format("%010d", index)}", at: (30 - index).days.ago)
+      end
+      repository
+    end
+
+    # @intent: {"entity": "SpecObservation", "action": "show declared layer", "behavior": "a declared test reads declared layer with its token without disturbing the name or files note", "layer": "request"}
+    it "names the declared layer" do
+      get repository_path(layered_repository("request"))
+
+      expect(rows.first).to include(name: "Invoice finalize locks the line items", files: nil,
+                                    layers: "declared layer: request")
+    end
+
+    # @intent: {"entity": "SpecObservation", "action": "show declared layer", "behavior": "an unannotated test reads declared layer undeclared without disturbing the name or files note", "layer": "request"}
+    it "says undeclared for an unannotated test" do
+      get repository_path(layered_repository(nil))
+
+      expect(rows.first).to include(name: "Invoice finalize locks the line items", files: nil,
+                                    layers: "declared layer: undeclared")
+      expect(panel).to have_css("[data-declared-layers] .text-app-muted", text: "undeclared")
     end
   end
 

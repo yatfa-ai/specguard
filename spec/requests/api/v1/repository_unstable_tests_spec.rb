@@ -121,7 +121,9 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
         # than assumed from the fixture's insert order.
         "spec_identity_id" => SpecObservation.where(name: FLIPPING_TEST).pick(:spec_identity_id),
         "renamed" => false,
-        "descriptions" => [FLIPPING_TEST]
+        "descriptions" => [FLIPPING_TEST],
+        # An unannotated fixture: no run declared a layer, which is `[]` and not unreadable.
+        "declared_layers" => []
       )
     end
 
@@ -907,5 +909,94 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # and must not build it twice. That claim is pinned by the per-read counts above rather than
     # here; see the note on "reads it exactly four times", which is where an unmemoized presenter
     # actually shows up.
+  end
+
+  # SPGD-1693 — `declared_layers` on each row: the DISTINCT `@intent layer:` values the identity's
+  # examples declared anywhere in the window, read off the stored `intent_layer` column and never
+  # inferred from the path. Rows are written through the real ingest path (`RunRecorder` +
+  # `IdentityResolver`), annotated examples carrying an `intent:` hash with `layer:`.
+  describe "declared_layers on a row" do
+    LAYERED_TEST = "Invoice finalize locks the line items"
+
+    # An annotated flaky test: `layers_per_run[i]` is the layer run i declares (nil = leave the
+    # example unannotated in that run). The intent triple is constant so one identity spans runs.
+    def layered_repository(layers_per_run, file_path: "spec/requests/invoice_spec.rb")
+      layers_per_run.each_with_index do |layer, index|
+        outcome = index.odd? ? "failed" : "passed"
+        spec = if layer
+                 annotated_spec(file_path: file_path, line_number: 1, name: LAYERED_TEST,
+                                outcome: outcome, layer: layer)
+               else
+                 example_spec(name: LAYERED_TEST, outcome: outcome, line_number: 1, file_path: file_path)
+               end
+        ingest(repository, [spec], commit_sha: "run#{format("%010d", index)}", at: (30 - index).days.ago)
+      end
+    end
+
+    def layers_of(block, list: "rows")
+      block[list].find { |row| row["name"] == LAYERED_TEST }["declared_layers"]
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "serve declared layers", behavior: "a test declaring request in every run of the window serves declared_layers of exactly request", layer: "request" }
+    it "serves the one layer a test declared in every run" do
+      layered_repository(%w[request request request request])
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(layers_of(block)).to eq(["request"])
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "serve declared layers", behavior: "a test that declared unit in early runs and integration in later runs serves both layers sorted", layer: "request" }
+    it "serves the sorted set when the identity changed layer mid-window" do
+      layered_repository(%w[unit unit unit integration integration integration])
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(layers_of(block)).to eq(%w[integration unit])
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "serve declared layers", behavior: "an unannotated test serves an empty declared_layers array rather than null or a nil element", layer: "request" }
+    it "serves an empty array for a test no run annotated" do
+      layered_repository([nil, nil, nil, nil])
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(layers_of(block)).to eq([])
+    end
+
+    # The path is not evidence: the stored column is what is served.
+    # @intent: { entity: "repository unstable_tests block", action: "serve declared layers", behavior: "a request-layer example under spec/models serves request, read from the stored column and not the path", layer: "request" }
+    it "reads the stored column and not the spec path" do
+      layered_repository(%w[request request request request], file_path: "spec/models/invoice_spec.rb")
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(SpecObservation.where(name: LAYERED_TEST).distinct.pluck(:intent_layer)).to eq(["request"])
+      expect(layers_of(block)).to eq(["request"])
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "serve declared layers", behavior: "a partially annotated test lists only the layers that were declared", layer: "request" }
+    it "lists only what was declared when the test is partially annotated" do
+      layered_repository([nil, "system", nil, "system"])
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(layers_of(block)).to eq(["system"])
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "serve declared layers", behavior: "rows of the shared-description list carry declared_layers too", layer: "request" }
+    it "rides on the shared-description rows as well" do
+      3.times do |index|
+        ingest(repository,
+               [annotated_spec(line_number: 1, name: "Order total sums the lines", outcome: "failed", layer: "system"),
+                annotated_spec(line_number: 2, name: "Order total sums the lines", outcome: "passed", layer: "system")],
+               commit_sha: "run#{format("%010d", index)}", at: (30 - index).days.ago)
+      end
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(block["shared_description_rows"]).not_to be_empty
+      expect(block["shared_description_rows"]).to all(include("declared_layers" => ["system"]))
+    end
   end
 end

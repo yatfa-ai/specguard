@@ -2491,6 +2491,10 @@ class RepositoryOverview
   # than a defect — the project's identity rule is semantic, so a test that moved is the same test
   # and keeps its history, but a reader looking for a flaky test in one file needs to know the
   # history spans two.
+  # `declared_layers`: the DISTINCT layers the test's examples declared anywhere in the window (a
+  # set — an identity can change layer mid-window), sorted. `[]` = no run in the window declared
+  # one: NOT unreadable, NOT a measured `unit`. A partially annotated identity lists only what was
+  # declared. The stored `intent_layer`, never inferred from the path.
   def serialized_unstable_test_row(row)
     {
       name: row.name,
@@ -2506,7 +2510,8 @@ class RepositoryOverview
       shared_description: row.shared_description?,
       spec_identity_id: row.spec_identity_id,
       renamed: row.renamed?,
-      descriptions: row.descriptions
+      descriptions: row.descriptions,
+      declared_layers: row.declared_layers
     }
   end
 

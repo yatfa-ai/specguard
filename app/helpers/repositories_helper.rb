@@ -1343,6 +1343,23 @@ module RepositoriesHelper
     content_tag(:span, "undeclared", class: "text-app-muted")
   end
 
+  # The "declared layer(s)" line of a "Tests whose outcome changed" row — the cross-run
+  # counterpart of `declared_layer_label`, taking the row's DISTINCT declared layers
+  # (`UnstableTests::Row#declared_layers`) rather than one observation. Same vocabulary: tokens
+  # printed as stored, and an empty set reads the muted word `undeclared`. NEVER inferred from the
+  # spec path or `DerivedIntent`. The span carries `data-declared-layers` so it is never mistaken
+  # for the files/descriptions disclosures beside it.
+  def declared_layers_label(layers)
+    layers = Array(layers)
+    if layers.empty?
+      content_tag(:span, safe_join(["declared layer: ", content_tag(:span, "undeclared", class: "text-app-muted")]),
+                  class: "block text-xs text-app-muted", data: { declared_layers: "" })
+    else
+      content_tag(:span, "declared #{'layer'.pluralize(layers.size)}: #{layers.join(', ')}",
+                  class: "block text-xs text-app-muted", data: { declared_layers: "" })
+    end
+  end
+
   # The title of the index's FILTERED-empty state — the page a `?q=` or `?role=` ask narrowed to
   # nothing on an account that holds repositories (`RepositoriesController#narrowing_matched_nothing?`
   # is the gate; this is its words).

@@ -113,6 +113,10 @@
                         recorded as <%= test.descriptions.to_sentence %>
                       </span>
                     <% end %>
+                    <%# The DECLARED layer(s) — the distinct `@intent layer:` values this test's
+                        examples declared in the window, or the muted `undeclared`. Never inferred
+                        from the path; see `RepositoriesHelper#declared_layers_label`. %>
+                    <%= declared_layers_label(test.declared_layers) %>
                   </td>
                   <%# Always the fraction. "12" alone reads as twelve of something unstated, and on
                       this panel the denominator IS the claim: a test seen in 12 of 30 runs is a

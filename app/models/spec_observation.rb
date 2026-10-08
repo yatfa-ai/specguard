@@ -1602,6 +1602,13 @@ class SpecObservation < ApplicationRecord
   # NULL)` for both lists, so a null never arrives as a nil element inside an array the surface
   # iterates.
   #
+  # `intent_layers` is the DISTINCT set of layers (`@intent layer:`) the identity's examples DECLARED
+  # anywhere in the window — a set, because an identity can change layer mid-window. SQL NULL (read
+  # as `[]` by `UnstableTests::Row#declared_layers`) means no run in the window declared one: NOT
+  # unreadable and NOT a measured `unit`. A partially annotated identity lists only what was
+  # declared. The stored column, verbatim — never inferred from the spec path or `DerivedIntent`.
+  # Same SELECT, same group: no extra query.
+  #
   # The outcome words are echoed verbatim and never folded into a verdict, for the reason
   # `#outcome_label` gives: nothing platform-side validates that string. The file paths are what
   # makes a MOVED test visible — per the project's semantic-identity rule a test that moved is the
@@ -1616,7 +1623,8 @@ class SpecObservation < ApplicationRecord
     outcomes: "ARRAY_AGG(DISTINCT outcome) FILTER (WHERE outcome IS NOT NULL)",
     file_paths: "ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)",
     names: "ARRAY_AGG(DISTINCT name) FILTER (WHERE name IS NOT NULL)",
-    latest_name: "(ARRAY_AGG(name ORDER BY id DESC) FILTER (WHERE name IS NOT NULL))[1]"
+    latest_name: "(ARRAY_AGG(name ORDER BY id DESC) FILTER (WHERE name IS NOT NULL))[1]",
+    intent_layers: "ARRAY_AGG(DISTINCT intent_layer) FILTER (WHERE intent_layer IS NOT NULL)"
   }.freeze
 
   # Step two of two: how each candidate identity behaved across the whole window — over the
