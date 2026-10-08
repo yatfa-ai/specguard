@@ -29,7 +29,7 @@
 # has no mix (`TestRun#layer_counts` is nil) and differencing against it would render the whole
 # suite as appearing from nothing.
 #
-# The caller guards the nil previous run, as `RepositoryOverview#spec_directory_growth` does — this
+# The caller guards the nil previous run, as `RepositoryGrowthSerializer#spec_directory_growth` does — this
 # object has no "no previous run" state of its own.
 class LayerRunGrowth
   STATES = %i[latest_unmeasured previous_unmeasured assembled_differently
