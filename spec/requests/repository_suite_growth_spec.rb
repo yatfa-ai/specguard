@@ -441,7 +441,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   describe "what the comparison costs the page" do
     # `count_queries` comes from spec/support/query_capture.rb.
 
-    # @intent: {"entity": "TestRun", "action": "budget comparison queries", "behavior": "Rendering the page with a comparable predecessor costs exactly three queries over the no-predecessor baseline \u2014 the shard aggregate plus the two by-area growth reads \u2014 and still prints +2.", "layer": "request"}
+    # @intent: {"entity": "TestRun", "action": "budget comparison queries", "behavior": "Rendering the page with a comparable predecessor costs exactly four queries over the no-predecessor baseline \u2014 the shard aggregate, the two by-area growth reads and the previous run's layer mix \u2014 and still prints +2.", "layer": "request"}
     it "costs one query more when it finds a run to compare against — the coverage check on it" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "firstofbranch", branch: "main", total_specs_count: 10,
@@ -477,10 +477,16 @@ RSpec.describe "Repository suite-size growth", type: :request do
       # top of it. Their own files pin their budgets — including the states each decides WITHOUT a
       # query, which is what stops this number growing further.
       #
+      #   4. (SPGD-1681) the previous run's declared-layer mix behind the delta line under "Declared
+      #      layers" (`LayerRunGrowth`) — the same single-row run aggregate the latest run's mix
+      #      already costs, asked of the previous run once the pre-query gate passes. Counted even
+      #      though these runs wrote no per-example rows, because whether they did is only knowable
+      #      by asking.
+      #
       # The latest run's own shard aggregate is not new — the cost rows already paid for it — and
       # none of these grows with the size of the suite, so the page stays O(1) in it exactly as
       # before. A second predecessor lookup, or one aggregate per candidate, still shows up here.
-      expect(count_queries { get repository_path(repository) }).to eq(baseline + 3)
+      expect(count_queries { get repository_path(repository) }).to eq(baseline + 4)
       expect(delta_figure.text).to eq("+2")
     end
 

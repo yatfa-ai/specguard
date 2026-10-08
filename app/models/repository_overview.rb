@@ -316,6 +316,12 @@ class RepositoryOverview
       # See `serialized_directory_run_growth_window`.
       directory_run_growth_window: serialized_directory_run_growth_window,
       directory_run_growth: serialized_directory_run_growth,
+      # BESIDE `directory_run_growth` (same two runs, same `?commit_sha=` re-anchoring, no new
+      # parameter) and NOT inside `latest_run`, which is single-run facts only: how the run-wide
+      # DECLARED-LAYER MIX moved against the previous run on the branch. See
+      # `serialized_layer_run_growth_window`.
+      layer_run_growth_window: serialized_layer_run_growth_window,
+      layer_run_growth: serialized_layer_run_growth,
       # BESIDE `directory_run_growth` AND NOT DERIVABLE FROM IT — the same two runs and the same area
       # grain, measuring a different quantity. That pair answers "which areas changed SIZE" and this
       # one answers "which areas changed TIME", and `SpecDirectoryRuntimeGrowth`'s class comment
@@ -3097,6 +3103,46 @@ class RepositoryOverview
     }
   end
 
+  # The contract block for `layer_run_growth`, shaped like `directory_run_growth_window` and
+  # carrying the same two runs (`anchor_commit_sha` = the latest/named run, `baseline_commit_sha` =
+  # its predecessor ON ITS OWN BRANCH). `state` is `LayerRunGrowth#state`, plus the two
+  # serializer-level states added at this call site exactly as the area sibling does —
+  # `no_latest_run` (CI never reported) and `no_previous_run` (first run on the branch, or a latest
+  # run that named no branch) — because the presenter is never handed a nil previous run.
+  # `comparable` is exactly `layer_run_growth != null`.
+  def serialized_layer_run_growth_window
+    growth = layer_run_growth
+
+    {
+      basis: "previous_run_on_branch",
+      branch: latest_test_run&.branch,
+      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: latest_test_run&.commit_sha,
+      baseline_commit_sha: previous_test_run&.commit_sha
+    }
+  end
+
+  # The declared-layer mix movement — `null` in EVERY non-comparable state, never a block of zeros
+  # (a zero here would be a fabricated measurement for a run that recorded no mix). Per layer, in
+  # `SpecObservation::DECLARED_LAYER_KEYS` order, `{baseline_count, anchor_count, change}`; a layer
+  # that did not move serves `change: 0`. The per-layer changes sum to
+  # `anchor_recorded_count - baseline_recorded_count`. Operands and difference only — no view
+  # strings; the path is never consulted.
+  def serialized_layer_run_growth
+    growth = layer_run_growth
+
+    return nil unless growth&.comparable?
+
+    {
+      layers: growth.rows.transform_values do |row|
+        { baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
+      end,
+      baseline_recorded_count: growth.baseline_recorded_count,
+      anchor_recorded_count: growth.anchor_recorded_count
+    }
+  end
+
   # WHICH AREAS OF THE SUITE GREW OR SHRANK IN THE LATEST PUSH — the agent-readable half of the
   # "Areas that grew or shrank" panel `repositories#show` renders from the same object, off the same
   # two runs, in the same order. It is the question the dashboard answers with no parameter at all
@@ -3818,6 +3864,17 @@ class RepositoryOverview
 
     @spec_directory_growth =
       latest_test_run && previous_test_run && SpecDirectoryGrowth.for(latest_test_run, previous_test_run)
+  end
+
+  # The run-over-run declared-layer-mix presenter, or `nil` when there are not two runs to hand it.
+  # Guarded here, not by widening the model, on `spec_directory_growth`'s argument (see above): the
+  # presenter dereferences its second argument immediately and has no "no previous run" state.
+  # Rides the memoized `previous_test_run` — no second previous-run lookup.
+  def layer_run_growth
+    return @layer_run_growth if defined?(@layer_run_growth)
+
+    @layer_run_growth =
+      latest_test_run && previous_test_run && LayerRunGrowth.for(latest_test_run, previous_test_run)
   end
 
   # The run-over-run RUNTIME presenter, or `nil` when there are not two runs to hand it — memoized

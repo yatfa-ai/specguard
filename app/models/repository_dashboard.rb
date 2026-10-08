@@ -752,6 +752,9 @@ class RepositoryDashboard
     # the size of the suite: see `SpecDirectoryGrowth`.
     if @latest_test_run && @previous_test_run
       @spec_directory_growth = SpecDirectoryGrowth.for(@latest_test_run, @previous_test_run)
+      # The declared-layer MIX against the same previous run — the "Declared layers" row's delta
+      # line. The gate is `LayerRunGrowth`'s own and runs before any read of the previous run's mix.
+      @layer_run_growth = LayerRunGrowth.for(@latest_test_run, @previous_test_run)
 
       # ONE grain down, for the ONE area the reader asked about: not which areas moved but which
       # FILES of the picked area moved. The panel above discloses that it cannot tell a relocation
