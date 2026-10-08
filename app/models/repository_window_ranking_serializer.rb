@@ -586,7 +586,8 @@ class RepositoryWindowRankingSerializer
       moved: row.moved?,
       renamed: row.renamed?,
       descriptions: row.descriptions,
-      files_seen: row.files_seen
+      files_seen: row.files_seen,
+      declared_layers: row.declared_layers
     }
   end
 

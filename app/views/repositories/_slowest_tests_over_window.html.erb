@@ -99,6 +99,10 @@
                       also recorded as <%= test.descriptions.drop(1).to_sentence %>
                     </span>
                   <% end %>
+                  <%# The DECLARED layer(s) — the distinct `@intent layer:` values this test's
+                      examples declared in the window, or the muted `undeclared`. Never inferred
+                      from the path; see `RepositoriesHelper#declared_layers_label`. %>
+                  <%= declared_layers_label(test.declared_layers) %>
                   <%# ⭐ THE MOVED TEST, VISIBLE — and the single sentence this whole read exists
                       for. Per the project's identity rule a test that moved is the same test and
                       keeps its runtime history, so this is the guarantee being KEPT rather than an

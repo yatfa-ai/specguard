@@ -49,9 +49,19 @@ RSpec.describe "Repository window slowest tests", type: :request do
   # `row_element` (which pairs it with the row ELEMENT). It is deliberately not inlined at either
   # site: the reverse-order suffix-stripping is coupled to how the partial nests its spans, so two
   # copies would be two places that must be edited together the next time that nesting moves.
+  # The note spans of a test cell, WITHOUT the declared-layers line (marked `data-declared-layers`,
+  # with its nested `undeclared` word) — that line is its own key on a row, never a note and never
+  # part of the label.
+  def note_spans(test_cell)
+    test_cell.all(:xpath, ".//span[not(ancestor-or-self::*[@data-declared-layers])]")
+  end
+
   def label_of(test_cell)
-    notes = test_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }
-    notes.reverse.reduce(test_cell.text.gsub(/\s+/, " ").strip) do |label, note|
+    layers = test_cell.first("[data-declared-layers]")&.text&.gsub(/\s+/, " ")&.strip
+    text = test_cell.text.gsub(/\s+/, " ").strip
+    text = text.sub(layers, " ").gsub(/\s+/, " ").strip if layers
+    notes = note_spans(test_cell).map { |span| span.text.gsub(/\s+/, " ").strip }
+    notes.reverse.reduce(text) do |label, note|
       label.delete_suffix(note).strip
     end
   end
@@ -62,9 +72,10 @@ RSpec.describe "Repository window slowest tests", type: :request do
   def rows
     panel.all("tbody tr").map do |row|
       test_cell, total_cell, slowest_cell, seen_cell, timed_cell = row.all("td")
-      notes = test_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }
+      notes = note_spans(test_cell).map { |span| span.text.gsub(/\s+/, " ").strip }
+      layers = test_cell.first("[data-declared-layers]")&.text&.gsub(/\s+/, " ")&.strip
 
-      { name: label_of(test_cell), notes: notes, total: total_cell.text.strip,
+      { name: label_of(test_cell), notes: notes, layers: layers, total: total_cell.text.strip,
         slowest: slowest_cell.text.strip, seen: seen_cell.text.gsub(/\s+/, " ").strip,
         timed: timed_cell.text.strip }
     end
@@ -84,7 +95,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
   # The file line of one row, as an element. It is the LAST span of the test cell, which is where
   # the partial nests it and the same nesting `rows` reads its notes off.
-  def file_line(name) = row_element(name).all("td").first.all("span").last
+  def file_line(name) = note_spans(row_element(name).all("td").first).last
 
   def file_links(name) = file_line(name).all("a")
 
@@ -294,6 +305,46 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
       expect(row_named("Ledger rebuild walks every entry")[:notes])
         .to eq(["spec/models/ledger_spec.rb"])
+    end
+  end
+
+  # SPGD-1707 — the declared layer(s) under a test's name: the stored `@intent layer:` values, or
+  # the muted `undeclared`, never a guess from the path.
+  describe "the declared layer line" do
+    def layered_repository(layer)
+      repository = create_repository(user: @user)
+      3.times do |index|
+        spec = if layer
+                 annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1,
+                                name: "Invoice finalize locks the line items", duration: 2.0,
+                                layer: layer)
+               else
+                 example_spec(name: "Invoice finalize locks the line items", duration: 2.0,
+                              file_path: "spec/models/invoice_spec.rb", line_number: 1)
+               end
+        ingest(repository, [spec], commit_sha: "lay#{index}sha#{format("%07d", index)}",
+                                   at: (30 - index).days.ago)
+      end
+      repository
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "show declared layer", "behavior": "a declared test reads declared layer with its token without disturbing the name or the file note", "layer": "request"}
+    it "names the declared layer" do
+      get repository_path(layered_repository("request"))
+
+      expect(rows.first).to include(name: "Invoice finalize locks the line items",
+                                    notes: ["spec/models/invoice_spec.rb"],
+                                    layers: "declared layer: request")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "show declared layer", "behavior": "an unannotated test reads declared layer undeclared without disturbing the name or the file note", "layer": "request"}
+    it "says undeclared for an unannotated test" do
+      get repository_path(layered_repository(nil))
+
+      expect(rows.first).to include(name: "Invoice finalize locks the line items",
+                                    notes: ["spec/models/invoice_spec.rb"],
+                                    layers: "declared layer: undeclared")
+      expect(panel).to have_css("[data-declared-layers] .text-app-muted", text: "undeclared")
     end
   end
 
