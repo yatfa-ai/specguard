@@ -135,7 +135,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
     #
     # So this asserts the two things that flip and nothing that does not: the SIGN of each movement,
     # and WHICH of the two commits the comparison was taken FROM. Verified by mutation — flipping
-    # the `oldest_first` ask in `RepositoryOverview#spec_directory_window_growth` to `newest_first`
+    # the `oldest_first` ask in `RepositoryGrowthSerializer#spec_directory_window_growth` to `newest_first`
     # turns `spec/models` from `+3` into `-3` and swaps the two shas, and this example goes red.
     # @intent: { entity: "repository directory_growth block", action: "anchor on newest run", behavior: "the comparison anchors on the newest run and baselines on the oldest, so change signs are truthful", layer: "request" }
     it "anchors on the newest run and baselines on the oldest, so every change carries its true sign" do
