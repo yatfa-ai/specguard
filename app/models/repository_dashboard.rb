@@ -763,6 +763,10 @@ class RepositoryDashboard
       # The declared-layer MIX against the same previous run — the "Declared layers" row's delta
       # line. The gate is `LayerRunGrowth`'s own and runs before any read of the previous run's mix.
       @layer_run_growth = LayerRunGrowth.for(@latest_test_run, @previous_test_run)
+      # And the TIME each layer accounts for against the same previous run — the "Time by declared
+      # layer" row's delta line. Same gate, same two runs already in memory; the figures are the
+      # `layer_durations` that ride the aggregate `LayerRunGrowth` has just read, so no further query.
+      @layer_runtime_growth = LayerRuntimeGrowth.for(@latest_test_run, @previous_test_run)
 
       # ONE grain down, for the ONE area the reader asked about: not which areas moved but which
       # FILES of the picked area moved. The panel above discloses that it cannot tell a relocation

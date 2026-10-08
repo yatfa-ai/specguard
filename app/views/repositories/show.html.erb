@@ -515,12 +515,24 @@
                 <%= figures %>
               <% end %>
             </p>
+            <%# The movement of that time against the previous run on this branch — the same
+                `LayerRuntimeGrowth` object `layer_runtime_growth` on the API is built from. Shown
+                only when comparable; a layer untimed on either side reads "not reported", never 0. %>
+            <% if @layer_runtime_growth&.comparable? %>
+              <p class="text-xs text-app-content-secondary" id="layer-runtime-growth">
+                Since <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>
+                on <%= @latest_test_run.branch %>: <%= @layer_runtime_growth.label %>
+              </p>
+            <% end %>
             <p class="text-xs text-app-muted" id="layer-durations-basis">
               Each figure is the sum of its examples' own durations — machine time, not wall clock, so
               it can exceed the run's wall clock when the suite runs in parallel or across shards — and
               "timed" is how many of that layer's examples reported a duration. The layer is what each
               example's <code>@intent</code> declared, never inferred from the path; "undeclared" is not
-              "not readable by SpecGuard".
+              "not readable by SpecGuard". The
+              movement line compares sums of example durations (machine time) between two runs and
+              matches no tests: a test that changes its declared <code>@intent</code> layer reads as
+              one layer gaining time and another losing it.
             </p>
             <p class="text-xs text-app-muted" id="declared-layers-basis">
               "Declared layers" is how many of this run's <%= number_with_delimiter(readings.recorded) %>

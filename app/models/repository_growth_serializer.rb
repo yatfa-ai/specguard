@@ -380,6 +380,41 @@ class RepositoryGrowthSerializer
     }
   end
 
+  # The contract block for `layer_runtime_growth`, the exact shape of `layer_run_growth_window` so a
+  # client reads both with one routine. `state` is `LayerRuntimeGrowth#state` (ten states) plus the
+  # two serializer-level ones, `no_latest_run` and `no_previous_run`. `comparable` is exactly
+  # `layer_runtime_growth != null`.
+  def serialized_layer_runtime_growth_window
+    growth = layer_runtime_growth
+
+    {
+      basis: "previous_run_on_branch",
+      branch: latest_test_run&.branch,
+      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: latest_test_run&.commit_sha,
+      baseline_commit_sha: previous_test_run&.commit_sha
+    }
+  end
+
+  # The declared-layer TIME movement — `null` in EVERY non-comparable state, never zeros. Per layer,
+  # in `SpecObservation::DECLARED_LAYER_KEYS` order: the summed seconds then and now, how many
+  # examples each was summed over, the recorded example counts, and `change` (anchor − baseline,
+  # `null` unless BOTH sides timed that layer). Operands and difference only — no view strings.
+  def serialized_layer_runtime_growth
+    growth = layer_runtime_growth
+
+    return nil unless growth&.comparable?
+
+    {
+      layers: growth.rows.transform_values do |row|
+        { baseline_seconds: row.baseline_seconds, anchor_seconds: row.anchor_seconds,
+          baseline_timed_count: row.baseline_timed_count, anchor_timed_count: row.anchor_timed_count,
+          baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
+      end
+    }
+  end
+
   # WHICH AREAS OF THE SUITE GREW OR SHRANK IN THE LATEST PUSH — the agent-readable half of the
   # "Areas that grew or shrank" panel `repositories#show` renders from the same object, off the same
   # two runs, in the same order. It is the question the dashboard answers with no parameter at all
@@ -1025,6 +1060,16 @@ class RepositoryGrowthSerializer
 
     @layer_run_growth =
       latest_test_run && previous_test_run && LayerRunGrowth.for(latest_test_run, previous_test_run)
+  end
+
+  # The run-over-run declared-layer TIME presenter, guarded and memoized exactly as
+  # {#layer_run_growth} is (`defined?` across the nil). Shared with the dashboard through
+  # {#layer_runtime_growth} so there is one object and no second previous-run lookup.
+  def layer_runtime_growth
+    return @layer_runtime_growth if defined?(@layer_runtime_growth)
+
+    @layer_runtime_growth =
+      latest_test_run && previous_test_run && LayerRuntimeGrowth.for(latest_test_run, previous_test_run)
   end
 
   # The run-over-run RUNTIME presenter, or `nil` when there are not two runs to hand it — memoized
