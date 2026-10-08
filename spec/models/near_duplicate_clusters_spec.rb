@@ -600,6 +600,76 @@ RSpec.describe NearDuplicateClusters do
     end
   end
 
+  # SPGD-1720: the leading key of the ranking, ahead of the cost key and ahead of the cap.
+  describe "the overlap kind" do
+    def single_file_pair(cost)
+      [ identity(EXPIRED, line: 3), identity(OUTRIGHT, line: 9) ].each { |m| observe(m, duration: cost) }
+    end
+
+    def two_file_pair(cost)
+      a = identity("Refund reverses a captured charge", line: 30, path: "spec/models/refund_spec.rb")
+      b = identity("Refund reverses a captured charges", line: 6, path: "spec/requests/refund_spec.rb")
+      [ a, b ].each { |m| observe(m, duration: cost) }
+    end
+
+    # @intent: { entity: "NearDuplicateClusters", action: "rank clusters", behavior: "a cheap cluster spanning two spec files ranks ahead of a costlier single-file cluster, and the cap drops the single-file one", layer: "unit" }
+    it "ranks a multi-file cluster ahead of a costlier single-file one, before the cap is applied" do
+      single_file_pair(20.0)
+      two_file_pair(0.15)
+
+      all = described_class.for(repository).clusters
+      capped = described_class.for(repository, limit: 1)
+
+      expect(all.map(&:overlap_kind)).to eq(%w[multi_file single_file])
+      expect(all.map(&:total_seconds)).to eq([ 0.3, 40.0 ])
+      expect(capped.clusters.map(&:overlap_kind)).to eq([ "multi_file" ])
+      expect(capped.clusters.sole.total_seconds).to eq(0.3)
+      expect(capped.cluster_count).to eq(2)
+      expect(capped).to be_truncated
+    end
+
+    # @intent: { entity: "NearDuplicateClusters", action: "rank clusters", behavior: "within one overlap kind the previous order holds: a timed cluster before an untimed one, then the dearer first", layer: "unit" }
+    it "keeps the previous order inside each kind" do
+      single_file_pair(1.0)
+      cheap = identity("Invoice totals include shipping tax", line: 3, path: "spec/models/a_spec.rb")
+      cheap_partner = identity("Invoice totals include shipping taxes", line: 3, path: "spec/models/b_spec.rb")
+      [ cheap, cheap_partner ].each { |m| observe(m, duration: 0.01) }
+      two_file_pair(5.0)
+      untimed = identity("Login locks an account after failed tries", line: 3, path: "spec/models/c_spec.rb")
+      untimed_partner = identity("Login locks an account after failed try", line: 3, path: "spec/models/d_spec.rb")
+      [ untimed, untimed_partner ].each { |m| observe(m, duration: nil) }
+
+      clusters = described_class.for(repository).clusters
+
+      expect(clusters.map(&:overlap_kind)).to eq(%w[multi_file multi_file multi_file single_file])
+      expect(clusters.map(&:total_seconds)).to eq([ 10.0, 0.02, nil, 2.0 ])
+    end
+
+    # @intent: { entity: "NearDuplicateClusters", action: "report overlap kind", behavior: "a two-file cluster whose members declared different layers is multi_file and cross_layer at once", layer: "unit" }
+    it "is independent of layer_redundancy" do
+      a = identity("Refund reverses a captured charge", line: 30, path: "spec/models/refund_spec.rb")
+      b = identity("Refund reverses a captured charges", line: 6, path: "spec/requests/refund_spec.rb")
+      observe(a, layer: "unit")
+      observe(b, layer: "request")
+
+      cluster = described_class.for(repository).clusters.sole
+
+      expect(cluster.overlap_kind).to eq("multi_file")
+      expect(cluster.file_count).to eq(2)
+      expect(cluster.layer_redundancy).to eq("cross_layer")
+    end
+
+    # @intent: { entity: "NearDuplicateClusters", action: "report overlap kind", behavior: "a cluster whose members all sit in one spec file is single_file", layer: "unit" }
+    it "reads single_file for a cluster inside one file" do
+      single_file_pair(0.5)
+
+      cluster = described_class.for(repository).clusters.sole
+
+      expect(cluster.overlap_kind).to eq("single_file")
+      expect(cluster.file_count).to eq(1)
+    end
+  end
+
   describe "what it says about itself when the list is empty" do
     # The Vacuous Green split: three different facts, three different answers, and only the first
     # two are silence.

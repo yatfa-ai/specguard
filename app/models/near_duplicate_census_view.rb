@@ -32,7 +32,7 @@ class NearDuplicateCensusView
   # `layer_source`, then the population figures, `weighed_run_id` and `computed_at`, in the stored
   # order — then `clusters`: every existing scalar of each row, with BOTH member listings dropped
   # and four derived keys added: `rank`, `files_seen` (sorted distinct member file paths),
-  # `file_count` and `declared_layers` (distinct non-null layer names). `layer_redundancy`,
+  # `file_count`, `overlap_kind` and `declared_layers` (distinct non-null layer names). `layer_redundancy`,
   # `similarity_range` and `unobserved_members` ride unchanged.
   #
   # `nil` when nothing is stored, per the census's own rule.
@@ -92,7 +92,9 @@ class NearDuplicateCensusView
     layers = Array(cluster["layer_groups"]).filter_map { |group| group["layer"] }.uniq
 
     cluster.except("members", "layer_groups").merge(
-      "rank" => rank, "files_seen" => files, "file_count" => files.size, "declared_layers" => layers
+      "rank" => rank, "files_seen" => files, "file_count" => files.size, "declared_layers" => layers,
+      # Derived from the row's own members, so a payload stored before the key existed gets it too.
+      "overlap_kind" => files.size > 1 ? "multi_file" : "single_file"
     )
   end
 

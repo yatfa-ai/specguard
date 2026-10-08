@@ -334,6 +334,12 @@ class NearDuplicateClusters
   # engine was feature hashing, and that sentence is now false in both halves.
   SIMILARITY_BASIS = "semantic similarity, not exact wording"
 
+  # The order the ranking was computed under, stored on the census head (SPGD-1720). Its presence on
+  # a stored payload is what marks that census as computed under THIS order, so a row stored before
+  # the order changed never claims one it was not computed under.
+  RANKING_BASIS = "clusters spanning more than one spec file first, then by summed wall clock; " \
+                  "single-file groups follow"
+
   # What the declared-layer dimension of this census IS, stated on the object for the same reason
   # `SIMILARITY_BASIS` is: a layer grouping served without the statement of where its layers come
   # from is a confident classification over an unstated source — the reader could not tell declared
@@ -446,7 +452,14 @@ class NearDuplicateClusters
     @presence = presence
   end
 
-  # The ranking, costliest first. Never longer than the limit it was built with.
+  # The ranking: multi-file groups first, then costliest. Never longer than the limit it was built with.
+  #
+  # The LEADING key is `overlap_kind` (SPGD-1720): a group spanning more than one spec file is the
+  # kind a reader can consolidate across files, and a single-file group is mostly a table-driven
+  # loop or a neighbouring example, so the multi-file ones lead. It sits ahead of the cost key and
+  # ahead of `first(@limit)` — the cap is applied after the sort, so a cheap multi-file group is
+  # never the one dropped in favour of a costlier single-file one. Within each kind the order below
+  # is unchanged.
   #
   # Ordered by summed wall clock `DESC NULLS LAST` — the rule `RepeatedDescriptions` and
   # `SpecFileDurations` established, and the reason the sort key leads with a nil flag rather than
@@ -455,7 +468,7 @@ class NearDuplicateClusters
   # clusters total equally has one stable order rather than one that changes per request.
   def clusters
     @clusters ||= @all_clusters.sort_by do |cluster|
-      [ cluster.total_seconds.nil? ? 1 : 0, -(cluster.total_seconds || 0.0),
+      [ cluster.multi_file? ? 0 : 1, cluster.total_seconds.nil? ? 1 : 0, -(cluster.total_seconds || 0.0),
         -cluster.example_count, cluster.sort_key ]
     end.first(@limit)
   end
@@ -517,6 +530,7 @@ class NearDuplicateClusters
   # object to wherever the count is rendered — SPGD-115's surfaces consume this, and the constant is
   # what stops the number arriving there without it.
   def similarity_basis = SIMILARITY_BASIS
+  def ranking_basis = RANKING_BASIS
 
   # The floor a pair had to clear to be in any of these clusters, so a surface can state the
   # threshold it is showing rather than leaving a reader to assume one.
@@ -744,6 +758,17 @@ class NearDuplicateClusters
     # The spec files these tests live in, deduplicated and sorted so two clusters spanning the same
     # files read the same way.
     def files_seen = members.map(&:file_path).uniq.sort
+
+    # How many distinct spec files the members sit in.
+    def file_count = files_seen.size
+
+    # Which KIND of overlap this group shows: `"multi_file"` when its members sit in more than one
+    # spec file, else `"single_file"`. A plain report field and not a verdict, and independent of
+    # `layer_redundancy` — a two-file group whose members declared different layers is `multi_file`
+    # AND `cross_layer`, and neither reads off the other.
+    def overlap_kind = file_count > 1 ? "multi_file" : "single_file"
+
+    def multi_file? = overlap_kind == "multi_file"
 
     # Ties in the ranking are broken on this rather than on an id, so the order is a property of
     # what the repository contains rather than of what order it was ingested in.

@@ -153,13 +153,14 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       # normalized all of this away, which is exactly why it is not one; this pin is what keeps
       # the column choice honest.
       expect(served.keys)
-        .to eq(["similarity_floor", "similarity_basis", "layer_source", "cluster_count", "truncated",
+        .to eq(["similarity_floor", "similarity_basis", "layer_source", "ranking_basis",
+                "cluster_count", "truncated",
                 "saturated_identity_count", "unresolved_count", "recorded_count",
                 "identity_count", "clustered_identity_count", "clustered_timed_count",
                 "clustered_example_count", "clusters", "weighed_run_id", "computed_at"])
       expect(served["clusters"].sole.keys)
         .to eq(["signal_source", "member_count", "example_count", "total_seconds",
-                "timed_count", "similarity_range", "unobserved_members",
+                "timed_count", "similarity_range", "unobserved_members", "overlap_kind",
                 "layer_redundancy", "layer_groups", "members"])
       expect(served["clusters"].sole["members"].first.keys)
         .to eq(["text", "file_path", "line_number", "example_count", "total_seconds"])
@@ -484,7 +485,12 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       expect(row).to include("rank" => 1,
                              "files_seen" => %w[spec/models/checkout_spec.rb spec/requests/checkout_spec.rb],
                              "file_count" => 2,
+                             "overlap_kind" => "multi_file",
                              "declared_layers" => %w[request unit])
+      # Independent fields: a two-file group whose members declared different layers is both.
+      expect(row["layer_redundancy"]).to eq("cross_layer")
+      expect(stored["overlap_kind"]).to eq("multi_file")
+      expect(summary["ranking_basis"]).to eq(NearDuplicateClusters::RANKING_BASIS)
       %w[signal_source member_count example_count total_seconds timed_count similarity_range
          unobserved_members layer_redundancy].each do |scalar|
         expect(row[scalar]).to eq(stored[scalar])
