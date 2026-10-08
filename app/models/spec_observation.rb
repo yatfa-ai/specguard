@@ -1868,14 +1868,31 @@ class SpecObservation < ApplicationRecord
   # fetched separately from the list it describes is a claim with no structural reason to keep
   # agreeing with it.
   #
-  # @return [Hash{Symbol=>Integer}] `recorded_count` and `unresolved_count`, both counted in rows.
-  def self.identity_presence_in(test_run)
-    counts = where(test_run_id: test_run.id).pick(
-      Arel.sql("COUNT(*)"),
-      Arel.sql("COUNT(*) FILTER (WHERE spec_identity_id IS NULL)")
-    )
+  # == `layer:` (SPGD-1726)
+  #
+  # With a layer the SAME statement also counts the run's rows that declared it, as two extra FILTER
+  # aggregates (`layer_recorded_count`, `layer_unresolved_count`), so a layer-narrowed {SlowestTests}
+  # can state its coverage fraction over ONE population — the layer's candidate read is the numerator,
+  # so the denominator has to be the layer's resolved rows, not the whole run's — WITHOUT a fourth
+  # statement: the gate still costs exactly one read. The predicate is {.declared_layer_predicate},
+  # the one every layer-narrowed read here is built from. `recorded_count` / `unresolved_count`
+  # stay the WHOLE run's (they decide the gate's state). `nil` — the default — selects exactly the two
+  # original aggregates and returns exactly the two original keys.
+  #
+  # @return [Hash{Symbol=>Integer}] `recorded_count` and `unresolved_count`, both counted in rows —
+  #   plus `layer_recorded_count` and `layer_unresolved_count` when a layer is asked.
+  def self.identity_presence_in(test_run, layer: nil)
+    columns = [Arel.sql("COUNT(*)"), Arel.sql("COUNT(*) FILTER (WHERE spec_identity_id IS NULL)")]
+    if layer
+      predicate = declared_layer_predicate(layer)
+      columns << Arel.sql("COUNT(*) FILTER (WHERE #{predicate})")
+      columns << Arel.sql("COUNT(*) FILTER (WHERE #{predicate} AND spec_identity_id IS NULL)")
+    end
+    counts = where(test_run_id: test_run.id).pick(*columns)
 
-    { recorded_count: counts[0].to_i, unresolved_count: counts[1].to_i }
+    result = { recorded_count: counts[0].to_i, unresolved_count: counts[1].to_i }
+    result.merge!(layer_recorded_count: counts[2].to_i, layer_unresolved_count: counts[3].to_i) if layer
+    result
   end
 
   # The DECLARED INTENT LAYERS of the examples that resolved to each of the named identities — the
@@ -1990,11 +2007,26 @@ class SpecObservation < ApplicationRecord
   # its captions are one read. So the population is measured ONCE, at the gate, and {SlowestTests}
   # threads that figure through as the denominator. One measurement cannot disagree with itself.
   #
+  # == `layer:` — ONE rule (SPGD-1726)
+  #
+  # With a layer, the candidates are the identities with AT LEAST ONE anchor-run example in that
+  # declared layer ({.in_declared_layer}; `undeclared` = `intent_layer IS NULL`). The narrowing is on
+  # the candidate STEP only: each candidate's row totals across the window stay the WHOLE durable
+  # test's ({.identity_duration_composition_in} is unchanged), so a row's `declared_layers` may list
+  # several layers when a test changed layer mid-window. Without it, if the anchor run's ten slowest
+  # tests are all `system`, no `unit` or `request` test's cross-run cost could be seen at all.
+  #
+  # The two window figures ride the same statement and are evaluated after WHERE, so under a layer
+  # they describe that layer's candidate population — the single-measurement rule holds (no second
+  # count). A layer nothing declared returns `[]`, which is why a caller must not destructure
+  # `.first` of a layer-narrowed read. `nil` — the default — leaves the SQL byte-identical.
+  #
   # @param test_run [TestRun] the ANCHOR — normally the newest run of the window.
+  # @param layer [String, Symbol, nil] a {DECLARED_LAYER_KEYS} member; `KeyError` otherwise.
   # @return [Array<Array>] `[spec_identity_id, candidate_count, timed_count]` per kept identity,
   #   where the last two are the same figures on every row.
-  def self.slowest_identity_candidates_in(test_run, limit: SLOWEST_LIMIT)
-    where(test_run_id: test_run.id)
+  def self.slowest_identity_candidates_in(test_run, limit: SLOWEST_LIMIT, layer: nil)
+    in_declared_layer(where(test_run_id: test_run.id), layer)
       .where.not(spec_identity_id: nil)
       .group(:spec_identity_id)
       .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), Arel.sql("spec_identity_id ASC"))

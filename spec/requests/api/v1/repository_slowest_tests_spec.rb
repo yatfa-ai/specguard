@@ -799,4 +799,123 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       expect(layers_of(block)).to eq(["system"])
     end
   end
+
+  # SPGD-1726 — `?layer=` narrows the CANDIDATE step of the cross-run ranking. The fixture is the one
+  # the ticket names: the anchor run's ten slowest tests are all `system`, an eleventh is `unit`, so
+  # the unfiltered cap cannot reach the unit test at all and only a narrowed candidate step can.
+  describe "?layer= narrowing the candidate step" do
+    SYSTEM_COUNT = SpecObservation::SLOWEST_LIMIT
+    UNIT_SLOW = "Money rounds half to even"
+    NO_LAYER = "Legacy importer parses an old file"
+
+    def layered_window(runs: 3)
+      runs.times do |index|
+        specs = (1..SYSTEM_COUNT).map do |i|
+          annotated_spec(file_path: "spec/system/flow_#{i}_spec.rb", line_number: 1, duration: 100.0 + i,
+                         name: "System flow #{i} completes", layer: "system",
+                         id: "./spec/system/flow_#{i}_spec.rb[1:1]")
+                         .merge(intent: { entity: "Flow#{i}", action: "complete", behavior: "completes flow #{i}", layer: "system" })
+        end
+        specs << annotated_spec(file_path: "spec/models/money_spec.rb", line_number: 1, duration: 1.0,
+                                name: UNIT_SLOW, layer: "unit")
+                   .merge(intent: { entity: "Money", action: "round", behavior: "rounds half to even", layer: "unit" })
+        specs << example_spec(name: NO_LAYER, duration: 0.5, file_path: "spec/lib/legacy_spec.rb")
+        ingest(repository, specs, commit_sha: "lyr#{index}sha#{format("%07d", index)}",
+                                  at: (30 - index).days.ago)
+      end
+    end
+
+    # @intent: { entity: "SlowestTests", action: "narrow candidates by layer", behavior: "layer=unit ranks the unit test the unfiltered top ten cannot reach and the unfiltered response omits it", layer: "request" }
+    it "ranks a unit test the anchor's ten slowest system tests push past the cap" do
+      layered_window
+
+      _w, unfiltered = blocks(query: { branch: "main" })
+      window, narrowed = blocks(query: { branch: "main", layer: "unit" })
+
+      expect(unfiltered["rows"].flat_map { |r| r["descriptions"] }).not_to include(UNIT_SLOW)
+      expect(narrowed["state"]).to eq("ranked")
+      expect(narrowed["rows"].map { |r| r["descriptions"] }).to eq([[UNIT_SLOW]])
+      expect(narrowed["rows"].first["declared_layers"]).to eq(["unit"])
+      expect(window["layer"]).to eq("unit")
+    end
+
+    # @intent: { entity: "SlowestTests", action: "narrow candidates by layer", behavior: "layer=system keeps only tests with a system example in the anchor run and echoes the layer", layer: "request" }
+    it "returns only tests with an example of the asked layer in the anchor run" do
+      layered_window
+
+      window, block = blocks(query: { branch: "main", layer: "system" })
+
+      expect(window["layer"]).to eq("system")
+      expect(block["rows"].length).to eq(SYSTEM_COUNT)
+      expect(block["rows"].flat_map { |r| r["declared_layers"] }.uniq).to eq(["system"])
+    end
+
+    # @intent: { entity: "SlowestTests", action: "narrow candidates by layer", behavior: "layer=undeclared selects the tests whose anchor-run examples declared no layer", layer: "request" }
+    it "selects the NULL-layer tests for undeclared" do
+      layered_window
+
+      _w, block = blocks(query: { branch: "main", layer: "undeclared" })
+
+      expect(block["rows"].map { |r| r["descriptions"] }).to eq([[NO_LAYER]])
+      expect(block["rows"].first["declared_layers"]).to eq([])
+    end
+
+    # The coverage figures then describe the LAYER's population on both sides of the fraction.
+    # @intent: { entity: "SlowestTests", action: "state one population", behavior: "under a layer resolved_count candidate_count and timed_count are the layer's own while recorded_count stays the whole run's", layer: "request" }
+    it "serves the layer's own figures beside the whole run's recorded count" do
+      layered_window
+
+      _w, block = blocks(query: { branch: "main", layer: "unit" })
+
+      expect(block).to include("recorded_count" => SYSTEM_COUNT + 2, "resolved_count" => 1,
+                               "candidate_count" => 1, "timed_count" => 1, "untimed_count" => 0,
+                               "complete" => true, "truncated" => false)
+    end
+
+    # @intent: { entity: "SlowestTests", action: "serve an empty layer", behavior: "a layer nothing in the anchor declared is ranked with no rows rather than unrecorded or unresolved", layer: "request" }
+    it "serves an empty layer as a ranked state with no rows" do
+      layered_window
+
+      window, block = blocks(query: { branch: "main", layer: "integration" })
+
+      expect(window["layer"]).to eq("integration")
+      expect(block).to include("state" => "ranked", "rows" => [], "resolved" => true,
+                               "resolved_count" => 0, "candidate_count" => 0, "timed_count" => 0,
+                               "complete" => false)
+    end
+
+    # @intent: { entity: "SlowestTests", action: "ignore a malformed layer", behavior: "bogus array and NUL layer asks serve the unasked body byte for byte with no layer key", layer: "request" }
+    it "treats a bogus, array or NUL layer as no ask at all" do
+      layered_window
+      unasked = get_repository(query: { branch: "main" }).slice("slowest_tests", "slowest_tests_window")
+
+      [{ layer: "bogus" }, { layer: ["request"] }, { layer: "\u0000" }, { layer: "" }].each do |ask|
+        body = get_repository(query: { branch: "main" }.merge(ask))
+
+        expect(response).to have_http_status(:ok)
+        expect(body.slice("slowest_tests", "slowest_tests_window")).to eq(unasked)
+        expect(body["slowest_tests_window"]).not_to have_key("layer")
+      end
+    end
+
+    # @intent: { entity: "SlowestTests", action: "serve the unasked key set", behavior: "an unasked window block keeps exactly its five keys with no layer key", layer: "request" }
+    it "keeps the unasked window key set unchanged" do
+      layered_window
+
+      window, _block = blocks(query: { branch: "main" })
+
+      expect(window.keys).to contain_exactly("order", "tie_break_served", "branch_scope", "branch", "grouped")
+    end
+
+    # @intent: { entity: "SlowestTests", action: "gate on branch", behavior: "a layer ask without a branch leaves slowest_tests null and echoes no layer", layer: "request" }
+    it "does not unlock the ranking without a branch" do
+      layered_window
+
+      window, block = blocks(query: { layer: "unit" })
+
+      expect(block).to be_nil
+      expect(window).to include("grouped" => false)
+      expect(window).not_to have_key("layer")
+    end
+  end
 end

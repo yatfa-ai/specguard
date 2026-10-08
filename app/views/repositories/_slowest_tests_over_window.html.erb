@@ -42,6 +42,20 @@
               Every figure comes off `@slowest_tests`, which holds the list and these counts
               together, so this paragraph cannot end up describing a different population from the
               rows below it. Nothing here is recomputed from the rows. %>
+          <%# No `#any?` guard for the UNASKED ranking, and that is deliberate: `:ranked` is reached only
+              where the anchor has resolved rows, which is exactly the condition under which
+              `SpecObservation.slowest_identity_candidates_in` returns candidates. Under `?layer=`
+              (SPGD-1726) that guarantee no longer holds — a layer nothing in the anchor declared has
+              no candidates — so ONLY then is an empty list a reachable state, and it gets its own
+              empty state naming the layer instead of a titled table with no rows. %>
+          <% if @slowest_tests.layer? && !@slowest_tests.any? %>
+            <div id="slowest-tests-window-empty-layer">
+              <%= render UI::EmptyStateComponent.new(
+                    title: "No #{@slowest_tests.layer}-layer tests in the newest run",
+                    description: slowest_tests_empty_layer_description(@slowest_tests)
+                  ) %>
+            </div>
+          <% else %>
           <p class="text-xs text-app-muted mb-3" id="slowest-tests-window-basis">
             <%= slowest_tests_window_sentence(@slowest_tests) %>
             <%# ⭐ The partition: which tests are here at all was decided by ONE run, and a test the
@@ -58,13 +72,6 @@
                 than about this window. %>
             <%= slowest_tests_exclusion_sentence(@slowest_tests) %>
           </p>
-          <%# No `#any?` guard, and that is deliberate rather than an omission. `:ranked` is reached
-              only where the anchor has resolved rows, which is exactly the condition under which
-              `SpecObservation.slowest_identity_candidates_in` returns candidates and the
-              composition over them returns groups — the model destructures `candidates.first`
-              unconditionally on the same guarantee. An `else` here would be a branch no state
-              reaches, and this page's empty states are load-bearing enough that a decorative one
-              would be the worse mistake. %>
           <%= render UI::TableComponent.new(columns: ["Test", "Total across window",
                                                       "Slowest single run", "Runs seen", "Timed"],
                                             describedby: "slowest-tests-window-basis") do %>
@@ -196,6 +203,7 @@
                 </td>
               </tr>
             <% end %>
+          <% end %>
           <% end %>
         <% when :unresolved %>
           <%# ⭐ THE STATE THIS PANEL EXISTS TO GET RIGHT. The newest run wrote per-example rows and

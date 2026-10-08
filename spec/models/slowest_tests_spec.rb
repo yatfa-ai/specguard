@@ -405,6 +405,98 @@ RSpec.describe SlowestTests do
     end
   end
 
+  # SPGD-1726 — the candidate step narrowed to a declared layer.
+  describe "narrowed to a declared layer" do
+    let(:system_test) { identity("System checkout completes") }
+    let(:unit_test) { identity("Money rounds half to even") }
+    let(:plain_test) { identity("Legacy importer parses an old file") }
+
+    def observe_layered(run, identity, layer, duration)
+      observe(run, spec_identity: identity, name: identity.text, path: "spec/#{identity.id}_spec.rb",
+                   duration: duration)
+        .update!(intent_layer: layer)
+    end
+
+    before do
+      runs.each do |run|
+        observe_layered(run, system_test, "system", 50.0)
+        observe_layered(run, unit_test, "unit", 1.0)
+        observe_layered(run, plain_test, nil, nil)
+      end
+    end
+
+    # @intent: { entity: "SlowestTests", action: "narrow candidates by layer", behavior: "a layer ranking holds only the tests with an anchor example in that layer and keeps them whole across the window", layer: "unit" }
+    it "ranks only the tests that declared the layer in the anchor run" do
+      ranking = described_class.for(repository, runs, branch: "main", layer: "unit")
+
+      expect(ranking.rows.map(&:spec_identity_id)).to eq([unit_test.id])
+      expect(ranking.rows.first.total_seconds).to eq(4.0)
+      expect(ranking.layer).to eq("unit")
+      expect(ranking.state).to eq(:ranked)
+    end
+
+    # The fraction's halves are one population: a mixed one would read 1 of 3 (layer numerator over
+    # the whole run's resolved rows).
+    # @intent: { entity: "SlowestTests", action: "state one population", behavior: "the coverage fraction under a layer has the layer's timed rows over the layer's resolved rows", layer: "unit" }
+    it "states coverage over the layer's own resolved rows" do
+      ranking = described_class.for(repository, runs, branch: "main", layer: "unit")
+
+      expect(ranking.coverage_label).to eq("1 of 1")
+      expect(ranking.complete?).to be true
+      expect(ranking.untimed_count).to eq(0)
+      expect(ranking.recorded_count).to eq(3)
+    end
+
+    # @intent: { entity: "SlowestTests", action: "state one population", behavior: "an undeclared layer whose only row was never timed reads 0 of 1 and incomplete", layer: "unit" }
+    it "reads an untimed layer as incomplete over its own rows" do
+      ranking = described_class.for(repository, runs, branch: "main", layer: "undeclared")
+
+      expect(ranking.rows.map(&:spec_identity_id)).to eq([plain_test.id])
+      expect(ranking.coverage_label).to eq("0 of 1")
+      expect(ranking.complete?).to be false
+    end
+
+    # @intent: { entity: "SlowestTests", action: "serve an empty layer", behavior: "a layer nothing declared is ranked with no rows and zero layer figures, never unrecorded or unresolved", layer: "unit" }
+    it "serves an empty layer as :ranked with no rows" do
+      ranking = described_class.for(repository, runs, branch: "main", layer: "integration")
+
+      expect(ranking.state).to eq(:ranked)
+      expect(ranking.rows).to eq([])
+      expect(ranking.resolved?).to be true
+      expect([ranking.candidate_count, ranking.timed_count, ranking.resolved_count]).to eq([0, 0, 0])
+      expect(ranking.any?).to be false
+      expect(ranking.truncated?).to be false
+    end
+
+    # @intent: { entity: "SlowestTests", action: "gate on the whole run", behavior: "a run with no resolved rows stays unresolved under a layer rather than reading as an empty layer", layer: "unit" }
+    it "still decides unrecorded and unresolved on the whole anchor run" do
+      lonely = create_repository(user: create_user(github_uid: "3003", github_handle: "lonely"),
+                                 github_full_name: "acme/lonely")
+      run = create_test_run(repository: lonely, commit_sha: "lone", branch: "main")
+      lonely.spec_observations.create!(test_run: run, name: "x", spec_file_path: "spec/x_spec.rb",
+                                       file_path: "spec/x_spec.rb", line_number: 1, outcome: "passed",
+                                       status: "unannotated", example_id: "./spec/x_spec.rb[1:1]",
+                                       intent_layer: "unit")
+
+      ranking = described_class.for(lonely, [run], branch: "main", layer: "unit")
+
+      expect(ranking.state).to eq(:unresolved)
+      expect(ranking.layer).to be_nil
+    end
+
+    # @intent: { entity: "SlowestTests", action: "bound the reads", behavior: "a layer-narrowed ranking costs the same three statements as an unnarrowed one", layer: "unit" }
+    it "costs no more statements than the unnarrowed ranking" do
+      expect(count_queries { described_class.for(repository, runs, branch: "main", layer: "unit").rows })
+        .to eq(count_queries { described_class.for(repository, runs, branch: "main").rows })
+    end
+
+    # @intent: { entity: "SlowestTests", action: "bound the reads", behavior: "an empty layer skips the composition read", layer: "unit" }
+    it "skips the composition read when the layer has no candidates" do
+      expect(count_queries { described_class.for(repository, runs, branch: "main", layer: "integration").rows })
+        .to eq(2)
+    end
+  end
+
   # The caption half of this object has no structural tenant protection —
   # `SpecObservation.identity_presence_in` is `where(test_run_id:)` with no `repository_id`
   # predicate — so a foreign anchor would put another tenant's row counts beside this one's list.

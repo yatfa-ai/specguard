@@ -1759,6 +1759,76 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # SPGD-1726 — candidate behaviour under a layer. The seed declares no layers, so these examples
+      # declare some on the anchor's own rows: examples 1-2 `system`, example 12 `unit`, and the rest
+      # stay undeclared.
+      context "when narrowed to one declared layer" do
+        before do
+          anchor_rows = described_class.where(test_run_id: anchor.id)
+          anchor_rows.where(spec_identity_id: identity_ids.first(2)).update_all(intent_layer: "system")
+          anchor_rows.where(spec_identity_id: identity_ids[11]).update_all(intent_layer: "unit")
+        end
+
+        # The eleventh-slowest identity is outside the unnarrowed top ten and inside its layer's.
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "candidates narrowed to unit include the identity the unnarrowed cap of ten cannot reach", layer: "unit" }
+        it "reaches an identity the unnarrowed cap drops" do
+          expect(described_class.slowest_identity_candidates_in(anchor).map(&:first)).not_to include(identity_ids[11])
+          expect(described_class.slowest_identity_candidates_in(anchor, layer: "unit").map(&:first))
+            .to eq([identity_ids[11]])
+        end
+
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the candidate and timed counts under a layer describe the layer's own population in the same statement", layer: "unit" }
+        it "rides the layer's own candidate and timed counts back on every row" do
+          expect(described_class.slowest_identity_candidates_in(anchor, layer: "system"))
+            .to eq(identity_ids.first(2).map { |id| [id, 2, 2] })
+        end
+
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "undeclared candidates are the identities whose anchor rows have a NULL intent_layer", layer: "unit" }
+        it "selects NULL-layer rows for undeclared" do
+          ids = described_class.slowest_identity_candidates_in(anchor, limit: 300, layer: "undeclared").map(&:first)
+
+          expect(ids).not_to include(*identity_ids.first(2), identity_ids[11])
+          expect(ids.length).to eq(297 - 3)
+        end
+
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a layer with no anchor example returns no candidates instead of raising", layer: "unit" }
+        it "returns an empty list for a layer nothing declared" do
+          expect(described_class.slowest_identity_candidates_in(anchor, layer: "integration")).to eq([])
+        end
+
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the presence probe counts the layer's rows in the same statement and leaves the whole-run figures unchanged", layer: "unit" }
+        it "counts the layer's recorded and unresolved rows in the one presence statement" do
+          described_class.where(test_run_id: anchor.id, spec_identity_id: nil).limit(1).update_all(intent_layer: "unit")
+
+          presence = nil
+          queries = count_queries { presence = described_class.identity_presence_in(anchor, layer: "unit") }
+
+          expect(queries).to eq(1)
+          expect(presence).to eq(recorded_count: 300, unresolved_count: 3,
+                                 layer_recorded_count: 2, layer_unresolved_count: 1)
+          expect(described_class.identity_presence_in(anchor)).to eq(recorded_count: 300, unresolved_count: 3)
+        end
+      end
+
+      # SPGD-1726 — the same certification with `layer:` asked: the layer predicate is an extra
+      # WHERE term on the same run-leading read, so it must neither lose the by-run index nor fall
+      # back to scanning every run's rows. Extended, not weakened — same two assertions.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "narrowing the anchor run's slowest identities to a declared layer still goes through a by-run index", layer: "unit" }
+      it "keeps the by-run index when the candidates are narrowed to a declared layer" do
+        plan = plan_for_actual_sql("spec_observations") do
+          described_class.slowest_identity_candidates_in(anchor, layer: "request")
+        end
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an unknown layer raises KeyError rather than widening the candidates to every row", layer: "unit" }
+      it "raises for a layer outside the declared set" do
+        expect { described_class.slowest_identity_candidates_in(anchor, layer: "bogus") }
+          .to raise_error(KeyError)
+      end
+
       # ⭐ `index_spec_observations_on_spec_identity_id` — the index the schema has carried since
       # slice 1 with no cross-run reader. This is that reader, and no index was added for it.
       # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "composing the candidates for timing totals is served by the by-identity index rather than a scan", layer: "unit" }

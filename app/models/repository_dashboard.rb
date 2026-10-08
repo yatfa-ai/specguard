@@ -64,7 +64,8 @@ class RepositoryDashboard
   # `.presence` on one of them is a 500 on a URL anyone can type.
   include RequestedSpecFileParam
 
-  # `?layer=` read as one declared-layer key, narrowing ONLY the "Slowest tests" panel. See
+  # `?layer=` read as one declared-layer key, narrowing the "Slowest tests" panel and the candidate
+  # step of "Slowest tests across the window" (SPGD-1726). See
   # `RequestedLayerParam`; `RepositoryOverview` reads the same ask for `slowest_examples`.
   include RequestedLayerParam
 
@@ -937,7 +938,11 @@ class RepositoryDashboard
       # capped candidate step over a single run, and a composition over those candidates only. None
       # of them grows with the size of the suite or with the length of the window: see
       # `SlowestTests`.
-      @slowest_tests = SlowestTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
+      #
+      # `?layer=` (SPGD-1726) narrows this ranking's CANDIDATE step to a declared layer, as it narrows
+      # "Slowest tests" above; `@layer_request` is assigned earlier in this method.
+      @slowest_tests = SlowestTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch,
+                                                                      layer: @layer_request)
     end
     # HANDED IN by the action, which owns the flash reads — see the class comment: flash handling
     # is one of the three things that stay with the controller. The names are the ones the token

@@ -118,11 +118,17 @@ class SlowestTests
   #   on this branch" for itself would be its own window, agreeing today with no structural reason
   #   to keep agreeing, on a page where each captions the others' branch.
   # @param branch [String, nil] the branch every figure is drawn on, for the caption.
-  def self.for(repository, runs, branch: nil, limit: SpecObservation::SLOWEST_LIMIT)
+  # @param layer [String, Symbol, nil] ONE declared layer (`SpecObservation::DECLARED_LAYER_KEYS`) to
+  #   narrow the CANDIDATE step to — the ranked tests are those with at least one anchor-run example
+  #   declaring it, while each row's totals stay the whole durable test's across the window (see
+  #   `SpecObservation.slowest_identity_candidates_in`). The state (`:unrecorded` / `:unresolved`) is
+  #   still decided on the WHOLE anchor run, so a layer holding nothing is `:ranked` with no rows and
+  #   never mistaken for a run nobody reported. `nil` is the unnarrowed ranking, unchanged.
+  def self.for(repository, runs, branch: nil, limit: SpecObservation::SLOWEST_LIMIT, layer: nil)
     runs = RunWindow.wrap(runs)
     window_runs = runs.oldest_first
     anchor = window_runs.last
-    window = { branch: branch, run_count: runs.size, anchor_run: anchor }
+    window = { branch: branch, run_count: runs.size, anchor_run: anchor, layer: layer }
 
     # No run, no anchor, no partition — and nothing asked of the database. `UNREAD` rather than
     # zeroes, on the rule the states below obey.
@@ -151,18 +157,28 @@ class SlowestTests
   # private because the anchoring rule is this object's own: a caller that picked its own anchor
   # would be a second spelling of the partition the ⭐ section exists to state.
   def self.rank(runs, anchor, window, limit)
-    presence = SpecObservation.identity_presence_in(anchor)
+    presence = SpecObservation.identity_presence_in(anchor, layer: window[:layer])
     resolved_rows = presence[:recorded_count] - presence[:unresolved_count]
+    layer_presence = presence.slice(:layer_recorded_count, :layer_unresolved_count)
+    presence = presence.except(:layer_recorded_count, :layer_unresolved_count)
 
     # Nothing below this line may be read as a fact about a suite's runtime, so nothing below this
     # line is asked. Two states and never one: a run that wrote no rows has no per-example grain to
     # discuss, and a run whose rows are all still unresolved has one that is a few seconds away.
-    return new(state: :unrecorded, **window, **UNREAD, **presence) if presence[:recorded_count].zero?
-    return new(state: :unresolved, **window, **UNREAD, **presence) unless resolved_rows.positive?
+    return new(state: :unrecorded, **window.except(:layer), **UNREAD, **presence) if presence[:recorded_count].zero?
+    return new(state: :unresolved, **window.except(:layer), **UNREAD, **presence) unless resolved_rows.positive?
 
-    candidates = SpecObservation.slowest_identity_candidates_in(anchor, limit: limit)
+    layer = window[:layer]
+    # Under a layer the coverage fraction's denominator is the LAYER's resolved rows, so numerator
+    # (the layer's candidate read) and denominator describe one population. They come from the
+    # gate's own statement (`identity_presence_in(layer:)`), not a second read.
+    resolved_rows = layer_presence[:layer_recorded_count] - layer_presence[:layer_unresolved_count] if layer
+    candidates = SpecObservation.slowest_identity_candidates_in(anchor, limit: limit, layer: layer)
     identity_ids = candidates.map(&:first)
-    _id, candidate_count, timed_count = candidates.first
+    # An empty list is reachable ONLY under a layer (the gate above guarantees the whole run holds
+    # resolved rows): a layer nothing in the anchor declared. Its figures are a MEASURED zero —
+    # `:ranked` with no rows, never `:unrecorded`/`:unresolved` and never "nothing is slow".
+    _id, candidate_count, timed_count = candidates.first || [nil, 0, 0]
 
     new(state: :ranked, **window, **presence,
         # The first two off any row, because both ride back on every one of them. `resolved_count` is
@@ -171,7 +187,7 @@ class SlowestTests
         # measured in two statements is two snapshots the caption can be caught between.
         candidate_count: candidate_count.to_i, timed_count: timed_count.to_i,
         resolved_count: resolved_rows,
-        tuples: SpecObservation.identity_duration_composition_in(
+        tuples: identity_ids.empty? ? [] : SpecObservation.identity_duration_composition_in(
           run_ids: runs.map(&:id), spec_identity_ids: identity_ids
         ))
   end
@@ -198,8 +214,9 @@ class SlowestTests
 
   def initialize(state:, branch: nil, run_count: 0, anchor_run: nil, recorded_count: nil,
                  unresolved_count: nil, candidate_count: nil, resolved_count: nil, timed_count: nil,
-                 tuples: [])
+                 tuples: [], layer: nil)
     @state = state
+    @layer = layer&.to_s
     @branch = branch
     @run_count = run_count
     @anchor_run = anchor_run
@@ -236,6 +253,18 @@ class SlowestTests
   # Runtimes compared across branches are runtimes of different code, so the window is
   # branch-anchored exactly as those are.
   attr_reader :branch
+
+  # The declared layer the candidate step was narrowed to (`"request"`, `"undeclared"` …), or `nil`
+  # when no layer was asked. Only `:ranked` applies it: the other states are decided on the WHOLE
+  # anchor run, before any layer-aware read, so they serve `nil` here rather than echo a narrowing
+  # nothing applied. In `:ranked` it changes what `resolved_count`, `candidate_count` and
+  # `timed_count` count — the anchor run's resolved rows (and candidate tests) that declared this
+  # layer — so the coverage fraction states ONE population, never a layer numerator over a whole-run
+  # denominator. `recorded_count` / `unresolved_count` stay the WHOLE run's (they decided the gate).
+  # A layer holding no anchor-run example is `:ranked` with no rows and zero layer counts.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
 
   # How many runs the window holds — the denominator of every "seen in N of M runs" on a row.
   attr_reader :run_count
@@ -284,7 +313,7 @@ class SlowestTests
   # identified yet" is a normal state lasting seconds, and rendered as an empty list it reads as
   # "nothing in this suite is slow" — which is "nobody told us" wearing the spelling of "everything
   # is fast". Only `#any?` may be read as the second, and only behind this.
-  def resolved? = resolved_count.to_i.positive?
+  def resolved? = state == :ranked
 
   # Whether any of the anchor's rows were excluded from the ranking for having no durable identity.
   # {NearDuplicateClusters} names the same disclosure with the same words one read over.
@@ -303,7 +332,7 @@ class SlowestTests
 
   # Every resolved row of the anchor carried a duration — the state worth SAYING rather than leaving
   # to be inferred from two equal numbers, exactly as {SlowestExamples} says it one grain down.
-  def complete? = resolved? && timed_count == resolved_count
+  def complete? = resolved_count.to_i.positive? && timed_count == resolved_count
 
   # Resolved rows of the anchor that carried no duration. Not a defect: an example that never ran has
   # no duration to report, so a nil is a faithful record.
