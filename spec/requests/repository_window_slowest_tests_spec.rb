@@ -798,4 +798,78 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect(queries.size).to eq(1)
     end
   end
+
+  # SPGD-1726 — `?layer=` narrows this panel's CANDIDATE step too (it already narrowed the per-run
+  # "Slowest tests" panel). The caption must say so and must not state a fraction mixing a layer
+  # numerator with a whole-run denominator.
+  describe "?layer= narrowing the ranking" do
+    def mixed_layer_repository
+      repository = create_repository(user: @user)
+      3.times do |index|
+        specs = [
+          annotated_spec(file_path: "spec/system/flow_spec.rb", line_number: 1, duration: 50.0,
+                         name: "System flow completes", layer: "system")
+            .merge(intent: { entity: "Flow", action: "complete", behavior: "completes", layer: "system" }),
+          annotated_spec(file_path: "spec/models/money_spec.rb", line_number: 1, duration: 1.0,
+                         name: "Money rounds half to even", layer: "unit")
+            .merge(intent: { entity: "Money", action: "round", behavior: "rounds half to even", layer: "unit" }),
+          example_spec(name: "Legacy importer parses an old file", duration: nil,
+                       file_path: "spec/lib/legacy_spec.rb")
+        ]
+        ingest(repository, specs, commit_sha: "lyr#{index}sha#{format("%07d", index)}",
+                                  at: (30 - index).days.ago)
+      end
+      repository
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "narrow the window ranking", "behavior": "layer=unit lists only the unit test and the basis line says the ranking is narrowed to the unit layer", "layer": "request"}
+    it "lists only the layer's tests and says so in the basis line" do
+      get repository_path(mixed_layer_repository), params: { layer: "unit" }
+
+      expect(row_names).to eq(["Money rounds half to even"])
+      expect(basis_line).to have_text("Narrowed to the unit layer")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "caption the layer coverage", "behavior": "under a layer the coverage clause names the layer's rows and states a fraction over the layer's own resolved rows", "layer": "request"}
+    it "states the coverage fraction over the layer's own population" do
+      get repository_path(mixed_layer_repository), params: { layer: "unit" }
+
+      # 1 unit row in the anchor, timed: the whole run resolved 3 rows of which 2 were timed, so a
+      # mixed fraction would read "1 of 3".
+      expect(basis_line).to have_text("Every one of the 1 unit-layer row")
+      expect(basis_line).not_to have_text("1 of 3")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "caption the layer coverage", "behavior": "an undeclared layer whose only row is untimed states 0 of 1 over the undeclared rows", "layer": "request"}
+    it "states a partial fraction over the layer, not the run" do
+      get repository_path(mixed_layer_repository), params: { layer: "undeclared" }
+
+      expect(basis_line).to have_text("Ranked over the 0 of 1 undeclared-layer rows")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render an empty layer", "behavior": "a layer nothing in the newest run declared renders a named empty state instead of a table or an exception", "layer": "request"}
+    it "renders a defined empty state naming the layer" do
+      get repository_path(mixed_layer_repository), params: { layer: "integration" }
+
+      expect(response).to have_http_status(:ok)
+      empty = panel.find("#slowest-tests-window-empty-layer")
+      expect(empty).to have_text("No integration-layer tests in the newest run")
+      expect(empty).to have_text("says nothing about whether this suite is slow")
+      expect(panel).not_to have_css("tbody tr")
+      expect(section?("slowest-tests-window-unresolved")).to be(false)
+      expect(section?("slowest-tests-window-unrecorded")).to be(false)
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "ignore a malformed layer", "behavior": "a bogus layer leaves the window ranking identical to the unasked page", "layer": "request"}
+    it "ignores a layer outside the declared set" do
+      repository = mixed_layer_repository
+      get repository_path(repository)
+      unasked = [row_names, basis_line.text]
+
+      get repository_path(repository), params: { layer: "bogus" }
+
+      expect([row_names, basis_line.text]).to eq(unasked)
+      expect(basis_line).not_to have_text("Narrowed to")
+    end
+  end
 end

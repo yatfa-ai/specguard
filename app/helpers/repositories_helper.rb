@@ -1235,7 +1235,28 @@ module RepositoriesHelper
 
     "#{opening} that cost this suite the most wall clock across the last " \
       "#{runs}#{window_branch_clause(slowest)}, ordered on that window TOTAL — not on any single " \
-      "run of it."
+      "run of it.#{slowest_tests_layer_clause(slowest)}"
+  end
+
+  # With `?layer=` asked (SPGD-1726) the ranking is narrowed at its CANDIDATE step: the tests listed
+  # are those with at least one example in the newest run that declared the layer. Each row's totals
+  # are still the whole test's across the window, which is why a row's declared layers can list more
+  # than the one asked for. Empty string unasked, so the unasked sentence is unchanged.
+  def slowest_tests_layer_clause(slowest)
+    return "" unless slowest.layer?
+
+    " Narrowed to the #{slowest.layer} layer: only tests with at least one #{slowest.layer}-layer " \
+      "example in that newest run are candidates, and each row still totals the whole test across " \
+      "the window."
+  end
+
+  # The layer-narrowed ranking's empty state: the newest run holds resolved tests, none of which has
+  # an example declaring this layer. A fact about what was declared, NOT "nothing here is slow".
+  def slowest_tests_empty_layer_description(slowest)
+    "#{slowest.anchor_run.commit_sha.first(7)}, the newest run in this window, has no example that " \
+      "declares the #{slowest.layer} layer, so there is no #{slowest.layer}-layer test to rank across " \
+      "the window. That says nothing about whether this suite is slow: tests are narrowed by the " \
+      "layer their own @intent declared, never inferred from the spec path."
   end
 
   # The matching rule, on the panel rather than in the code, for the reason the sibling panel above
@@ -1279,13 +1300,17 @@ module RepositoriesHelper
   # dropped before timing was ever asked about. `SlowestTests#coverage_label` holds that pairing so
   # this sentence cannot state a fraction whose halves came from two different populations.
   def slowest_tests_coverage_sentence(slowest)
+    # Under `?layer=` every figure is the LAYER's (numerator and denominator both), so the
+    # population is named as such rather than as the whole run's.
+    scope = slowest.layer? ? "#{slowest.layer}-layer " : ""
+
     if slowest.complete?
       return "Every one of the #{number_with_delimiter(slowest.resolved_count)} " \
-             "#{"row".pluralize(slowest.resolved_count)} that run resolved to a durable test " \
+             "#{scope}#{"row".pluralize(slowest.resolved_count)} that run resolved to a durable test " \
              "reported a duration, so the ranking covers the whole of what it identified."
     end
 
-    "Ranked over the #{slowest.coverage_label} rows that run resolved to a durable test that " \
+    "Ranked over the #{slowest.coverage_label} #{scope}rows that run resolved to a durable test that " \
       "reported a duration; #{number_with_delimiter(slowest.untimed_count)} reported none. A test " \
       "that never ran has no duration to report, so a missing timing is a faithful record rather " \
       "than a gap — and it is why a row here can read \"not reported\" instead of 0.00s."
@@ -1839,7 +1864,8 @@ module RepositoriesHelper
 
     unexamined = slowest.unexamined_count
 
-    "#{number_with_delimiter(slowest.candidate_count)} durable tests that run resolved — more " \
+    scope = slowest.layer? ? "#{slowest.layer}-layer " : ""
+    "#{number_with_delimiter(slowest.candidate_count)} #{scope}durable tests that run resolved — more " \
       "than this panel ranks at once — so the #{number_with_delimiter(slowest.rows.size)} " \
       "slowest OF THOSE were the ones whose window history was summed, and the other " \
       "#{number_with_delimiter(unexamined)} #{unexamined == 1 ? "is" : "are"} not represented " \

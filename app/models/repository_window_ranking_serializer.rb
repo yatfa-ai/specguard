@@ -19,8 +19,8 @@
 # would build the presenter again and double the reads the query-cost examples count. The overview
 # memoizes it; do not build one per call.
 #
-# What it reads back from the overview is exactly four methods, delegated privately below:
-# `repository`, `history_runs`, `requested_branch` and `requested_unstable_test`. It holds no
+# What it reads back from the overview is exactly five methods, delegated privately below:
+# `repository`, `history_runs`, `requested_branch`, `requested_unstable_test` and `requested_layer`. It holds no
 # `params` of its own and issues no SQL outside the presenters.
 class RepositoryWindowRankingSerializer
   def initialize(overview:)
@@ -409,8 +409,29 @@ class RepositoryWindowRankingSerializer
       tie_break_served: true,
       branch_scope: requested_branch ? "single_branch" : "all_branches",
       branch: requested_branch,
-      grouped: !slowest_tests.nil?
+      grouped: !slowest_tests.nil?,
+      **slowest_tests_layer_echo
     }
+  end
+
+  # `?layer=` ASKED (SPGD-1726): the declared layer the CANDIDATE step of `slowest_tests` was narrowed
+  # to, echoed so the figures are read as the layer's — the candidates are the tests with at least one
+  # anchor-run example in that layer, while each row's totals stay the whole durable test's across the
+  # window (so `declared_layers` may list several layers). `resolved_count`, `candidate_count`,
+  # `timed_count` and `untimed_count` are then the LAYER's anchor-run figures — the coverage fraction
+  # `timed_count` of `resolved_count` states ONE population — while `recorded_count` and
+  # `unresolved_count` stay the WHOLE run's, because they decide the `unrecorded` / `unresolved`
+  # states; so under a layer `resolved_count` is not `recorded_count - unresolved_count`. In the
+  # `unrecorded` / `unresolved` states the ask is still echoed but nothing was narrowed (the gate is
+  # decided on the whole anchor run). A layer the
+  # anchor never declared is `state: "ranked"` with `rows: []` and zero layer figures — never
+  # `unrecorded`/`unresolved`, and not "nothing is slow". ABSENT
+  # — not `null` — when no layer was asked or the ask was malformed, so an unasked body is byte-identical
+  # to before, on the convention `latest_run.slowest_examples` sets. It is also absent when `branch` is
+  # not asked: the layer ask does not unlock the ranking, and a key echoing a narrowing nothing
+  # applied would be a false statement.
+  def slowest_tests_layer_echo
+    slowest_tests && requested_layer ? { layer: requested_layer } : {}
   end
 
   # WHICH TESTS COST THE MOST WALL CLOCK ACROSS RUNS — the agent-readable half of the "Slowest tests
@@ -595,7 +616,7 @@ class RepositoryWindowRankingSerializer
 
   attr_reader :overview
 
-  delegate :repository, :history_runs, :requested_branch, :requested_unstable_test,
+  delegate :repository, :history_runs, :requested_branch, :requested_unstable_test, :requested_layer,
            to: :overview, private: true
 
   # The presenter, or `nil` when no ranking was allowed — memoized across the nil with `defined?`
@@ -642,7 +663,8 @@ class RepositoryWindowRankingSerializer
     return @slowest_tests if defined?(@slowest_tests)
 
     @slowest_tests =
-      requested_branch && SlowestTests.for(repository, history_runs.oldest_first, branch: requested_branch)
+      requested_branch &&
+      SlowestTests.for(repository, history_runs.oldest_first, branch: requested_branch, layer: requested_layer)
   end
 
   # The presenter, or `nil` when no comparison was allowed — memoized, because `show` reads it
