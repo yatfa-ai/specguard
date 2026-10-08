@@ -728,7 +728,11 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       # this is served on every response, because a correction a client has to opt into leaves it
       # reading `total_specs - annotated_specs` as the count of what SpecGuard cannot see. It lands
       # in its own grain (`AS run_authored_count`) and touches none of the figures above.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(9)
+      # ⭐ ONE MORE SINCE SPGD-1681 — `layer_run_growth` reads the PREVIOUS run's declared-layer mix
+      # (`TestRun#layer_counts`, the same run-grain aggregate statement with another run id), and it
+      # does so only because this fixture's two newest `main` runs are comparable. It lands in the
+      # run-readings grain beside the latest run's own read; see `ObservationGrainReads`.
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(10)
       expect(get_repository(key: api_key)["unstable_tests"]).to be_nil
     end
 
@@ -810,9 +814,10 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       # FIFTEEN at the last recount, plus the flakiness grain's fifth read and the two identity
-      # reads the resolving fixtures now pay: eighteen.
+      # reads the resolving fixtures now pay: eighteen — and NINETEEN since SPGD-1681, whose
+      # `layer_run_growth` reads the previous run's layer mix when the pair is comparable.
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(18)
+        .to eq(19)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

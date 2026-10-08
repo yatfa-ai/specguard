@@ -356,7 +356,20 @@ module ObservationGrainReads
   # ⚠️ THIS GRAIN IS UNGATED. Every other drill-in here fires only on the parameter that asks for it;
   # this one is served on every request, because a correction a client has to opt into leaves that
   # client reading the subtraction SPGD-711 exists to replace. A block bounding this endpoint's reads
-  # of `spec_observations` should expect exactly one of these on any request that resolves a run.
+  # of `spec_observations` should expect exactly one of these on any request that resolves a run
+  # THAT HAS NO COMPARABLE PREDECESSOR.
+  #
+  # ⭐ IT HAS A SECOND READER SINCE SPGD-1681, CLASSIFIED HERE ON PURPOSE. `LayerRunGrowth` reads the
+  # PREVIOUS run's mix through `TestRun#layer_counts` — the same memoized single-row aggregate, so
+  # the SAME statement (`SpecObservation.run_counts_in`) with a different run id bound into it. The
+  # log carries no binds, so no pattern can tell the two apart (the growth grain's "TWO READERS"
+  # predicament, one grain over) and a negative match is the residual definition this file refuses.
+  # The partition therefore keeps ONE run-grain list that holds BOTH reads, and the second is
+  # accounted for by the GATE instead: it is issued only when the pair is comparable (both runs
+  # measured and assembled alike, a previous run on the branch, per-example rows written on both
+  # sides — `LayerRunGrowth.for` decides the first three before any read). So this grain is exactly
+  # 1 on a first-run branch / null branch / any pre-query non-comparable state, and exactly 2 only
+  # when comparable. See `run_layer_mix_reads` for the accessor that names the pair.
   RUN_READINGS_PROJECTION = /AS run_authored_count/
 
   # The IDENTITY grain — `SlowestTests`' three reads: `.identity_presence_in`'s gating probe,
@@ -524,6 +537,12 @@ module ObservationGrainReads
   def unannotated_examples_grain_reads(&) = observation_reads_by_grain(&)[13]
   def unannotated_directories_grain_reads(&) = observation_reads_by_grain(&)[14]
   def run_readings_grain_reads(&) = observation_reads_by_grain(&)[15]
+
+  # The run-grain aggregate reads that carry the declared-layer mix — the latest run's, plus the
+  # PREVIOUS run's when (and only when) `LayerRunGrowth` is comparable. NOT a seventeen-grain
+  # partition member: it selects the same statements `run_readings_grain_reads` already holds, so
+  # adding it to `observation_reads_by_grain` would double-classify them.
+  def run_layer_mix_reads(&) = observation_reads(&).grep(/run_layer_unit_count/)
   def identity_grain_reads(&) = observation_reads_by_grain(&)[16]
 end
 

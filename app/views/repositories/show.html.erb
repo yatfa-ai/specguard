@@ -483,6 +483,16 @@
               exactly as the two reading rows beside it: a run with no per-example rows has no mix
               to state. Said once here rather than in the row, so the def-list stays a list. %>
           <% if readings.recorded? %>
+            <%# The movement of that mix against the previous run on this branch — the same
+                `LayerRunGrowth` object `layer_run_growth` on the API is built from. Shown only
+                when comparable; every other state omits the line (the suite-size basis sentence
+                above already says why there is no comparison). %>
+            <% if @layer_run_growth&.comparable? %>
+              <p class="text-xs text-app-content-secondary" id="layer-run-growth">
+                Since <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>
+                on <%= @latest_test_run.branch %>: <%= @layer_run_growth.label %>
+              </p>
+            <% end %>
             <%# "Time by declared layer" rides the SAME memoized aggregate row as "Declared layers"
                 (`TestRun#layer_durations`, one read for both) and is what `latest_run.layer_durations`
                 serves — the panel and the API cannot disagree. It sits under the def-list rather than
