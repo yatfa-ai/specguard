@@ -194,7 +194,7 @@ class LatestRunSerializer
       # `authored` deliberately does NOT replace `annotated_specs` above and no client should read it
       # as the annotation coverage figure — that is `annotated_ratio`, off the counters, answering
       # exactly as it did before this key existed. `authored` is here so the three sum to `recorded`.
-      intent_readings: overview.serialized_intent_readings(test_run),
+      intent_readings: overview.drill_ins.serialized_intent_readings(test_run),
       # THE RUN-WIDE DECLARED-LAYER MIX, a SIBLING of `intent_readings` (never inside it — that block
       # is pinned at four keys) and served at the same depth. How many of the run's recorded examples
       # DECLARED each layer in their `@intent` — `unit`, `integration`, `request`, `system` — plus
@@ -204,7 +204,7 @@ class LatestRunSerializer
       # no detail has no mix to state, and five zeros would read as an empty suite. Never inferred
       # from the path, and `undeclared` is NOT `intent_readings.unreadable` — an undeclared example
       # may still be read from its description. Operands only, no pyramid verdict.
-      layer_counts: overview.serialized_layer_counts(test_run),
+      layer_counts: overview.drill_ins.serialized_layer_counts(test_run),
       # WHERE THE RUN'S TIME GOES by declared layer — a SIBLING of `layer_counts` (never nested in it
       # or in `intent_readings`, both key-pinned), computed in the same single aggregate. Per layer,
       # in the same five-key order: `total_seconds` — the SUM of the layer's example durations, i.e.
@@ -213,7 +213,7 @@ class LatestRunSerializer
       # (`<= layer_counts[layer]`). `total_seconds` is NULL, never 0, for a layer none of whose
       # examples was timed. NULL as a whole when the run recorded no per-example rows. The layer is
       # what `@intent` declared, never the path. Operands only, no pyramid verdict.
-      layer_durations: overview.serialized_layer_durations(test_run),
+      layer_durations: overview.drill_ins.serialized_layer_durations(test_run),
       # Nullable by schema. Serializing `0.0` for an unreported duration would assert the run took
       # no time — the same "not reported" vs `0.0s` distinction the Recent runs table draws.
       #
@@ -222,39 +222,39 @@ class LatestRunSerializer
       # than in place of it, so nothing a client reads today changes meaning.
       duration_seconds: test_run.duration_seconds,
       shards: serialized_shards,
-      spec_files: overview.serialized_spec_files(test_run),
+      spec_files: overview.drill_ins.serialized_spec_files(test_run),
       # BESIDE `spec_files`, never in place of it: the two rank different populations and the
       # second is not derivable from the first. See `serialized_spec_directories` on the overview.
-      spec_directories: overview.serialized_spec_directories(test_run),
+      spec_directories: overview.drill_ins.serialized_spec_directories(test_run),
       # BESIDE both rollups above, and it is the grain NEITHER of them can reach: those two name
       # areas and files, and an agent holding both still cannot ask which TEST inside a 90-second
       # directory to open. See `serialized_slowest_examples` on the overview.
-      slowest_examples: overview.serialized_slowest_examples(test_run),
+      slowest_examples: overview.drill_ins.serialized_slowest_examples(test_run),
       # BESIDE `slowest_examples`, and the grain none of the three blocks above can reach. Those
       # roll this run's rows up by where the code LIVES — the example, its file, its area — and no
       # rollup of "where" can see that two of those rows say the same thing. See
       # `serialized_repeated_descriptions` on the overview.
-      repeated_descriptions: overview.serialized_repeated_descriptions(test_run),
+      repeated_descriptions: overview.drill_ins.serialized_repeated_descriptions(test_run),
       # ONE AREA of `spec_directories` above, opened — the first of the three keys in this block
       # that answer a question the client asked rather than one the endpoint always answers, and so
       # the first whose `null` is a fact about the REQUEST. `shards` is null for a fact about the
       # run (it had one part, which is the ordinary case) and the four rollups for a fact about its
       # rows (there were none); this one is null because no area was asked for, which is a statement
       # about neither the run nor its rows. See `serialized_spec_directory_files` on the overview.
-      spec_directory_files: overview.serialized_spec_directory_files(test_run),
+      spec_directory_files: overview.drill_ins.serialized_spec_directory_files(test_run),
       # ONE FILE of that area, opened — the rung below the key above it and the last one this ladder
       # has: area → file → example, with nothing under an example to open. Its `null` is a fact
       # about the REQUEST for the same reason `spec_directory_files`' is, and it is the second key
       # on this block to which that applies rather than an exception to the rule the four rollups
       # follow. `shards` is null about the run, the four rollups about its rows, and the three
       # drill-ins about what the client asked. See `serialized_spec_file_examples` on the overview.
-      spec_file_examples: overview.serialized_spec_file_examples(test_run),
+      spec_file_examples: overview.drill_ins.serialized_spec_file_examples(test_run),
       # ONE GROUP of `repeated_descriptions` above, opened — the third key on this block whose
       # `null` is a fact about the REQUEST, and the one drill-in that leaves the area → file →
       # example ladder entirely. Those two open a place; this one opens a SENTENCE, and the ranking
       # it drills out of is the only one here that is not a rollup of where the code lives. See
       # `serialized_repeated_description_examples` on the overview.
-      repeated_description_examples: overview.serialized_repeated_description_examples(test_run),
+      repeated_description_examples: overview.drill_ins.serialized_repeated_description_examples(test_run),
       # THE FOURTH KEY ON THIS BLOCK WHOSE `null` IS A FACT ABOUT THE REQUEST, and the only drill-in
       # here that opens a POPULATION rather than a pick. The three above it open one area, one file
       # and one sentence — each the rows behind a LINE of a ranking served just above it. This one
@@ -266,13 +266,13 @@ class LatestRunSerializer
       # metric was the sole exception, on both surfaces — `repositories#show` prints *"SpecGuard cannot
       # see the other N tests"* and cannot name one of them either. See
       # `serialized_unannotated_examples` on the overview.
-      unannotated_examples: overview.serialized_unannotated_examples(test_run),
+      unannotated_examples: overview.drill_ins.serialized_unannotated_examples(test_run),
       # THE RANKING ABOVE THE KEY DIRECTLY ABOVE IT, and the fifth `null`-is-a-fact-about-the-request
       # key on this block — served from the SAME `?unannotated_examples=` ask rather than from a new
       # parameter, so a client that never asks still pays nothing. See
       # `serialized_unannotated_directories` on the overview, where the scope difference between the
       # two keys is stated in full.
-      unannotated_directories: overview.serialized_unannotated_directories(test_run),
+      unannotated_directories: overview.drill_ins.serialized_unannotated_directories(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
