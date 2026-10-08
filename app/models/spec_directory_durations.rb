@@ -172,13 +172,20 @@ class SpecDirectoryDurations
   # EXCEPT undeclared, on the same rule as the counts label; `layer_counts` supplies each layer's
   # population. Operands only: the figure is a sum of example durations, not wall clock.
   def self.layer_durations_label(layer_durations, layer_counts)
+    layer_durations_parts(layer_durations, layer_counts).map { |layer, figures| "#{layer} #{figures}" }.join(" · ")
+  end
+
+  # {.layer_durations_label}'s entries as `[layer, figures_text]` pairs, so a surface that links the
+  # layer NAME (the "Time by declared layer" line → `?layer=`) spells the figures through the very
+  # same code the plain label does and the two cannot word them differently.
+  def self.layer_durations_parts(layer_durations, layer_counts)
     layer_durations.filter_map do |layer, figures|
       recorded = layer_counts.fetch(layer)
       next unless recorded.positive? || layer == :undeclared
 
-      "#{layer} #{SpecObservation.humanized_duration(figures[:total_seconds])} " \
-        "(#{SpecObservation.coverage_fraction(number_with_delimiter(figures[:timed_count]), number_with_delimiter(recorded))} timed)"
-    end.join(" · ")
+      [layer, "#{SpecObservation.humanized_duration(figures[:total_seconds])} " \
+              "(#{SpecObservation.coverage_fraction(number_with_delimiter(figures[:timed_count]), number_with_delimiter(recorded))} timed)"]
+    end
   end
 
   def self.number_with_delimiter(number) = ActiveSupport::NumberHelper.number_to_delimited(number)

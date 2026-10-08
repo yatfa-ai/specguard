@@ -37,6 +37,29 @@
               carries the argument, and holds the list and these figures together so the sentence
               cannot end up describing a different row set from the one below it. %>
           <p class="text-xs text-app-muted mb-3" id="slowest-examples-basis">
+            <% if @slowest_examples.layer? %>
+              The <%= @slowest_examples.rows.size %>
+              slowest <code><%= @slowest_examples.layer %></code>-layer
+              <%= "test".pluralize(@slowest_examples.rows.size) %> of the run named above,
+              slowest first.
+              <%# The layer's own population, said as such: every figure below is the layer's, and the
+                  caveat that the layer is DECLARED stays — it is never inferred from the path. %>
+              <% if @slowest_examples.complete? %>
+                Every one of the <%= number_with_delimiter(@slowest_examples.recorded_count) %>
+                <%= "example".pluralize(@slowest_examples.recorded_count) %> that declared
+                <code><%= @slowest_examples.layer %></code> reported a duration, so the ranking covers
+                the whole of that layer.
+              <% else %>
+                Ranked over the <%= number_with_delimiter(@slowest_examples.timed_count) %> of
+                <%= number_with_delimiter(@slowest_examples.recorded_count) %>
+                <%= "example".pluralize(@slowest_examples.recorded_count) %> that declared
+                <code><%= @slowest_examples.layer %></code> and reported a duration;
+                <%= number_with_delimiter(@slowest_examples.untimed_count) %> reported none and stayed
+                out of the ranking rather than sorting to the head of it.
+              <% end %>
+              The layer is what each example's <code>@intent</code> declared, never inferred from the
+              path.
+            <% else %>
             The <%= @slowest_examples.rows.size %>
             slowest <%= "test".pluralize(@slowest_examples.rows.size) %> of the run named above,
             slowest first.
@@ -52,6 +75,7 @@
               stayed out of the ranking rather than sorting to the head of it. An example that
               never ran has no duration to report, so a missing timing is a faithful record rather
               than a gap — and a row with nothing to compare cannot be the slowest of anything.
+            <% end %>
             <% end %>
             <%# What the run REPORTED, beside what it measured. The ranking above is ordered on
                 duration alone and deliberately is not filtered by outcome — a failed example that
@@ -69,6 +93,14 @@
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel and may legitimately differ from it.
           </p>
+          <% if @slowest_examples.layer? %>
+            <p class="text-xs mb-3" id="slowest-examples-clear-layer">
+              <%= link_to "Clear layer filter",
+                          drill_down_path(@repository, layer: nil, anchor: "slowest-examples"),
+                          class: "underline underline-offset-2 decoration-app-border-light " \
+                                 "text-app-content hover:decoration-app-content" %>
+            </p>
+          <% end %>
           <%= render UI::TableComponent.new(columns: ["Test", "Layer", "Duration", "Outcome"],
                                             describedby: "slowest-examples-basis") do %>
             <% @slowest_examples.rows.each do |observation| %>
@@ -173,6 +205,21 @@
               </tr>
             <% end %>
           <% end %>
+        <% elsif @slowest_examples.layer? && !@slowest_examples.layer_recorded? %>
+          <%# A layer was asked and NO example of this run declared it — an empty answer, not a run
+              without rows (the panel only renders for a run that recorded some). Said as such, with
+              the way back. %>
+          <p class="text-xs text-app-muted mb-3" id="slowest-examples-basis">
+            No example of this run declared <code><%= @slowest_examples.layer %></code> as its layer, so
+            there is nothing to rank. The layer is what each example's <code>@intent</code> declared,
+            never inferred from the path.
+          </p>
+          <p class="text-xs" id="slowest-examples-clear-layer">
+            <%= link_to "Clear layer filter",
+                        drill_down_path(@repository, layer: nil, anchor: "slowest-examples"),
+                        class: "underline underline-offset-2 decoration-app-border-light " \
+                               "text-app-content hover:decoration-app-content" %>
+          </p>
         <% else %>
           <%# Rows exist and not one of them was timed. Not a list of zeroes and not a hidden panel:
               a zero would be this surface inventing the measurement it is missing, and hiding it
@@ -190,11 +237,20 @@
                 title: "No timings on this run",
                 description: "This run recorded " \
                              "#{number_with_delimiter(@slowest_examples.recorded_count)} " \
+                             "#{@slowest_examples.layer? ? "#{@slowest_examples.layer}-layer " : ''}" \
                              "#{'example'.pluralize(@slowest_examples.recorded_count)} and a " \
                              "duration for none of them, so there is nothing to rank. An example " \
                              "that never ran reports no duration. " \
                              "#{slowest_examples_outcome_sentence(@slowest_examples)}"
               ) %>
+          <% if @slowest_examples.layer? %>
+            <p class="text-xs mt-3" id="slowest-examples-clear-layer">
+              <%= link_to "Clear layer filter",
+                          drill_down_path(@repository, layer: nil, anchor: "slowest-examples"),
+                          class: "underline underline-offset-2 decoration-app-border-light " \
+                                 "text-app-content hover:decoration-app-content" %>
+            </p>
+          <% end %>
         <% end %>
       <% end %>
     <% end %>

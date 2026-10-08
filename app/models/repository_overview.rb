@@ -75,6 +75,13 @@ class RepositoryOverview
   # `RequestedSpecFileParam`, which holds that reasoning in full.
   include RequestedSpecFileParam
 
+  # `?layer=` read as one declared-layer key, to narrow ONLY the run-grain `slowest_examples` block
+  # below to that layer's examples. Shared with `RepositoryDashboard`, which reads the same parameter
+  # under the same guard for the "Slowest tests" panel. Independent of every other ask here — it does
+  # not narrow `spec_file_examples`, `spec_directory_files`, `unannotated_examples` or
+  # `repeated_description_examples`. See `RequestedLayerParam`, which holds the guard's reasoning.
+  include RequestedLayerParam
+
   # `?repeated_description=` read as a test description, to open ONE GROUP of the by-description
   # ranking below — the fourth `Requested*Param` this controller reads and the one the three above
   # cannot stand in for, because it opens a ranking of WHAT tests say rather than of where they
@@ -1025,11 +1032,20 @@ class RepositoryOverview
   # `spec/models/spec_observation_spec.rb`. This block issues the read the panel issues, unchanged,
   # so that certification transfers rather than needing to be repeated in a request spec.
   def serialized_slowest_examples(test_run)
-    slowest = SlowestExamples.for(test_run)
+    slowest = SlowestExamples.for(test_run, layer: requested_layer)
 
     return nil unless slowest.recorded?
 
     {
+      # `?layer=` ASKED: the declared layer this whole block was narrowed to, echoed so the figures
+      # below read as the LAYER's, not the run's — `recorded_count` / `timed_count` /
+      # `reported_outcome_count` are then that layer's own counts (they equal `layer_counts[layer]` and
+      # `layer_durations[layer].timed_count`, built from the same predicate) and `limit` is unchanged.
+      # ABSENT — not `null` — when no layer was asked, so an unasked body (and a malformed ask, which
+      # reads as no ask) is byte-identical to what this endpoint served before the parameter existed.
+      # `recorded?` stays a RUN-level gate: a layer with no examples serves `rows: []` and
+      # `recorded_count: 0`, never `null` — `null` still means "this run recorded nothing".
+      **(slowest.layer? ? { layer: slowest.layer } : {}),
       rows: slowest.rows.map do |observation|
         {
           name: observation.name,

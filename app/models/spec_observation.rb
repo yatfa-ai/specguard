@@ -778,8 +778,20 @@ class SpecObservation < ApplicationRecord
   #
   # `id` breaks ties, so a run whose examples tie to the millisecond has a total, stable order
   # rather than one the query planner picks afresh on each request.
-  def self.slowest_in(test_run, limit: SLOWEST_LIMIT)
-    where(test_run_id: test_run.id).timed.order(duration_seconds: :desc, id: :asc).limit(limit)
+  #
+  # `layer:` narrows the ranking to ONE declared layer (a {DECLARED_LAYER_KEYS} member, as a String or
+  # Symbol), through {.declared_layer_predicate} — the same predicate the run-wide per-layer counts and
+  # durations are built from, selected by key and never retyped, so a layer's ranking and its
+  # `layer_counts` / `layer_durations` figures cannot disagree about what its rows are. `nil` — the
+  # default — is the unnarrowed run-wide ranking, byte-identical to before the keyword existed.
+  def self.slowest_in(test_run, limit: SLOWEST_LIMIT, layer: nil)
+    in_declared_layer(where(test_run_id: test_run.id), layer).timed.order(duration_seconds: :desc, id: :asc).limit(limit)
+  end
+
+  # `scope` narrowed to one declared layer, or `scope` itself for `nil`. Shared by {.slowest_in} and
+  # {.coverage_in} so the ranking and the coverage counts that caption it always describe one row set.
+  def self.in_declared_layer(scope, layer)
+    layer.nil? ? scope : scope.where(declared_layer_predicate(layer))
   end
 
   # Everything a surface has to say ABOUT one run's slice before it is allowed to show ten rows of
@@ -859,8 +871,11 @@ class SpecObservation < ApplicationRecord
   # aggregate, and the caller wants integers rather than a mix of those and nils.
   #
   # @return [Hash{Symbol=>Integer}] keyed by `COVERAGE_COUNTS`' names, in its order.
-  def self.coverage_in(test_run)
-    counts = where(test_run_id: test_run.id).pick(*COVERAGE_COUNTS.values.map { |sql| Arel.sql(sql) })
+  #
+  # `layer:` narrows the slice to one declared layer on {.slowest_in}'s terms. Its default is NO layer,
+  # which is what the second caller (`Api::V1::IngestsController`) relies on to stay unchanged.
+  def self.coverage_in(test_run, layer: nil)
+    counts = in_declared_layer(where(test_run_id: test_run.id), layer).pick(*COVERAGE_COUNTS.values.map { |sql| Arel.sql(sql) })
 
     COVERAGE_COUNTS.keys.zip(Array(counts)).to_h { |name, count| [name, count.to_i] }
   end
@@ -2224,6 +2239,14 @@ class SpecObservation < ApplicationRecord
       *SpecIntent::LAYERS.map { |layer| "intent_layer = #{connection.quote(layer)}" },
       "intent_layer IS NULL"
     ].freeze
+  end
+
+  # The ONE predicate of {.declared_layer_predicates} that matches `layer` — selected BY KEY from the
+  # list the per-layer FILTER aggregates are built from, not retyped. Raises `KeyError` for a name
+  # outside {DECLARED_LAYER_KEYS}: callers hold a clamped value (`RequestedLayerParam`), and an
+  # unknown layer must fail loudly rather than quietly widen to every row.
+  def self.declared_layer_predicate(layer)
+    DECLARED_LAYER_KEYS.zip(declared_layer_predicates).to_h.fetch(layer.to_sym)
   end
 
   # The spec FILES of ONE code area in ONE run, heaviest first — the rung between the by-directory

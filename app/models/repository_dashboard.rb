@@ -64,6 +64,10 @@ class RepositoryDashboard
   # `.presence` on one of them is a 500 on a URL anyone can type.
   include RequestedSpecFileParam
 
+  # `?layer=` read as one declared-layer key, narrowing ONLY the "Slowest tests" panel. See
+  # `RequestedLayerParam`; `RepositoryOverview` reads the same ask for `slowest_examples`.
+  include RequestedLayerParam
+
   # `?spec_directory=` read as a spec directory path, for the drill-down under the "Heaviest spec
   # directories" panel. Its own concern rather than a widening of the one above, for the reason both
   # of theirs carry in full: one guard answering two parameters makes "which shapes does each
@@ -137,7 +141,7 @@ class RepositoryDashboard
     @repository @params @can_manage_keys @newest_test_run @trajectory_runs
     @requested_branch @requested_spec_file @requested_spec_directory @requested_commit_sha
     @requested_unstable_test @requested_unstable_test_origin @requested_limit
-    @requested_repeated_description
+    @requested_repeated_description @requested_layer
   ].freeze
 
   attr_reader :repository, :params, :can_manage_keys
@@ -514,7 +518,11 @@ class RepositoryDashboard
     # prints and the rows it lists come from one read of one run.
     #
     # Two bounded queries, neither growing with the size of the suite: see `SlowestExamples`.
-    @slowest_examples = SlowestExamples.for(@latest_test_run) if @latest_test_run
+    #
+    # `?layer=` narrows this one panel (and nothing else) to a declared layer. The RAW ask is kept in
+    # `@layer_request` for the panel's links, on the idiom of `@spec_file_request`.
+    @layer_request = requested_layer
+    @slowest_examples = SlowestExamples.for(@latest_test_run, layer: @layer_request) if @latest_test_run
     # The other half of the same question, off the same rows of the same run: not which individual
     # examples were slow but which FILES the wall clock went into. Neither panel derives the other
     # — a ten-row ranking by individual cost cannot surface a file that is heavy because it holds

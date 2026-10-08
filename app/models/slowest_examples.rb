@@ -35,9 +35,23 @@
 # backward scan capped at `SpecObservation::SLOWEST_LIMIT`, and one aggregate over the same index's
 # leading column.
 class SlowestExamples
-  def self.for(test_run, limit: SpecObservation::SLOWEST_LIMIT)
-    new(rows: SpecObservation.slowest_in(test_run, limit: limit).to_a,
-        **SpecObservation.coverage_in(test_run))
+  # `layer:` narrows BOTH reads — the ranking and the coverage counts that caption it — to one declared
+  # layer (`SpecObservation::DECLARED_LAYER_KEYS`), so the caption cannot describe a row set the
+  # ranking did not scan. `nil` (the default) is the run-wide ranking, unchanged to the query.
+  #
+  # With a layer asked, "did this run record anything at all" can no longer be read off the layer's own
+  # `recorded_count` — a layer with no rows would then look like a run with no rows, and the surface
+  # would blank a block that has a real, empty answer. That question is the RUN's, and it is answered
+  # by `TestRun#intent_readings.recorded?`: the memoized run-grain aggregate every page and the API
+  # already issue for `layer_counts`, so this adds no third query. It is deliberately NOT read when no
+  # layer is asked — the unasked path decides `#recorded?` exactly as it always has, from its own
+  # counts, and touches nothing it did not touch before.
+  def self.for(test_run, limit: SpecObservation::SLOWEST_LIMIT, layer: nil)
+    run_recorded = layer.nil? ? nil : test_run.intent_readings.recorded?
+
+    new(rows: SpecObservation.slowest_in(test_run, limit: limit, layer: layer).to_a,
+        layer: layer, run_recorded: run_recorded,
+        **SpecObservation.coverage_in(test_run, layer: layer))
   end
 
   # Keywords rather than a positional tuple, and named to match `SpecObservation::COVERAGE_COUNTS`
@@ -52,7 +66,9 @@ class SlowestExamples
   # sentence to say. It is held rather than dropped so the splat keeps working and the figure is in
   # hand if a surface ever needs it.
   def initialize(rows:, recorded_count:, timed_count:, reported_outcome_count:, identified_count:,
-                 failed_count:, pending_count:)
+                 failed_count:, pending_count:, layer: nil, run_recorded: nil)
+    @layer = layer&.to_s
+    @run_recorded = run_recorded
     @rows = rows
     @recorded_count = recorded_count
     @timed_count = timed_count
@@ -61,6 +77,12 @@ class SlowestExamples
     @failed_count = failed_count
     @pending_count = pending_count
   end
+
+  # The declared layer this ranking and its counts were narrowed to (`"request"`, `"undeclared"` …),
+  # or nil for the run-wide ranking. Every figure on this object is the LAYER's when this is set.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
 
   # The ranking, slowest first. Never longer than the limit it was built with, and shorter whenever
   # the run recorded fewer timed examples than that.
@@ -87,14 +109,22 @@ class SlowestExamples
   # ingested before those rows existed, or one whose client sends no per-example detail, has no
   # per-test grain to disclose; a run that recorded examples and timed none of them does, and it
   # is `#any?` that separates those two.
-  def recorded? = recorded_count.positive?
+  #
+  # A RUN-level question even when a layer is asked: a layer holding no examples is an empty answer
+  # (`recorded_count` 0 over a run that recorded rows), not a run that recorded nothing. Use
+  # {#layer_recorded?} for the layer's own population.
+  def recorded? = layer? ? run_recorded : recorded_count.positive?
+
+  # Whether the asked layer (or, unasked, the run) has any recorded example — what `#recorded?` means
+  # when no layer is asked.
+  def layer_recorded? = recorded_count.positive?
 
   def any? = rows.any?
 
   # Every recorded row carried a duration — the state worth SAYING rather than leaving to be
   # inferred from two equal numbers, since "the ranking covers everything this run reported" is the
   # reading a reader would otherwise have to do the subtraction to reach.
-  def complete? = recorded? && timed_count == recorded_count
+  def complete? = layer_recorded? && timed_count == recorded_count
 
   # Rows the ranking could not consider. Not a defect and not a gap to paper over: an example that
   # never ran has no duration to report, so a nil is a faithful record — see
@@ -121,4 +151,8 @@ class SlowestExamples
 
   # Rows that reported nothing about how their example ended.
   def unreported_outcome_count = recorded_count - reported_outcome_count
+
+  private
+
+  attr_reader :run_recorded
 end
