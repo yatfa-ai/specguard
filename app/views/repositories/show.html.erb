@@ -499,8 +499,21 @@
                 inside it because it is a sentence with its own basis, not a count. %>
             <p class="text-xs text-app-content-secondary" id="layer-durations">
               <span class="font-medium">Time by declared layer</span>:
-              <%= SpecDirectoryDurations.layer_durations_label(@latest_test_run.layer_durations,
-                                                               @latest_test_run.layer_counts) %>
+              <%# Each layer NAME links to `?layer=<key>#slowest-examples` — the route from "the request
+                  layer holds most of the machine time" to WHICH tests. Figures are spelled by the same
+                  code `layer_durations_label` joins, so the text reads exactly as it did; only the
+                  name became a link. Through `drill_down_path`, so choosing a layer closes no other
+                  open ask. The active layer is marked `aria-current`. %>
+              <% SpecDirectoryDurations.layer_durations_parts(@latest_test_run.layer_durations,
+                                                              @latest_test_run.layer_counts)
+                                       .each_with_index do |(layer, figures), index| %>
+                <%= " · " if index.positive? %><%= link_to layer.to_s,
+                           drill_down_path(@repository, layer: layer.to_s, anchor: "slowest-examples"),
+                           class: "underline underline-offset-2 decoration-app-border-light " \
+                                  "text-app-content hover:decoration-app-content",
+                           aria: { current: layer.to_s == @layer_request ? "true" : nil } %>
+                <%= figures %>
+              <% end %>
             </p>
             <p class="text-xs text-app-muted" id="layer-durations-basis">
               Each figure is the sum of its examples' own durations — machine time, not wall clock, so

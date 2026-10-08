@@ -1925,6 +1925,31 @@ RSpec.describe SpecObservation do
       expect(described_class.slowest_in(run).map(&:id)).to eq([first.id, second.id])
     end
 
+    # @intent: { entity: "SpecObservation", action: "narrow the slowest ranking to a declared layer", behavior: "slowest_in with a layer returns only that layer's timed rows, and undeclared returns only null-layer rows, regardless of the spec path", layer: "unit" }
+    it "narrows the ranking to one declared layer, by key" do
+      observe(run, duration: 9.0, line_number: 1, intent_layer: "request")
+      observe(run, duration: 8.0, line_number: 2, intent_layer: "unit")
+      observe(run, duration: 7.0, line_number: 3, intent_layer: nil, spec_file_path: "spec/requests/x_spec.rb")
+      observe(run, duration: nil, line_number: 4, intent_layer: "request")
+
+      expect(described_class.slowest_in(run, layer: "request").map(&:line_number)).to eq([1])
+      expect(described_class.slowest_in(run, layer: :undeclared).map(&:line_number)).to eq([3])
+      expect(described_class.slowest_in(run, layer: nil).map(&:line_number)).to eq([1, 2, 3])
+      expect { described_class.slowest_in(run, layer: "bogus") }.to raise_error(KeyError)
+    end
+
+    # @intent: { entity: "SpecObservation", action: "count a declared layer alongside its ranking", behavior: "coverage_in with a layer counts only that layer and its default of no layer counts the whole run as ingest relies on", layer: "unit" }
+    it "counts the same layer slice coverage_in is asked for, and the whole run by default" do
+      observe(run, duration: 9.0, line_number: 1, intent_layer: "request", outcome: "failed")
+      observe(run, duration: nil, line_number: 2, intent_layer: "request")
+      observe(run, duration: 8.0, line_number: 3, intent_layer: "unit")
+
+      expect(described_class.coverage_in(run, layer: "request"))
+        .to include(recorded_count: 2, timed_count: 1, failed_count: 1)
+      expect(described_class.coverage_in(run, layer: "system")).to include(recorded_count: 0, timed_count: 0)
+      expect(described_class.coverage_in(run)).to include(recorded_count: 3, timed_count: 2)
+    end
+
     describe ".coverage_in" do
       # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the run counters report the run's row count and how many of those rows carried a duration", layer: "unit" }
       it "counts this run's rows and the ones that carried a duration" do

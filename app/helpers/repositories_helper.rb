@@ -95,6 +95,10 @@ module RepositoriesHelper
     # the hash rather than inside it, so an explicit `limit: nil` override ("Back to the 10
     # heaviest") still beats a carried widening through the ordinary `merge` below.
     asks[:limit] = @limit_request if @limit_request
+    # `?layer=` rides the same conditional carry for the same reason: it narrows the "Slowest tests"
+    # panel only, and opening a file or an area must not silently drop the layer the reader chose —
+    # while a default page's links stay byte-identical because no `layer:` is emitted without an ask.
+    asks[:layer] = @layer_request if @layer_request
 
     repository_path(repository, **asks.merge(overrides), anchor: anchor)
   end
@@ -527,7 +531,14 @@ module RepositoriesHelper
   # timings", made on the outcome axis by `#outcomes_reported?`.
   def slowest_examples_outcome_sentence(slowest_examples)
     recorded = slowest_examples.recorded_count
-    examples = "#{number_with_delimiter(recorded)} #{"example".pluralize(recorded)} this run recorded"
+    # With `?layer=` asked every count is the LAYER's, so the population is named as such rather than
+    # as "this run's" — "the 40 request-layer examples", not a claim the run recorded only 40.
+    examples = if slowest_examples.layer?
+                 "#{number_with_delimiter(recorded)} #{slowest_examples.layer}-layer " \
+                   "#{"example".pluralize(recorded)} this run recorded"
+               else
+                 "#{number_with_delimiter(recorded)} #{"example".pluralize(recorded)} this run recorded"
+               end
 
     unless slowest_examples.outcomes_reported?
       return "Not one of the #{examples} reported an outcome, so nothing here says whether any of " \
