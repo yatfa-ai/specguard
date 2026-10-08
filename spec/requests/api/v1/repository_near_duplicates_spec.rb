@@ -446,6 +446,161 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
     end
   end
 
+  # SPGD-1712: the two bounded projections of the SAME stored census — `?near_duplicates_summary=`
+  # (the ranking, no member lists) and `?near_duplicate_cluster=<rank>` (one cluster, members once).
+  # The projection logic is `NearDuplicateCensusView`'s and is pinned over hand-built hashes in its
+  # model spec; what is pinned here is the wire: the keys, the guards, the query budget.
+  describe "the bounded census projections" do
+    let(:cross_layer_repository) { separate_repository("acme/cross-layer-projection") }
+    let(:cross_layer_key) { cross_layer_repository.api_keys.create! }
+    let(:summary_ask) { { near_duplicates_summary: "1" } }
+    let(:cluster_ask) { { near_duplicate_cluster: "1" } }
+
+    def projection(name, key: cross_layer_key, query: {})
+      get_repository(key: key, query: query)[name]
+    end
+
+    before do
+      ingest(cross_layer_repository,
+             [annotated_spec(file_path: "spec/models/checkout_spec.rb", line_number: 3,
+                             entity: "Checkout", action: "rejects",
+                             behavior: "an expired card payment", layer: "unit"),
+              annotated_spec(file_path: "spec/requests/checkout_spec.rb", line_number: 9,
+                             entity: "Checkout", action: "rejects",
+                             behavior: "an expired card payment outright", layer: "request")])
+    end
+
+    # @intent: { entity: "near_duplicates_summary", action: "serve the ranking without member lists", behavior: "the summary block carries no members and no layer_groups key anywhere, each row gains rank, files_seen, file_count and declared_layers, the disclosure head keys come first, and every scalar of the full cluster row is equal", layer: "request" }
+    it "serves the ranking with no member listing and the derived row keys" do
+      full = projection("near_duplicates", query: { near_duplicates: "1" })
+      summary = projection("near_duplicates_summary", query: summary_ask)
+
+      expect(summary.keys.first(3)).to eq(%w[similarity_floor similarity_basis layer_source])
+      expect(summary.keys).to eq(full.keys)
+      expect(summary.to_json).not_to include('"members"', '"layer_groups"')
+
+      row = summary["clusters"].sole
+      stored = full["clusters"].sole
+      expect(row).to include("rank" => 1,
+                             "files_seen" => %w[spec/models/checkout_spec.rb spec/requests/checkout_spec.rb],
+                             "file_count" => 2,
+                             "declared_layers" => %w[request unit])
+      %w[signal_source member_count example_count total_seconds timed_count similarity_range
+         unobserved_members layer_redundancy].each do |scalar|
+        expect(row[scalar]).to eq(stored[scalar])
+      end
+      expect(summary.except("clusters")).to eq(full.except("clusters"))
+    end
+
+    # @intent: { entity: "near_duplicate_cluster", action: "open one cluster by rank", behavior: "rank 1 returns exactly the stored rank-1 cluster with members carried once as layer_groups when redundancy is non-nil, and echoes the ask, cluster_count and the snapshot stamps", layer: "request" }
+    it "opens the rank-1 cluster with its members once, and echoes the snapshot" do
+      full = projection("near_duplicates", query: { near_duplicates: "1" })
+      drilled = projection("near_duplicate_cluster", query: cluster_ask)
+
+      expect(drilled).to include("requested" => "1", "rank" => 1, "cluster_count" => 1,
+                                 "weighed_run_id" => full["weighed_run_id"],
+                                 "computed_at" => full["computed_at"],
+                                 "member_listing" => "layer_groups")
+      expect(drilled["cluster"]).to eq(full["clusters"].first.except("members"))
+      expect(drilled["cluster"]).not_to have_key("members")
+      expect(drilled["cluster"]["layer_groups"].sum { it["members"].size }).to eq(2)
+    end
+
+    # @intent: { entity: "near_duplicate_cluster", action: "open a flat-member cluster", behavior: "a cluster whose members declared no layer carries the flat members once and no layer_groups, and member_listing says members", layer: "request" }
+    it "carries the flat members when the cluster declared no layer" do
+      drilled = projection("near_duplicate_cluster", key: api_key, query: cluster_ask)
+
+      expect(drilled["member_listing"]).to eq("members")
+      expect(drilled["cluster"]).not_to have_key("layer_groups")
+      expect(drilled["cluster"]["members"].size).to eq(drilled["cluster"]["member_count"])
+    end
+
+    [["out of range", "2"], ["zero", "0"], ["negative", "-1"], ["non-numeric", "abc"]].each do |label, rank|
+      # @intent: { entity: "near_duplicate_cluster", action: "answer an unusable rank with a null cluster", behavior: "an out-of-range, zero, negative or non-numeric rank answers 200 with a null cluster and the ask echoed, never a 404 or a nearest guess", layer: "request" }
+      it "answers a #{label} rank with a null cluster and the ask echoed" do
+        drilled = projection("near_duplicate_cluster", query: { near_duplicate_cluster: rank })
+
+        expect(response).to have_http_status(:ok)
+        expect(drilled).to include("requested" => rank, "cluster" => nil, "member_listing" => nil,
+                                   "cluster_count" => 1)
+      end
+    end
+
+    # @intent: { entity: "near_duplicates", action: "stay byte-identical beside the projections", behavior: "sending the summary and cluster asks beside near_duplicates leaves the near_duplicates block equal to the block served alone", layer: "request" }
+    it "leaves the full block untouched when the projections are asked beside it" do
+      alone = projection("near_duplicates", query: { near_duplicates: "1" })
+      beside = projection("near_duplicates",
+                          query: { near_duplicates: "1", near_duplicates_summary: "1", near_duplicate_cluster: "1" })
+
+      expect(beside).to eq(alone)
+    end
+
+    # @intent: { entity: "near_duplicates_summary", action: "serve null before the first compute", behavior: "with no stored census all three census keys are null for every ask", layer: "request" }
+    it "serves null for all three keys when no census is stored" do
+      bare = separate_repository("acme/never-ingested-projection")
+      body = get_repository(key: bare.api_keys.create!,
+                            query: { near_duplicates: "1", near_duplicates_summary: "1", near_duplicate_cluster: "1" })
+
+      expect(body.values_at("near_duplicates", "near_duplicates_summary", "near_duplicate_cluster"))
+        .to eq([nil, nil, nil])
+    end
+
+    # @intent: { entity: "near_duplicates_summary", action: "read only the stored row", behavior: "either projection or both together issue zero queries against spec_identities and spec_observations and exactly one read of near_duplicate_censuses when asked together, while without the asks both keys are present and null", layer: "request" }
+    it "reads the stored census once and never touches the clustering tables" do
+      both = summary_ask.merge(cluster_ask)
+      get_repository(key: cross_layer_key, query: both) # warm shared caches
+
+      # `spec_observations` is read by the run-level blocks on EVERY request, so the pin there is
+      # that the asks add nothing to the no-ask baseline; `spec_identities` has no reader at all.
+      baseline = queries_against("spec_observations") { get_repository(key: cross_layer_key) }
+      [summary_ask, cluster_ask, both].each do |query|
+        expect(queries_against("spec_identities") { get_repository(key: cross_layer_key, query: query) })
+          .to be_empty
+        expect(queries_against("spec_observations") { get_repository(key: cross_layer_key, query: query) })
+          .to eq(baseline)
+      end
+      expect(queries_against("near_duplicate_censuses") { get_repository(key: cross_layer_key, query: both) }.size)
+        .to eq(1)
+      expect(queries_against("near_duplicate_censuses") do
+        get_repository(key: cross_layer_key, query: both.merge(near_duplicates: "1"))
+      end.size).to eq(1)
+
+      bare = get_repository(key: cross_layer_key)
+      expect(bare).to include("near_duplicates_summary" => nil, "near_duplicate_cluster" => nil)
+      expect(queries_against("near_duplicate_censuses") { get_repository(key: cross_layer_key) }).to be_empty
+    end
+
+    describe "a near-duplicates-summary parameter that is not a string" do
+      def expect_near_duplicates_summary_param_treated_as_no_ask(query)
+        expect(projection("near_duplicates_summary", query: query)).to be_nil
+        expect(response).to have_http_status(:ok)
+      end
+
+      it_behaves_like "a surface that treats a malformed near-duplicates-summary parameter as no ask"
+
+      # @intent: { entity: "near_duplicates_summary", action: "honour a string parameter", behavior: "a string-valued near_duplicates_summary opens the ranking while an empty value is no ask", layer: "request" }
+      it "honours a string and treats an empty value as no ask" do
+        expect(projection("near_duplicates_summary", query: summary_ask)["cluster_count"]).to eq(1)
+        expect(projection("near_duplicates_summary", query: { near_duplicates_summary: "" })).to be_nil
+      end
+    end
+
+    describe "a near-duplicate-cluster parameter that is not a string" do
+      def expect_near_duplicate_cluster_param_treated_as_no_ask(query)
+        expect(projection("near_duplicate_cluster", query: query)).to be_nil
+        expect(response).to have_http_status(:ok)
+      end
+
+      it_behaves_like "a surface that treats a malformed near-duplicate-cluster parameter as no ask"
+
+      # @intent: { entity: "near_duplicate_cluster", action: "honour a string parameter", behavior: "a string-valued near_duplicate_cluster opens the drill-in while an empty value is no ask", layer: "request" }
+      it "honours a string and treats an empty value as no ask" do
+        expect(projection("near_duplicate_cluster", query: cluster_ask)["rank"]).to eq(1)
+        expect(projection("near_duplicate_cluster", query: { near_duplicate_cluster: "" })).to be_nil
+      end
+    end
+  end
+
   def separate_repository(full_name)
     uid = (@separate_uid = (@separate_uid || 1001) + 1).to_s
 

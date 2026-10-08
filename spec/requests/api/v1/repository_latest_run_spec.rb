@@ -259,7 +259,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "directory_run_file_growth_window", "directory_run_file_growth",
                             "directory_runtime_file_growth_window", "directory_runtime_file_growth",
                             "branches_window", "branches",
-                            "near_duplicates",
+                            "near_duplicates", "near_duplicates_summary", "near_duplicate_cluster",
                             "near")
     end
 
@@ -2876,7 +2876,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "directory_run_file_growth_window", "directory_run_file_growth",
                             "directory_runtime_file_growth_window", "directory_runtime_file_growth",
                             "branches_window", "branches",
-                            "near_duplicates",
+                            "near_duplicates", "near_duplicates_summary", "near_duplicate_cluster",
                             "near")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",

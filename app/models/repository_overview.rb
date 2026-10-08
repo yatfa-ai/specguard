@@ -154,6 +154,12 @@ class RepositoryOverview
   # `?near_duplicates=false` is an ask like any other.
   include RequestedNearDuplicatesParam
 
+  # `?near_duplicates_summary=` and `?near_duplicate_cluster=<rank>` — the bounded projections of
+  # the same stored census (SPGD-1712): the ranking without member lists, and one cluster with its
+  # members carried once. Guards only; {NearDuplicateCensusView} owns the projections.
+  include RequestedNearDuplicatesSummaryParam
+  include RequestedNearDuplicateClusterParam
+
   # `?near=` read as a behavior phrase — the probe text the `near` block ranks this repository's
   # stored identities against. One more free-text `Requested*Param` guard, and its two lines are
   # `RequestedBranchParam`'s — but what an admitted ask buys here is a PAID read (one embed per
@@ -442,6 +448,13 @@ class RepositoryOverview
       # spelling every gate on this endpoint uses — and pays not one query for it. See
       # `serialized_near_duplicates`.
       near_duplicates: serialized_near_duplicates,
+      # SERVED ON THE ASK AND NEVER WITHOUT IT — two bounded projections of the SAME stored census
+      # row `near_duplicates` opens: the ranking with no member lists, and one cluster by rank with
+      # its members once. Both `null` unless asked, and `null` when nothing is stored. See
+      # `serialized_near_duplicates_summary`, `serialized_near_duplicate_cluster` and
+      # `NearDuplicateCensusView`.
+      near_duplicates_summary: serialized_near_duplicates_summary,
+      near_duplicate_cluster: serialized_near_duplicate_cluster,
       # SERVED ON THE ASK AND NEVER WITHOUT IT — and, unlike the census beside it, served LIVE:
       # `?near=` embeds the probe (once per novel phrase, through the shipped cache), ranks the
       # repository's identities through the ANN seam, and discloses what every figure means. The
@@ -865,7 +878,30 @@ class RepositoryOverview
   def serialized_near_duplicates
     return nil unless requested_near_duplicates?
 
-    NearDuplicateCensus.stored_block_for(repository)
+    stored_near_duplicate_census
+  end
+
+  # `?near_duplicates_summary=` — the stored census as a ranking, member lists dropped.
+  def serialized_near_duplicates_summary
+    return nil unless requested_near_duplicates_summary?
+
+    NearDuplicateCensusView.new(stored_near_duplicate_census).summary
+  end
+
+  # `?near_duplicate_cluster=<rank>` — one stored cluster, members once, the ask echoed.
+  def serialized_near_duplicate_cluster
+    ask = requested_near_duplicate_cluster
+    return nil if ask.nil?
+
+    NearDuplicateCensusView.new(stored_near_duplicate_census).cluster(ask)
+  end
+
+  # THE ONE READ of the stored census row, memoized (`nil` — nothing stored — included) so that
+  # any combination of the three census asks pays for it once.
+  def stored_near_duplicate_census
+    return @stored_near_duplicate_census if defined?(@stored_near_duplicate_census)
+
+    @stored_near_duplicate_census = NearDuplicateCensus.stored_block_for(repository)
   end
 
   # THE `?near=` BLOCK — the probe read, live where the census beside it is stored. `NearProbe`
