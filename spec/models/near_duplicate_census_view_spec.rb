@@ -23,9 +23,13 @@ RSpec.describe NearDuplicateCensusView do
 
   let(:big) { cluster(members: Array.new(30) { |i| member(i, file: "spec/models/big_#{i % 4}_spec.rb") }) }
   let(:layered) { cluster(members: Array.new(4) { |i| member(i + 100) }, layered: true) }
+  let(:unsorted) do
+    files = %w[spec/z_spec.rb spec/a_spec.rb spec/z_spec.rb spec/m_spec.rb]
+    cluster(members: files.each_with_index.map { |file, i| member(i + 200, file: file) })
+  end
   let(:block) do
     { "similarity_floor" => 0.85, "similarity_basis" => "basis", "layer_source" => nil,
-      "cluster_count" => 2, "truncated" => false, "clusters" => [big, layered],
+      "cluster_count" => 3, "truncated" => false, "clusters" => [big, layered, unsorted],
       "weighed_run_id" => 7, "computed_at" => "2026-10-08T00:00:00Z" }
   end
 
@@ -60,6 +64,14 @@ RSpec.describe NearDuplicateCensusView do
         .to eq(big.except("members", "layer_groups"))
     end
 
+    # @intent: { entity: "NearDuplicateCensusView", action: "derive files_seen", behavior: "files_seen is the sorted distinct member file paths even when the stored members arrive unsorted and with repeats, and file_count counts the distinct paths", layer: "unit" }
+    it "sorts and de-duplicates files_seen from unsorted stored members" do
+      row = summary["clusters"].last
+
+      expect(row["files_seen"]).to eq(%w[spec/a_spec.rb spec/m_spec.rb spec/z_spec.rb])
+      expect(row["file_count"]).to eq(3)
+    end
+
     # @intent: { entity: "NearDuplicateCensusView", action: "leave the stored hash alone", behavior: "building the summary or a cluster does not mutate the block it was handed", layer: "unit" }
     it "does not mutate the stored block" do
       frozen = Marshal.load(Marshal.dump(block))
@@ -88,13 +100,13 @@ RSpec.describe NearDuplicateCensusView do
       expect(grouped["member_listing"]).to eq("layer_groups")
       expect(grouped["cluster"]).not_to have_key("members")
       expect(member_objects(grouped["cluster"])).to eq(4)
-      expect(grouped).to include("requested" => "2", "rank" => 2, "cluster_count" => 2,
+      expect(grouped).to include("requested" => "2", "rank" => 2, "cluster_count" => 3,
                                  "weighed_run_id" => 7, "computed_at" => "2026-10-08T00:00:00Z")
     end
 
     # @intent: { entity: "NearDuplicateCensusView", action: "refuse to guess a rank", behavior: "zero, negative, fractional, signed, non-numeric and out-of-range ranks give a null cluster with the ask echoed and no rank read", layer: "unit" }
     it "gives a null cluster, echoing the ask, for any rank that is not a position" do
-      %w[0 -1 1.5 +1 abc 1e2 3 99999999999999999999].each do |ask|
+      %w[0 -1 1.5 +1 abc 1e2 4 99999999999999999999].each do |ask|
         answered = described_class.new(block).cluster(ask)
 
         expect(answered).to include("requested" => ask, "cluster" => nil, "member_listing" => nil)
