@@ -21,7 +21,8 @@
       (c) `clusters` is empty      — the success state: tests were read and nothing reads alike at
                                      this floor (and the sub-case of no embedded identities, which
                                      is not that claim and says so);
-      (d) clusters present         — the ranking, in the stored (costliest-first) order.
+      (d) clusters present         — the ranking, in the stored order (multi-file groups first, then costliest, when the
+                                     stored `ranking_basis` says so; costliest-first on a row stored before it).
 
     Presented for review and not as a finding of duplication — the claim boundary the "Descriptions
     this run recorded more than once" panel carries, for a stronger reason here: the floor is
@@ -122,15 +123,19 @@
       <% end %>
     <% else %>
       <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-page">
+        <%# The ordering sentence follows the STORED `ranking_basis`: its presence marks a census computed
+            under the multi-file-first order, and a row without it keeps the wording of the order it
+            was actually computed under. %>
+        <% ranked_multi_file_first = census["ranking_basis"].present? %>
+        <% order_words = ranked_multi_file_first ? "groups spanning more than one spec file first, then costliest" : "costliest first" %>
         <% if census["truncated"] %>
-          The <%= number_with_delimiter(census["clusters"].size) %> costliest of
+          The <%= number_with_delimiter(census["clusters"].size) %> <%= ranked_multi_file_first ? "top-ranked" : "costliest" %> of
           <%= number_with_delimiter(census["cluster_count"]) %>
-          <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, costliest
-          first — a page of the census, not all of it.
+          <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>
+          — a page of the census, not all of it.
         <% else %>
           All <%= number_with_delimiter(census["cluster_count"]) %>
-          <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, costliest
-          first.
+          <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>.
         <% end %>
         Each group counts its members (distinct test texts) and its examples (every run row those
         texts resolved to) separately: a table-driven loop is one member and several examples.
@@ -182,6 +187,11 @@
             </p>
             <p class="text-xs text-app-muted mt-1">
               matched on <%= cluster["signal_source"] %>
+              <%# Which kind of overlap, from the stored key or — for a row stored before it existed —
+                  derived from the cluster's own members, as the summary projection does. %>
+              <% overlap_kind = cluster["overlap_kind"].presence ||
+                   (Array(cluster["members"]).filter_map { |m| m["file_path"] }.uniq.size > 1 ? "multi_file" : "single_file") %>
+              · <%= overlap_kind == "multi_file" ? "spans more than one spec file" : "one spec file" %>
               <%# The layer cut is read off the STORED `layer_groups` (members grouped by the layer their
                   examples declared, alphabetical, the undeclared `layer: null` group last). A cluster
                   whose `layer_redundancy` is nil declared nothing, so it renders no layer text at all

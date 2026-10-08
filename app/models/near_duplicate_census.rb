@@ -192,6 +192,7 @@ class NearDuplicateCensus < ApplicationRecord
         similarity_floor: clusters.similarity_floor,
         similarity_basis: clusters.similarity_basis,
         layer_source: clusters.layer_source,
+        ranking_basis: clusters.ranking_basis,
         cluster_count: clusters.cluster_count,
         truncated: clusters.truncated?,
         saturated_identity_count: clusters.saturated_identity_count,
@@ -223,6 +224,9 @@ class NearDuplicateCensus < ApplicationRecord
         timed_count: cluster.timed_count,
         similarity_range: cluster.similarity_range,
         unobserved_members: cluster.unobserved_members?,
+        # Which KIND of overlap the group shows (`multi_file` / `single_file`) — a report field,
+        # independent of `layer_redundancy` below.
+        overlap_kind: cluster.overlap_kind,
         # THE DECLARED-LAYER CUT, read off the same object every figure above is read from. The
         # classification sits beside the figures it qualifies and ahead of both member listings;
         # the groups carry the members grouped by the layer their examples declared, with the

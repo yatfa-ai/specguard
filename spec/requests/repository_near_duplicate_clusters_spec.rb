@@ -680,17 +680,62 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     end
   end
 
-  # The page-wide truncation disclosure: a capped list reads as a page, not as the census.
-  # @intent: {"entity": "NearDuplicateCensus", "action": "disclose a capped list", "behavior": "when the stored census is truncated the panel states the costliest N of the cluster_count rather than all of them", "layer": "request"}
+  # The page-wide truncation disclosure: a capped list reads as a page, not as the census. The
+  # ordering words follow the stored `ranking_basis` (SPGD-1720): a row without it was computed
+  # under the old cost-only order and keeps saying so.
+  # @intent: {"entity": "NearDuplicateCensus", "action": "disclose a capped list", "behavior": "when the stored census is truncated and carries no ranking_basis the panel states the costliest N of the cluster_count rather than all of them", "layer": "request"}
   it "states a truncated census as a page of the whole" do
     ingest(repository, pair_specs)
     census = NearDuplicateCensus.find_by!(repository_id: repository.id)
-    census.update!(payload: census.payload.merge("truncated" => true, "cluster_count" => 7))
+    census.update!(payload: census.payload.except("ranking_basis")
+                                   .merge("truncated" => true, "cluster_count" => 7))
 
     get repository_path(repository)
 
-    expect(panel.find("#near-duplicate-clusters-page").text(normalize_ws: true))
-      .to include("The 1 costliest of 7 groups", "a page of the census, not all of it")
+    sentence = panel.find("#near-duplicate-clusters-page").text(normalize_ws: true)
+    expect(sentence).to include("The 1 costliest of 7 groups", "a page of the census, not all of it")
+    expect(sentence).not_to include("spec file first")
+  end
+
+  # @intent: {"entity": "NearDuplicateCensus", "action": "disclose the ranking order", "behavior": "a census stored with ranking_basis says multi-file groups come first, then costliest, and never claims plain costliest-first", "layer": "request"}
+  it "states the multi-file-first order only when the stored census carries ranking_basis" do
+    ingest(repository, pair_specs)
+    census = NearDuplicateCensus.find_by!(repository_id: repository.id)
+    expect(census.payload["ranking_basis"]).to eq(NearDuplicateClusters::RANKING_BASIS)
+    expect(census.payload.keys.first(4))
+      .to eq(%w[similarity_floor similarity_basis layer_source ranking_basis])
+
+    get repository_path(repository)
+    sentence = panel.find("#near-duplicate-clusters-page").text(normalize_ws: true)
+    expect(sentence).to include("All 1 group of tests that read alike, groups spanning more than one spec file first, then costliest")
+    expect(sentence).not_to include("costliest first")
+
+    census.update!(payload: census.payload.merge("truncated" => true, "cluster_count" => 7))
+    get repository_path(repository)
+    sentence = panel.find("#near-duplicate-clusters-page").text(normalize_ws: true)
+    expect(sentence).to include("The 1 top-ranked of 7 groups", "spec file first, then costliest")
+    expect(sentence).not_to include("costliest first")
+  end
+
+  # @intent: {"entity": "NearDuplicateCensus", "action": "render overlap kind", "behavior": "each row says whether its group spans one spec file or several, from the stored key and, for a payload stored without it, derived from its members", "layer": "request"}
+  it "shows the overlap kind per row, derived from members when the key is not stored" do
+    ingest(repository, pair_specs)
+    census = NearDuplicateCensus.find_by!(repository_id: repository.id)
+    cluster = census.payload["clusters"].sole
+    expect(cluster["overlap_kind"]).to eq("single_file")
+
+    get repository_path(repository)
+    expect(panel.find("[data-near-duplicate-cluster]").text(normalize_ws: true)).to include("one spec file")
+
+    members = cluster["members"]
+    moved = members.each_with_index.map { |m, i| i.zero? ? m : m.merge("file_path" => "spec/requests/other_spec.rb") }
+    census.update!(payload: census.payload.merge(
+      "clusters" => [cluster.except("overlap_kind").merge("members" => moved)]
+    ))
+
+    get repository_path(repository)
+    expect(panel.find("[data-near-duplicate-cluster]").text(normalize_ws: true))
+      .to include("spans more than one spec file")
   end
 
   # @intent: {"entity": "NearDuplicateCensus", "action": "render layer redundancy", "behavior": "a cluster whose members declare two layers reads spans 2 declared layers, one confined to a single layer reads one layer, and an undeclared cluster says neither", "layer": "request"}

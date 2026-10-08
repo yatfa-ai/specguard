@@ -60,8 +60,19 @@ RSpec.describe NearDuplicateCensusView do
       expect(second).to include("rank" => 2, "declared_layers" => %w[unit request],
                                 "layer_redundancy" => "cross_layer", "similarity_range" => [0.9, 0.86],
                                 "unobserved_members" => false)
-      expect(first.except("rank", "files_seen", "file_count", "declared_layers"))
+      expect(first.except("rank", "files_seen", "file_count", "declared_layers", "overlap_kind"))
         .to eq(big.except("members", "layer_groups"))
+    end
+
+    # @intent: { entity: "NearDuplicateCensusView", action: "derive overlap_kind", behavior: "every summary row carries overlap_kind derived from its own members, so a payload stored without the key still gets it, and a stored value never overrides what the members say", layer: "unit" }
+    it "derives overlap_kind from the row's members, independent of layer_redundancy" do
+      one_file = cluster(members: [ member(1, file: "spec/a_spec.rb"), member(2, file: "spec/a_spec.rb") ])
+
+      rows = described_class.new(block.merge("clusters" => [ big, layered, one_file ])).summary["clusters"]
+
+      expect(rows.map { it["overlap_kind"] }).to eq(%w[multi_file multi_file single_file])
+      expect(rows[1]["layer_redundancy"]).to eq("cross_layer")
+      expect(big).not_to have_key("overlap_kind")
     end
 
     # @intent: { entity: "NearDuplicateCensusView", action: "derive files_seen", behavior: "files_seen is the sorted distinct member file paths even when the stored members arrive unsorted and with repeats, and file_count counts the distinct paths", layer: "unit" }
