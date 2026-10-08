@@ -329,6 +329,12 @@ class RepositoryOverview
       # `serialized_layer_run_growth_window`.
       layer_run_growth_window: growth.serialized_layer_run_growth_window,
       layer_run_growth: growth.serialized_layer_run_growth,
+      # BESIDE `layer_run_growth` AND NOT DERIVABLE FROM IT: that pair differences example COUNTS, this
+      # one differences the summed example DURATION per declared layer. A `sleep` in a shared
+      # request-spec `before` is `request ±0` there and seconds here. See
+      # `serialized_layer_runtime_growth_window`.
+      layer_runtime_growth_window: growth.serialized_layer_runtime_growth_window,
+      layer_runtime_growth: growth.serialized_layer_runtime_growth,
       # BESIDE `directory_run_growth` AND NOT DERIVABLE FROM IT — the same two runs and the same area
       # grain, measuring a different quantity. That pair answers "which areas changed SIZE" and this
       # one answers "which areas changed TIME", and `SpecDirectoryRuntimeGrowth`'s class comment
