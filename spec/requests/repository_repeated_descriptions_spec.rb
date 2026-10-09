@@ -43,6 +43,15 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     end
   end
 
+  # The "Declared layers" cell of each row, keyed by description. Kept out of `rows` so the existing
+  # four-cell row assertions keep stating exactly what they stated.
+  def layer_cells
+    panel.all("tbody tr").to_h do |row|
+      cells = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      [cells.first.split(" in spec/").first, cells.fifth]
+    end
+  end
+
   # The description alone, without the file line rendered under it.
   def row_names
     panel.all("tbody tr").map { |row| row.first("td").text.gsub(/\s+/, " ").strip.split(" in spec/").first }
@@ -405,6 +414,33 @@ RSpec.describe "Repository repeated descriptions", type: :request do
       get repository_path(repository, branch: "feature/x")
 
       expect(row_names).to eq(["on main"])
+    end
+  end
+
+  # The "Declared layers" column: how many of each description's examples DECLARED each layer in
+  # their own `@intent`. Counted off the stored column only — never inferred from the path — and
+  # undeclared is always printed.
+  describe "the declared layers each description carries" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "render declared layers", "behavior": "a request-declared example under spec/models counts as request, undeclared examples under spec/requests count as undeclared, and a group declaring nothing reads undeclared N", "layer": "request"}
+    it "prints each group's declared layers, never inferring a layer from the path" do
+      repository = create_repository(user: @user)
+      ingest(repository,
+             [annotated_spec(file_path: "spec/models/a_spec.rb", line_number: 1, name: "mixed group",
+                             duration: 3.0, layer: "unit"),
+              annotated_spec(file_path: "spec/models/a_spec.rb", line_number: 2, name: "mixed group",
+                             duration: 3.0, layer: "request"),
+              example_spec(name: "mixed group", file_path: "spec/models/a_spec.rb", duration: 3.0, line_number: 3),
+              example_spec(name: "path group", file_path: "spec/requests/b_spec.rb", duration: 1.0, line_number: 4),
+              example_spec(name: "path group", file_path: "spec/requests/b_spec.rb", duration: 1.0, line_number: 5)])
+
+      get repository_path(repository)
+
+      expect(panel).to have_css("th", text: "Declared layers")
+      expect(layer_cells).to eq("mixed group" => "unit 1 · request 1 · undeclared 1",
+                                "path group" => "undeclared 2")
+      expect(layer_cells.fetch("path group")).not_to include("request")
+      expect(basis_line).to have_text("Declared layers", normalize_ws: true)
+      expect(basis_line).to have_text("never a layer inferred from the path", normalize_ws: true)
     end
   end
 

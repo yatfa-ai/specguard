@@ -126,6 +126,13 @@
                   never ran has no duration to report, so a missing timing is a faithful record rather
                   than a gap.
                 <% end %>
+                <%# The "Declared layers" column: each description's own examples' declared `@intent`
+                    layer, counted over every example the run recorded under it, never inferred from
+                    the path. In THIS branch (the one that describes a table) so `aria-describedby`
+                    reaches it. "undeclared" is always printed. %>
+                The "Declared layers" column is how many of each description's examples declared each
+                layer in their own <code>@intent</code>. "Undeclared" is the examples that declared no
+                layer — never a layer inferred from the path.
               <% else %>
                 Every one of the
                 <%= number_with_delimiter(@repeated_descriptions.named_row_count) %>
@@ -148,7 +155,7 @@
             </p>
             <% if @repeated_descriptions.any? %>
               <%= render UI::TableComponent.new(
-                    columns: ["Description", "Examples", "Examples timed", "Total duration"],
+                    columns: ["Description", "Examples", "Examples timed", "Total duration", "Declared layers"],
                     describedby: "repeated-descriptions-basis"
                   ) do %>
                 <% @repeated_descriptions.rows.each do |group| %>
@@ -209,6 +216,9 @@
                           measured nothing says "not reported" rather than wearing the spelling of
                           a zero. %>
                       <%= group.duration_label %>
+                    </td>
+                    <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                      <%= group.layer_counts_label %>
                     </td>
                   </tr>
                 <% end %>

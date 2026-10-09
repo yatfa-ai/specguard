@@ -1820,9 +1820,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # Four examples, two files, two of them untimed. Inserted with the alphabetically LATER file
       # first, so `files_seen`' sort is doing work rather than echoing insertion order.
       observe(run, path: "spec/requests/checkout_spec.rb", duration: 1.0, line_number: 1,
-              name: "Checkout completes an order")
+              name: "Checkout completes an order", intent_layer: "request")
       observe(run, path: "spec/requests/checkout_spec.rb", duration: 1.0, line_number: 2,
-              name: "Checkout completes an order")
+              name: "Checkout completes an order", intent_layer: "unit")
       observe(run, path: "spec/models/order_spec.rb", duration: nil, line_number: 3,
               name: "Checkout completes an order")
       observe(run, path: "spec/models/order_spec.rb", duration: nil, line_number: 4,
@@ -1834,9 +1834,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
               name: "Search ranks by relevance")
       # Three examples, 90 seconds between them: fewer rows than the group above and forty-five
       # times its cost.
-      3.times do |index|
+      %w[unit unit system].each_with_index do |layer, index|
         observe(run, path: "spec/models/invoice_spec.rb", duration: 30.0, line_number: 7 + index,
-                name: "Invoice totals its line items")
+                name: "Invoice totals its line items", intent_layer: layer)
       end
       # Carried by ONE example, and the most expensive row in the run. Not repetition.
       observe(run, path: "spec/models/user_spec.rb", duration: 500.0, line_number: 10,
@@ -1869,13 +1869,19 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         [
           { "name" => "Invoice totals its line items", "total_seconds" => 90.0,
             "recorded_count" => 3, "timed_count" => 3,
-            "files_seen" => ["spec/models/invoice_spec.rb"] },
+            "files_seen" => ["spec/models/invoice_spec.rb"],
+            "layer_counts" => { "unit" => 2, "integration" => 0, "request" => 0, "system" => 1,
+                                "undeclared" => 0 } },
           { "name" => "Checkout completes an order", "total_seconds" => 2.0,
             "recorded_count" => 4, "timed_count" => 2,
-            "files_seen" => ["spec/models/order_spec.rb", "spec/requests/checkout_spec.rb"] },
+            "files_seen" => ["spec/models/order_spec.rb", "spec/requests/checkout_spec.rb"],
+            "layer_counts" => { "unit" => 1, "integration" => 0, "request" => 1, "system" => 0,
+                                "undeclared" => 2 } },
           { "name" => "Search ranks by relevance", "total_seconds" => nil,
             "recorded_count" => 2, "timed_count" => 0,
-            "files_seen" => ["spec/models/search_spec.rb"] }
+            "files_seen" => ["spec/models/search_spec.rb"],
+            "layer_counts" => { "unit" => 0, "integration" => 0, "request" => 0, "system" => 0,
+                                "undeclared" => 2 } }
         ]
       )
     end
@@ -2037,7 +2043,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         .to contain_exactly("rows", "group_count", "recorded_count", "unnamed_row_count",
                             "repeated_recorded_count", "repeated_timed_count", "limit")
       expect(repeated_descriptions["rows"].first.keys)
-        .to contain_exactly("name", "total_seconds", "recorded_count", "timed_count", "files_seen")
+        .to contain_exactly("name", "total_seconds", "recorded_count", "timed_count", "files_seen",
+                            "layer_counts")
+      expect(repeated_descriptions["rows"].first["layer_counts"].keys)
+        .to eq(%w[unit integration request system undeclared])
+      expect(repeated_descriptions["rows"])
+        .to all(satisfy { |row| row["layer_counts"].values.sum == row["recorded_count"] })
     end
 
     # THE REASON THIS KEY IS SERVED AT ALL, stated as a guard rather than as a comment. Every figure
