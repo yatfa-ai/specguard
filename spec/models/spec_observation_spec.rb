@@ -2131,9 +2131,9 @@ RSpec.describe SpecObservation do
         observe(run, duration: 0.5, line_number: 4, spec_file_path: "spec/models/user_spec.rb")
 
         expect(described_class.file_durations_in(run)).to eq(
-          [["spec/models/refund_spec.rb", 9.0, 1, 1, 3],
-           ["spec/models/order_spec.rb", 4.0, 2, 2, 3],
-           ["spec/models/user_spec.rb", 0.5, 1, 1, 3]]
+          [["spec/models/refund_spec.rb", 9.0, 1, 1, 3, 0, 0, 0, 0, 1],
+           ["spec/models/order_spec.rb", 4.0, 2, 2, 3, 0, 0, 0, 0, 2],
+           ["spec/models/user_spec.rb", 0.5, 1, 1, 3, 0, 0, 0, 0, 1]]
         )
       end
 
@@ -2169,8 +2169,8 @@ RSpec.describe SpecObservation do
 
         files = described_class.file_durations_in(run)
 
-        expect(files).to eq([["spec/models/quick_spec.rb", 0.25, 1, 1, 2],
-                             ["spec/models/never_ran_spec.rb", nil, 2, 0, 2]])
+        expect(files).to eq([["spec/models/quick_spec.rb", 0.25, 1, 1, 2, 0, 0, 0, 0, 1],
+                             ["spec/models/never_ran_spec.rb", nil, 2, 0, 2, 0, 0, 0, 0, 2]])
         expect(files.last[1]).to be_nil
       end
 
@@ -2184,7 +2184,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: nil, line_number: 3, spec_file_path: "spec/models/order_spec.rb")
 
-        expect(described_class.file_durations_in(run)).to eq([["spec/models/order_spec.rb", 4.0, 3, 1, 1]])
+        expect(described_class.file_durations_in(run)).to eq([["spec/models/order_spec.rb", 4.0, 3, 1, 1, 0, 0, 0, 0, 3]])
       end
 
       # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-file read queries only the handed run", layer: "unit" }
@@ -2193,7 +2193,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/ours_spec.rb")
         observe(other, duration: 99.0, line_number: 1, spec_file_path: "spec/theirs_spec.rb")
 
-        expect(described_class.file_durations_in(run)).to eq([["spec/ours_spec.rb", 1.0, 1, 1, 1]])
+        expect(described_class.file_durations_in(run)).to eq([["spec/ours_spec.rb", 1.0, 1, 1, 1, 0, 0, 0, 0, 1]])
       end
 
       # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-file listing honours a handed limit and falls back to the panel's own default when none is given", layer: "unit" }
@@ -2214,8 +2214,8 @@ RSpec.describe SpecObservation do
       it "reports how many files the run touched in total, whatever the limit returns" do
         12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/f#{i}_spec.rb") }
 
-        expect(described_class.file_durations_in(run, limit: 3).map(&:last)).to eq([12, 12, 12])
-        expect(described_class.file_durations_in(run, limit: 100).map(&:last).uniq).to eq([12])
+        expect(described_class.file_durations_in(run, limit: 3).map { it[4] }).to eq([12, 12, 12])
+        expect(described_class.file_durations_in(run, limit: 100).map { it[4] }.uniq).to eq([12])
       end
 
       # Groups, not rows: a run whose twelve examples sit in two files touched two files. The
@@ -2225,7 +2225,7 @@ RSpec.describe SpecObservation do
       it "counts the files rather than the examples in them" do
         12.times { |i| observe(run, duration: 1.0, line_number: i + 1, spec_file_path: "spec/f#{i % 2}_spec.rb") }
 
-        expect(described_class.file_durations_in(run).map(&:last)).to eq([2, 2])
+        expect(described_class.file_durations_in(run).map { it[4] }).to eq([2, 2])
       end
 
       # Two files totalling the same is ordinary — a run where several files hold one fast example
@@ -2242,6 +2242,31 @@ RSpec.describe SpecObservation do
       # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run that recorded nothing reads no files at all from the rollup", layer: "unit" }
       it "reads no files for a run that recorded nothing" do
         expect(described_class.file_durations_in(run)).to eq([])
+      end
+    end
+
+    describe ".file_durations_in declared-layer operands" do
+      # The five trailing operands, in `DECLARED_LAYER_KEYS` order, counted off the stored
+      # `intent_layer` ONLY. Negative first: an undeclared example under `spec/requests/` is
+      # undeclared, and a `request` example under `spec/models/` is a request — the path decides
+      # nothing.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-file read appends each file's declared-layer counts after the file-count window, counted off the stored layer and never the path", layer: "unit" }
+      it "counts each file's declared layers after the file count, never inferring from the path" do
+        observe(run, duration: 5.0, line_number: 1, spec_file_path: "spec/requests/x_spec.rb")
+        observe(run, duration: 4.0, line_number: 2, spec_file_path: "spec/requests/x_spec.rb", intent_layer: nil)
+        observe(run, duration: 3.0, line_number: 3, spec_file_path: "spec/models/x_spec.rb", intent_layer: "request")
+        observe(run, duration: 2.0, line_number: 4, spec_file_path: "spec/models/x_spec.rb", intent_layer: "unit")
+        observe(run, duration: 1.0, line_number: 5, spec_file_path: "spec/models/x_spec.rb", intent_layer: nil)
+        observe(run, duration: 0.5, line_number: 6, spec_file_path: "spec/none_spec.rb")
+
+        tuples = described_class.file_durations_in(run).to_h { |t| [t.first, t.drop(5)] }
+
+        expect(described_class::DECLARED_LAYER_KEYS).to eq(%i[unit integration request system undeclared])
+        expect(tuples).to eq(
+          "spec/requests/x_spec.rb" => [0, 0, 0, 0, 2],
+          "spec/models/x_spec.rb" => [1, 0, 1, 0, 1],
+          "spec/none_spec.rb" => [0, 0, 0, 0, 1]
+        )
       end
     end
 

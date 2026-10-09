@@ -938,6 +938,13 @@ class SpecObservation < ApplicationRecord
   # rows, and counts all of them however few are returned. It rides back on every row carrying the
   # same value; the caller reads it off whichever row it has and gets nothing for an empty run,
   # which is the correct answer there.
+  #
+  # == The trailing declared-layer operands
+  #
+  # After those five, five more: the FILE's declared-layer counts ({.directory_layer_count_expressions},
+  # in {DECLARED_LAYER_KEYS} order), each a `COUNT(*) FILTER` in the SAME grouped pass — no second
+  # statement. They are appended AFTER `COUNT(*) OVER ()` so `SpecFileDurations::FILE_COUNT_INDEX`
+  # keeps its meaning; the caller reads the file count by that index, never from the tail.
   def self.file_durations_in(test_run, limit: HEAVIEST_FILES_LIMIT)
     where(test_run_id: test_run.id)
       .group(:spec_file_path)
@@ -945,7 +952,7 @@ class SpecObservation < ApplicationRecord
       .limit(limit)
       .pluck(Arel.sql("spec_file_path"), Arel.sql("SUM(duration_seconds)"),
              Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
-             Arel.sql("COUNT(*) OVER ()"))
+             Arel.sql("COUNT(*) OVER ()"), *directory_layer_count_expressions)
   end
 
   # ONE spec file's examples in ONE run, slowest first — the rung BELOW the rollup above, and the
