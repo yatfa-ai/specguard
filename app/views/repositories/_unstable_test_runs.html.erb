@@ -106,7 +106,7 @@
             — <%= unstable_test_runs_scope_sentence(@unstable_test_runs) %>
             <%# The rule for reading the column, HANDED THE SEQUENCE because which readings are
                 available depends on whether the cap took the end they are read from. It withholds
-                the regression branch when it did — see `RepositoriesHelper`. %>
+                the regression branch when it did — see `UnstableTestsHelper`. %>
             <%= unstable_test_runs_reading_sentence(@unstable_test_runs) %>
             <%# The silence, rendered only when the window holds any: rows that recorded the test and
                 reported no outcome are not passes, and a sequence that let them read as one would
