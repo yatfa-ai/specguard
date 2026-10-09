@@ -40,14 +40,26 @@
 class SpecFileDurations
   def self.for(test_run, limit: SpecObservation::HEAVIEST_FILES_LIMIT)
     tuples = SpecObservation.file_durations_in(test_run, limit: limit)
-    rows = tuples.map do |path, total, recorded, timed, _file_count|
-      Row.new(path: path, total_seconds: total, recorded_count: recorded.to_i, timed_count: timed.to_i)
+    rows = tuples.map do |path, total, recorded, timed, _file_count, *layers|
+      # The five trailing operands ride in `SpecObservation::DECLARED_LAYER_KEYS` order — the closed
+      # layer enum, then undeclared — and are zipped by that list, never by position at the call site.
+      layer_counts = SpecObservation::DECLARED_LAYER_KEYS.zip(layers.map(&:to_i)).to_h
+      Row.new(path: path, total_seconds: total, recorded_count: recorded.to_i, timed_count: timed.to_i,
+              layer_counts: layer_counts)
     end
 
     # Off any row, because the window carries the same total on all of them; `to_i` on the nil of
     # an empty read, where "no files" is the honest count.
-    new(rows: rows, file_count: tuples.first&.last.to_i)
+    #
+    # BY INDEX, not by `.last`: the declared-layer operands ride AFTER `COUNT(*) OVER ()`, so the end
+    # of the tuple is a layer count now, and reading it would serve a layer count as a file count
+    # SILENTLY. `fetch` raises where `.last` would guess.
+    new(rows: rows, file_count: tuples.first&.fetch(FILE_COUNT_INDEX).to_i)
   end
+
+  # Where `COUNT(*) OVER ()` sits in one tuple of `SpecObservation.file_durations_in`. Named here,
+  # beside the only read of it, so the tuple shape is a stated contract between the two objects.
+  FILE_COUNT_INDEX = 4
 
   def initialize(rows:, file_count:)
     @rows = rows
@@ -91,7 +103,16 @@ class SpecFileDurations
   def complete? = recorded? && rows.all?(&:complete?)
 
   # One spec file's share of one run's wall clock, and what that share was measured over.
-  Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, keyword_init: true) do
+  Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, :layer_counts, keyword_init: true) do
+    # How many of this file's examples DECLARED each layer, plus how many declared none — operands,
+    # never a label or verdict. `{unit:, integration:, request:, system:, undeclared:}`, a measured
+    # zero where nothing declared that layer (never nil), summing to `recorded_count`. Counted off the
+    # stored `intent_layer` only: no path inference. `undeclared` is `intent_layer IS NULL` and nothing
+    # more — "no @intent declared a layer", not "SpecGuard cannot read this test".
+
+    # Spelled for the panel, through the one spelling the directory rows and drill-ins use.
+    def layer_counts_label = SpecDirectoryDurations.layer_counts_label(layer_counts)
+
     # This file has a measured total. False when every one of its examples went untimed, which is
     # SQL NULL out of the aggregate and stays nil all the way to the cell.
     def timed? = !total_seconds.nil?

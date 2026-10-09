@@ -42,6 +42,15 @@ RSpec.describe "Repository heaviest spec files", type: :request do
 
   def row_paths = rows.map { |row| row[:path] }
 
+  # The "Declared layers" cell of each row, keyed by file. Kept out of `rows` so the existing
+  # three-column row assertions keep stating exactly what they stated.
+  def layer_cells
+    panel.all("tbody tr").to_h do |row|
+      cells = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      [cells.first, cells.fourth]
+    end
+  end
+
   # One ingested run, through the producer. `specs` are the wire hashes a client POSTs; the recorder
   # reads them by string key, which is what `Ingest::Payload` hands it after JSON parsing.
   def ingest(repository, specs, commit_sha: "feedfacecafe0001", **attrs)
@@ -276,6 +285,45 @@ RSpec.describe "Repository heaviest spec files", type: :request do
 
       expect(response).to have_http_status(:ok)
       expect(panel?).to be(false)
+    end
+  end
+
+  # The "Declared layers" column: how many of each listed file's examples DECLARED each layer in
+  # their own `@intent`. Counted off the stored column only — never inferred from the path — and
+  # undeclared is always printed, so a run that declared nothing reads "undeclared N".
+  describe "the declared layers each file carries" do
+    # @intent: {"entity": "SpecFileDurations", "action": "render declared layers", "behavior": "a request-declared example under spec/models counts as request, undeclared examples under spec/requests count as undeclared, and a file declaring nothing reads undeclared N", "layer": "request"}
+    it "prints each file's declared layers, never inferring a layer from the path" do
+      repository = create_repository(user: @user)
+      ingest(repository,
+             [annotated_spec(file_path: "spec/models/a_spec.rb", line_number: 1, duration: 9.0, layer: "unit"),
+              annotated_spec(file_path: "spec/models/a_spec.rb", line_number: 2, duration: 9.0, layer: "request"),
+              example_spec(file_path: "spec/models/a_spec.rb", duration: 9.0, line_number: 3),
+              example_spec(file_path: "spec/requests/b_spec.rb", duration: 2.0, line_number: 4),
+              example_spec(file_path: "spec/requests/b_spec.rb", duration: 2.0, line_number: 5),
+              example_spec(file_path: "spec/models/c_spec.rb", duration: 1.0, line_number: 6)])
+
+      get repository_path(repository)
+
+      expect(panel).to have_css("th", text: "Declared layers")
+      expect(layer_cells).to eq("spec/models/a_spec.rb" => "unit 1 · request 1 · undeclared 1",
+                                "spec/requests/b_spec.rb" => "undeclared 2",
+                                "spec/models/c_spec.rb" => "undeclared 1")
+      expect(layer_cells.fetch("spec/requests/b_spec.rb")).not_to include("request")
+      expect(basis_line).to have_text("Declared layers", normalize_ws: true)
+      expect(basis_line).to have_text("never a layer inferred from the path", normalize_ws: true)
+    end
+
+    # @intent: {"entity": "SpecFileDurations", "action": "render declared layers on a zero-declaration run", "behavior": "a run declaring no layer prints undeclared N in every row rather than a blank cell", "layer": "request"}
+    it "prints undeclared on a run that declared nothing, rather than a blank cell" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: "spec/models/a_spec.rb", duration: 2.0, line_number: 1),
+                          example_spec(file_path: "spec/models/a_spec.rb", duration: 2.0, line_number: 2),
+                          example_spec(file_path: "spec/system/s_spec.rb", duration: 1.0, line_number: 3)])
+
+      get repository_path(repository)
+
+      expect(layer_cells.values).to eq(["undeclared 2", "undeclared 1"])
     end
   end
 

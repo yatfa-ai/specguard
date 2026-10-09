@@ -70,10 +70,18 @@
               ran has no duration to report, so a missing timing is a faithful record rather than a
               gap.
             <% end %>
+            <%# The "Declared layers" column: each file's own examples' declared `@intent` layer,
+                counted over every example the run recorded in that file, never inferred from the
+                path. In THIS paragraph so `aria-describedby` on the table reaches it. "undeclared"
+                is always printed, so a run declaring nothing reads "undeclared N" and not a blank. %>
+            The "Declared layers" column is how many of each listed file's examples declared each
+            layer in their own <code>@intent</code>, counted over every example the run recorded in
+            that file. "Undeclared" is the examples that declared no layer — never a layer inferred
+            from the path.
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel above and may legitimately differ from it.
           </p>
-          <%= render UI::TableComponent.new(columns: ["Spec file", "Examples timed", "Total duration"],
+          <%= render UI::TableComponent.new(columns: ["Spec file", "Examples timed", "Total duration", "Declared layers"],
                                             describedby: "spec-file-durations-basis") do %>
             <% @spec_file_durations.rows.each do |file| %>
               <tr>
@@ -123,6 +131,9 @@
                       cannot disagree about how a duration is spelled, and a file that measured
                       nothing says "not reported" rather than wearing the spelling of a zero. %>
                   <%= file.duration_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= file.layer_counts_label %>
                 </td>
               </tr>
             <% end %>

@@ -1133,9 +1133,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(spec_files["rows"]).to eq(
         [
           { "path" => "spec/models/user_spec.rb", "total_seconds" => 9.0,
-            "recorded_count" => 2, "timed_count" => 2 },
+            "recorded_count" => 2, "timed_count" => 2,
+            "layer_counts" => { "unit" => 0, "integration" => 0, "request" => 0, "system" => 0, "undeclared" => 2 } },
           { "path" => "spec/models/invoice_spec.rb", "total_seconds" => 1.5,
-            "recorded_count" => 1, "timed_count" => 1 }
+            "recorded_count" => 1, "timed_count" => 1,
+            "layer_counts" => { "unit" => 0, "integration" => 0, "request" => 0, "system" => 0, "undeclared" => 1 } }
         ]
       )
       expect(spec_files["file_count"]).to eq(2)
@@ -1150,7 +1152,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     it "serves exactly the spec_files keys this contract pins" do
       expect(spec_files.keys).to contain_exactly("rows", "file_count", "limit")
       expect(spec_files["rows"].first.keys)
-        .to contain_exactly("path", "total_seconds", "recorded_count", "timed_count")
+        .to contain_exactly("path", "total_seconds", "recorded_count", "timed_count", "layer_counts")
     end
 
     # AC5. Read off the same presenter `repositories#show` assigns rather than re-stating the

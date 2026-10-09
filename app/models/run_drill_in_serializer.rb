@@ -109,7 +109,10 @@ class RunDrillInSerializer
           path: row.path,
           total_seconds: row.total_seconds,
           recorded_count: row.recorded_count,
-          timed_count: row.timed_count
+          timed_count: row.timed_count,
+          # The file's own examples' DECLARED layers (`@intent`), never path-inferred; five keys,
+          # measured zeros, summing to `recorded_count`.
+          layer_counts: row.layer_counts
         }
       end,
       file_count: durations.file_count,
