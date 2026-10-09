@@ -1,11 +1,16 @@
 # frozen_string_literal: true
 
 # `?layer=` read as one of the five declared-layer keys — `unit`, `integration`, `request`,
-# `system` or `undeclared` — or `nil` for "no ask". It narrows THREE blocks, each to the examples that
-# declared that layer (or, for `undeclared`, declared none): the run-grain `slowest_examples` ranking on
-# `GET /api/v1/repository`, the window-grain `slowest_tests` ranking (candidate step) and the window-grain
-# `unstable_tests` ranking (candidate step: the tests that FAILED in an example of that layer — SPGD-1755),
-# with their "Slowest tests" / "Tests whose outcome changed" panels on repositories#show.
+# `system` or `undeclared` — or `nil` for "no ask". It narrows these blocks, each to the examples that
+# declared that layer (or, for `undeclared`, declared none):
+#   - `slowest_examples`: the run-grain ranking on `GET /api/v1/repository`;
+#   - `spec_files`: the "Heaviest spec files" rollup, where the layer rides into the query before
+#     `LIMIT` so the rollup is ranked by that layer's own time;
+#   - `slowest_tests`: the window-grain ranking (candidate step);
+#   - `unstable_tests`: the window-grain ranking (candidate step: the tests that FAILED in an example
+#     of that layer — SPGD-1755);
+# plus their matching panels on repositories#show. This header lists blocks rather than counting them,
+# so the next slice that takes the ask adds a line instead of re-numbering a sentence.
 #
 # Deliberately its own module rather than a widening of any sibling `Requested*Param`: one module per
 # parameter is the point of the split, the argument `RequestedSpecFileParam` makes for itself. What

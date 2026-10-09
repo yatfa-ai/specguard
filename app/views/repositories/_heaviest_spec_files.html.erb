@@ -29,7 +29,21 @@
     <% if @spec_file_durations&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Heaviest spec files", id: "spec-file-durations",
                                         class: "lg:col-span-3") do %>
-        <% if @spec_file_durations.any_timed? %>
+        <% if @spec_file_durations.layer? && @spec_file_durations.rows.empty? %>
+          <%# A layer was asked and NO file of this run holds an example that declared it — an empty
+              answer, not a run without rows (the panel only renders for a run that recorded some). %>
+          <p class="text-xs text-app-muted mb-3" id="spec-file-durations-basis">
+            No example of this run declared <code><%= @spec_file_durations.layer %></code> as its layer, so
+            there is no spec file to rank by that layer's time. The layer is what each example's
+            <code>@intent</code> declared, never inferred from the path.
+          </p>
+          <p class="text-xs" id="spec-file-durations-clear-layer">
+            <%= link_to "Clear layer filter",
+                        drill_down_path(@repository, layer: nil, anchor: "spec-file-durations"),
+                        class: "underline underline-offset-2 decoration-app-border-light " \
+                               "text-app-content hover:decoration-app-content" %>
+          </p>
+        <% elsif @spec_file_durations.any_timed? %>
           <%# What the totals COVER, before the totals themselves. `SUM` skips a missing timing
               silently, so a file whose examples were half untimed prints a total covering half of
               it that is indistinguishable, as a number, from a complete one. The per-file coverage
@@ -60,6 +74,15 @@
             <% end %>
             — every example's duration summed onto the file that ran it, so a shared example group
             counts against the file including it rather than against the helper defining it.
+            <%# With a layer asked every figure below is the LAYER's — the rank, the timed fraction,
+                the file count — because the layer rides into the query before the LIMIT. %>
+            <% if @spec_file_durations.layer? %>
+              Ranked by the time of the examples that declared
+              <code><%= @spec_file_durations.layer %></code> as their layer in their own
+              <code>@intent</code> (never inferred from the path): every figure on this panel — each
+              file's total, its examples timed, the file count — is that layer's alone, so a file
+              appears here only if at least one of its examples declared it.
+            <% end %>
             <% if @spec_file_durations.complete? %>
               Every example in every file listed reported a duration, so each total covers the
               whole of its file.
@@ -81,6 +104,14 @@
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel above and may legitimately differ from it.
           </p>
+          <% if @spec_file_durations.layer? %>
+            <p class="text-xs mb-3" id="spec-file-durations-clear-layer">
+              <%= link_to "Clear layer filter",
+                          drill_down_path(@repository, layer: nil, anchor: "spec-file-durations"),
+                          class: "underline underline-offset-2 decoration-app-border-light " \
+                                 "text-app-content hover:decoration-app-content" %>
+            </p>
+          <% end %>
           <%= render UI::TableComponent.new(columns: ["Spec file", "Examples timed", "Total duration", "Declared layers"],
                                             describedby: "spec-file-durations-basis") do %>
             <% @spec_file_durations.rows.each do |file| %>
@@ -193,7 +224,7 @@
               panel exists to refuse. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No timings on this run",
-                description: "This run recorded examples in " \
+                description: (@spec_file_durations.layer? ? "This run recorded #{@spec_file_durations.layer}-layer examples in " : "This run recorded examples in ") + \
                              "#{number_with_delimiter(@spec_file_durations.file_count)} " \
                              "#{'file'.pluralize(@spec_file_durations.file_count)} and a duration " \
                              "for none of them, so there is no wall clock to attribute to any " \

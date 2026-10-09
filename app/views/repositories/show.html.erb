@@ -515,6 +515,23 @@
                 <%= figures %>
               <% end %>
             </p>
+            <%# The second route from a layer: WHICH spec FILES hold its time. The names above go to the
+                slowest EXAMPLES; this line goes to the "Heaviest spec files" rollup ranked by the same
+                declared layer. A line of its own, not links spliced into the one above, so that
+                sentence's text — the plain `layer_durations_label` — stays exactly what it was.
+                Through `drill_down_path`, so choosing a layer closes no other open ask. %>
+            <p class="text-xs text-app-content-secondary" id="layer-durations-files">
+              <span class="font-medium">Spec files by declared layer</span>:
+              <% SpecDirectoryDurations.layer_durations_parts(@latest_test_run.layer_durations,
+                                                              @latest_test_run.layer_counts)
+                                       .each_with_index do |(layer, _figures), index| %>
+                <%= " · " if index.positive? %><%= link_to layer.to_s,
+                           drill_down_path(@repository, layer: layer.to_s, anchor: "spec-file-durations"),
+                           class: "underline underline-offset-2 decoration-app-border-light " \
+                                  "text-app-content hover:decoration-app-content",
+                           aria: { current: layer.to_s == @layer_request ? "true" : nil } %>
+              <% end %>
+            </p>
             <%# The movement of that time against the previous run on this branch — the same
                 `LayerRuntimeGrowth` object `layer_runtime_growth` on the API is built from. Shown
                 only when comparable; a layer untimed on either side reads "not reported", never 0. %>

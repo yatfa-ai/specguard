@@ -711,6 +711,17 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The same certification with a declared layer asked. The extra filter narrows rows inside the
+      # run the index already reaches, so the access path is the by-file one: still bounded by the
+      # RUN, never a scan of the table.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the layer-asked by-file rollup is still served by an index rather than a scan", layer: "unit" }
+      it "reads the layer-asked by-file rollup off an index rather than scanning the table" do
+        plan = plan_for_actual_sql("spec_observations") { described_class.file_durations_in(run, layer: "request") }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
       # The same certification for the rung above, and the reason no migration came with it. The
       # view comment this slice deleted told future authors a subtree rollup was waiting on a
       # `text_pattern_ops` index; that index type serves a prefix PREDICATE — "every row under
@@ -2326,6 +2337,41 @@ RSpec.describe SpecObservation do
           "spec/models/x_spec.rb" => [1, 0, 1, 0, 1],
           "spec/none_spec.rb" => [0, 0, 0, 0, 1]
         )
+      end
+    end
+
+    describe ".file_durations_in layer:" do
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "with a layer the by-file read ranks and counts only that layer's examples and counts the files holding it, with the trailing layer operands showing only that layer non-zero", layer: "unit" }
+      it "ranks by the layer's time and counts the layer's files" do
+        observe(run, duration: 6.0, line_number: 1, spec_file_path: "spec/a_spec.rb", intent_layer: "unit")
+        observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/b_spec.rb", intent_layer: "request")
+        observe(run, duration: 2.0, line_number: 3, spec_file_path: "spec/b_spec.rb", intent_layer: "request")
+        observe(run, duration: nil, line_number: 4, spec_file_path: "spec/b_spec.rb", intent_layer: "request")
+        observe(run, duration: 9.0, line_number: 5, spec_file_path: "spec/b_spec.rb", intent_layer: "unit")
+
+        expect(described_class.file_durations_in(run, layer: "request"))
+          .to eq([["spec/b_spec.rb", 3.0, 3, 2, 1, 0, 0, 3, 0, 0]])
+        expect(described_class.file_durations_in(run, layer: nil).map(&:first)).to eq(%w[spec/b_spec.rb spec/a_spec.rb])
+        expect(described_class.file_durations_in(run, layer: "unit").map { it[4] }).to eq([2, 2])
+        expect(described_class.file_durations_in(run, layer: "system")).to eq([])
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an unasked layer issues the identical statement as before the keyword existed, and an asked layer is still one grouped statement that adds the shared layer predicate", layer: "unit" }
+      it "adds only the shared predicate, in one statement, and none when unasked" do
+        run # materialize the fixture before capturing, so only the rollup's own statement is counted
+        bare = executed_sql { described_class.file_durations_in(run) }
+        explicit_nil = executed_sql { described_class.file_durations_in(run, layer: nil) }
+        asked = executed_sql { described_class.file_durations_in(run, layer: "request") }
+
+        expect(explicit_nil).to eq(bare)
+        expect(bare.size).to eq(1)
+        expect(asked.size).to eq(1)
+        # The trailing per-layer operands already spell the predicate in the SELECT list, so the
+        # narrowing is read off the WHERE clause (everything before GROUP BY, after FROM).
+        where_clause = ->(sql) { sql[/ FROM .*? GROUP BY/m] }
+        expect(where_clause.(bare.first)).not_to include("intent_layer")
+        expect(where_clause.(asked.first)).to include("intent_layer = $").or include("intent_layer = 'request'")
+        expect(asked.first).to include("GROUP BY")
       end
     end
 
