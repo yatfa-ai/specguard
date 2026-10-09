@@ -1846,6 +1846,16 @@
                 ) %>
           <% end %>
         <% end %>
+        <%# The declared-layer MIX across the same window's two ends — the `LayerWindowGrowth` object
+            `layer_growth` on the API is built from, worded by its own `#label` so the line and the
+            API cannot diverge. Shown only when comparable; every other state omits it. It rides the
+            panel's already-loaded window (no new window query) and the same shared baseline walk, so
+            it spans exactly the run the table above landed on. %>
+        <% if @layer_window_growth&.comparable? %>
+          <p class="text-xs text-app-content-secondary mt-3" id="layer-window-growth">
+            Declared layers across this window: <%= @layer_window_growth.label %>
+          </p>
+        <% end %>
       <% end %>
     <% end %>
 

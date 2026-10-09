@@ -922,7 +922,10 @@ RSpec.describe "Repository unstable tests", type: :request do
       # RECOUNTED AT 20 by SPGD-1681: the page's `LayerRunGrowth` reads the previous run's declared-
       # layer mix (the same run-grain aggregate statement the latest run's mix costs, another run
       # id) once the pair passes its pre-query gate. One read, constant in window and suite size.
-      expect(large_queries.size).to eq(20)
+      #
+      # RECOUNTED AT 22 by SPGD-1744: `LayerWindowGrowth` reads the layer mix of the window's two
+      # endpoint runs (two single-row aggregates, constant in window and suite size).
+      expect(large_queries.size).to eq(22)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -938,7 +941,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(20)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(22)
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -977,7 +980,9 @@ RSpec.describe "Repository unstable tests", type: :request do
       # asks nothing past its own probe on an incomparable window.
       # THE SIXTEENTH is SPGD-1681's previous-run layer mix (`LayerRunGrowth`), asked whenever the
       # pair of runs is comparable — a gate of the page's, not of this panel's window.
-      expect(queries.size).to eq(16)
+      # THE SEVENTEENTH AND EIGHTEENTH are SPGD-1744's `LayerWindowGrowth` endpoint mixes, asked
+      # whenever the window's two ends are comparable — a gate of that panel, not of this one.
+      expect(queries.size).to eq(18)
       # What the gate withholds is THIS panel's outcome-narrowed grouping over the WINDOW — the
       # candidate narrowing (`test_run_id IN` + `outcome = 'failed'`, grouped on the identity) and
       # the composition that follows it. The window-narrowed identity groupings that ARE on the

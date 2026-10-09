@@ -309,6 +309,12 @@ class RepositoryOverview
       # `RepositoryGrowthSerializer#serialized_directory_growth_window`.
       directory_growth_window: growth.serialized_directory_growth_window,
       directory_growth: growth.serialized_directory_growth,
+      # BESIDE `directory_growth` and gated on `?branch=` exactly as it is: the declared-layer MIX
+      # over the same thirty-run window's two ENDPOINTS (`basis: "two_endpoints"`). The run-over-run
+      # `layer_run_growth` pair below cannot see a drift of one example per push; this can. Null (and
+      # `grouped: false`) without `?branch=`. See `serialized_layer_growth_window`.
+      layer_growth_window: growth.serialized_layer_growth_window,
+      layer_growth: growth.serialized_layer_growth,
       # BESIDE `directory_growth` and NEVER IN PLACE OF IT — a different comparison over the same
       # grain, not a refinement of that one. The pair above compares the two ENDPOINTS of a
       # thirty-run branch window and is served only when `?branch=` named the branch to walk; this
