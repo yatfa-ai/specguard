@@ -99,11 +99,11 @@ class RunDrillInSerializer
   # 40-example one does. It sits inside the budget `LatestRunSerializer#serialized_shards` states.
   def serialized_spec_files(test_run)
     limit = requested_limit || SpecObservation::HEAVIEST_FILES_LIMIT
-    durations = SpecFileDurations.for(test_run, limit: limit)
+    durations = SpecFileDurations.for(test_run, limit: limit, layer: requested_layer)
 
     return nil unless durations.recorded?
 
-    {
+    body = {
       rows: durations.rows.map do |row|
         {
           path: row.path,
@@ -123,6 +123,13 @@ class RunDrillInSerializer
       # travel together.
       limit: limit
     }
+    # `?layer=` ranks the rollup by that declared layer's time, so every figure above is the layer's.
+    # Echoed ONLY when asked — the key is ABSENT, never null, unasked, so an unasked or malformed-ask
+    # body is byte-identical to before the parameter reached this block. A layer matching no files is
+    # `rows: []` / `file_count: 0` with the block present; `nil` above still means the run recorded
+    # no per-example rows.
+    body[:layer] = durations.layer if durations.layer?
+    body
   end
 
   # WHERE the wall clock went, by code AREA — the block above one rung up, and the same

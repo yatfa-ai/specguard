@@ -38,8 +38,20 @@
 # a timing, and a row with none of them renders "not reported" rather than a zero it did not
 # measure — `SpecObservation.humanized_duration` is the one seam that decides that, at both grains.
 class SpecFileDurations
-  def self.for(test_run, limit: SpecObservation::HEAVIEST_FILES_LIMIT)
-    tuples = SpecObservation.file_durations_in(test_run, limit: limit)
+  # `layer:` ranks the rollup by ONE declared layer's time (`SpecObservation::DECLARED_LAYER_KEYS`):
+  # the layer rides into the query before `LIMIT`, so every figure on this object — each file's
+  # total and counts, `file_count` — is the LAYER's. `nil` (the default) is the all-layer rollup,
+  # unchanged to the query.
+  #
+  # With a layer asked, "did this run record anything at all" can no longer be read off `rows` — a
+  # layer with no files would look like a run with no rows, and the surface would blank a block with
+  # a real, empty answer. That question is the RUN's, answered by `TestRun#intent_readings.recorded?`
+  # (the memoized run-grain aggregate every page already issues), on `SlowestExamples`' terms. It is
+  # deliberately NOT read when no layer is asked: the unasked path decides `#recorded?` exactly as it
+  # always has, from `rows`, and issues nothing new.
+  def self.for(test_run, limit: SpecObservation::HEAVIEST_FILES_LIMIT, layer: nil)
+    run_recorded = layer.nil? ? nil : test_run.intent_readings.recorded?
+    tuples = SpecObservation.file_durations_in(test_run, limit: limit, layer: layer)
     rows = tuples.map do |path, total, recorded, timed, _file_count, *layers|
       # The five trailing operands ride in `SpecObservation::DECLARED_LAYER_KEYS` order — the closed
       # layer enum, then undeclared — and are zipped by that list, never by position at the call site.
@@ -54,17 +66,25 @@ class SpecFileDurations
     # BY INDEX, not by `.last`: the declared-layer operands ride AFTER `COUNT(*) OVER ()`, so the end
     # of the tuple is a layer count now, and reading it would serve a layer count as a file count
     # SILENTLY. `fetch` raises where `.last` would guess.
-    new(rows: rows, file_count: tuples.first&.fetch(FILE_COUNT_INDEX).to_i)
+    new(rows: rows, file_count: tuples.first&.fetch(FILE_COUNT_INDEX).to_i, layer: layer, run_recorded: run_recorded)
   end
 
   # Where `COUNT(*) OVER ()` sits in one tuple of `SpecObservation.file_durations_in`. Named here,
   # beside the only read of it, so the tuple shape is a stated contract between the two objects.
   FILE_COUNT_INDEX = 4
 
-  def initialize(rows:, file_count:)
+  def initialize(rows:, file_count:, layer: nil, run_recorded: nil)
     @rows = rows
     @file_count = file_count
+    @layer = layer&.to_s
+    @run_recorded = run_recorded
   end
+
+  # The declared layer this rollup was ranked by (`"request"`, `"undeclared"` …), or nil for the
+  # all-layer rollup. Every figure on this object is the LAYER's when this is set.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
 
   # The rollup, heaviest first. Never longer than the limit it was built with.
   attr_reader :rows
@@ -91,7 +111,10 @@ class SpecFileDurations
   # no per-file grain to disclose. The `recorded?` / `any_timed?` split is `SlowestExamples`'s
   # `recorded?` / `any?` split: "this run reported no tests" and "this run reported no timings" are
   # different facts and the panel says them differently.
-  def recorded? = rows.any?
+  #
+  # A RUN-level question even when a layer is asked: a layer matching no files is an empty answer
+  # (`rows` empty over a run that recorded examples), not a run that recorded nothing.
+  def recorded? = layer? ? @run_recorded : rows.any?
 
   # At least one file has a total to rank. False for a run that recorded examples and timed none of
   # them — every group's SUM is NULL, so there is a list of files but no ranking, and a column of
