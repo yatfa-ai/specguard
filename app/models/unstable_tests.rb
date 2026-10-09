@@ -168,7 +168,7 @@ class UnstableTests
   # `nil` — never `0` — wherever `#comparable?` is false, because that branch returns before the
   # count is read and a zero there would be an exclusion figure nothing measured. Every reader of
   # this must therefore sit behind a `comparable?` guard or handle the nil.
-  # `RepositoriesHelper#unstable_tests_unnamed_clause` is the former, and the guard is over its
+  # `UnstableTestsHelper#unstable_tests_unnamed_clause` is the former, and the guard is over its
   # CALLER rather than over it: it is reached only through `#unstable_tests_exclusion_sentence`,
   # which the repository page renders inside the `<% if @unstable_tests.comparable? %>` branch of its
   # "Tests whose outcome changed" panel (`id: "unstable-tests"`). The API serializer

@@ -1806,7 +1806,7 @@ class SpecObservation < ApplicationRecord
   #   the NEWEST end — the end the regression reading is taken from. Truncation on that surface
   #   does not shorten the answer, it removes it, which is why that panel carries a cap alert and
   #   a reading sentence that withholds the regression branch
-  #   (`RepositoriesHelper#unstable_test_runs_capped_reading_sentence`) rather than treating the
+  #   (`UnstableTestsHelper#unstable_test_runs_capped_reading_sentence`) rather than treating the
   #   cap as a footnote.
   #
   # A comment (or a caller) that asserted either of these orders as THE order would be wrong
