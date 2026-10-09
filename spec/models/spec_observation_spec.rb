@@ -742,6 +742,16 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The same certification with a declared layer asked: the extra filter narrows rows inside the run
+      # the index already reaches, so the access path is the by-directory one above.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the layer-asked by-directory rollup is still served by an index rather than a scan", layer: "unit" }
+      it "reads the layer-asked by-directory rollup off an index rather than scanning the table" do
+        plan = plan_for_actual_sql("spec_observations") { described_class.directory_durations_in(run, layer: "request") }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
       # The SAME certification for the annotation-debt ranking, and the reason no migration came with
       # IT either. It groups on the same expression and narrows on the same column, and only the
       # second decides the access path — so the claim that had to be MEASURED rather than inherited is
@@ -2329,6 +2339,52 @@ RSpec.describe SpecObservation do
         expect(where_clause.(bare.first)).not_to include("intent_layer")
         expect(where_clause.(asked.first)).to include("intent_layer = $").or include("intent_layer = 'request'")
         expect(asked.first).to include("GROUP BY")
+      end
+    end
+
+    describe ".directory_durations_in layer:" do
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "with a layer the by-directory read ranks and counts only that layer's examples and counts the areas holding it at the pinned index, with the trailing layer operands showing only that layer non-zero", layer: "unit" }
+      it "ranks by the layer's time and counts the layer's areas" do
+        observe(run, duration: 6.0, line_number: 1, spec_file_path: "spec/a/x_spec.rb", intent_layer: "unit")
+        observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/b/y_spec.rb", intent_layer: "request")
+        observe(run, duration: 2.0, line_number: 3, spec_file_path: "spec/b/y_spec.rb", intent_layer: "request")
+        observe(run, duration: nil, line_number: 4, spec_file_path: "spec/b/z_spec.rb", intent_layer: "request")
+        observe(run, duration: 9.0, line_number: 5, spec_file_path: "spec/b/y_spec.rb", intent_layer: "unit")
+
+        asked = described_class.directory_durations_in(run, layer: "request")
+
+        expect(asked).to eq([["spec/b", 3.0, 3, 2, 3, 3, 1, 0, 0, 3, 0, 0]])
+        expect(asked.first.fetch(SpecDirectoryDurations::DIRECTORY_COUNT_INDEX)).to eq(1)
+        expect(described_class.directory_durations_in(run, layer: nil).map(&:first)).to eq(%w[spec/b spec/a])
+        expect(described_class.directory_durations_in(run, layer: "unit").map { it.fetch(SpecDirectoryDurations::DIRECTORY_COUNT_INDEX) }).to eq([2, 2])
+        expect(described_class.directory_durations_in(run, layer: "system")).to eq([])
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the layer is applied before the limit so an area below the unasked cut leads the layer-asked read, and equal layer time breaks ties by path", layer: "unit" }
+      it "applies the layer before the limit and breaks ties by path" do
+        3.times { |i| observe(run, duration: 5.0, line_number: i, spec_file_path: "spec/u#{i}/a_spec.rb", intent_layer: "unit") }
+        observe(run, duration: 2.0, line_number: 10, spec_file_path: "spec/r_b/a_spec.rb", intent_layer: "request")
+        observe(run, duration: 2.0, line_number: 11, spec_file_path: "spec/r_a/a_spec.rb", intent_layer: "request")
+
+        expect(described_class.directory_durations_in(run, limit: 3).map(&:first)).to eq(%w[spec/u0 spec/u1 spec/u2])
+        asked = described_class.directory_durations_in(run, limit: 1, layer: "request")
+        expect(asked.map(&:first)).to eq(["spec/r_a"])
+        expect(asked.first.fetch(SpecDirectoryDurations::DIRECTORY_COUNT_INDEX)).to eq(2)
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an unasked layer issues the identical statement as before the keyword existed, and an asked layer is still one grouped statement that adds the shared layer predicate", layer: "unit" }
+      it "adds only the shared predicate, in one statement, and none when unasked" do
+        run # materialize the fixture before capturing
+        bare = executed_sql { described_class.directory_durations_in(run) }
+        explicit_nil = executed_sql { described_class.directory_durations_in(run, layer: nil) }
+        asked = executed_sql { described_class.directory_durations_in(run, layer: "request") }
+
+        expect(explicit_nil).to eq(bare)
+        expect(bare.size).to eq(1)
+        expect(asked.size).to eq(1)
+        where_clause = ->(sql) { sql[/ FROM .*? GROUP BY/m] }
+        expect(where_clause.(bare.first)).not_to include("intent_layer")
+        expect(where_clause.(asked.first)).to include("intent_layer = $").or include("intent_layer = 'request'")
       end
     end
 

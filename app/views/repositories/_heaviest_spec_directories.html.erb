@@ -27,7 +27,21 @@
     <% if @spec_directory_durations&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Heaviest spec directories", id: "spec-directory-durations",
                                         class: "lg:col-span-3") do %>
-        <% if @spec_directory_durations.any_timed? %>
+        <% if @spec_directory_durations.layer? && @spec_directory_durations.rows.empty? %>
+          <%# A layer was asked and NO directory of this run holds an example that declared it — an
+              empty answer, not a run without rows (the panel only renders for a run that recorded some). %>
+          <p class="text-xs text-app-muted mb-3" id="spec-directory-durations-basis">
+            No example of this run declared <code><%= @spec_directory_durations.layer %></code> as its layer, so
+            there is no spec directory to rank by that layer's time. The layer is what each example's
+            <code>@intent</code> declared, never inferred from the path.
+          </p>
+          <p class="text-xs" id="spec-directory-durations-clear-layer">
+            <%= link_to "Clear layer filter",
+                        drill_down_path(@repository, layer: nil, anchor: "spec-directory-durations"),
+                        class: "underline underline-offset-2 decoration-app-border-light " \
+                               "text-app-content hover:decoration-app-content" %>
+          </p>
+        <% elsif @spec_directory_durations.any_timed? %>
           <%# What the totals COVER, before the totals themselves — the argument the panel above
               makes, where it costs more. `SUM` skips a missing timing silently, and an area is a
               bigger population than a file, so an area whose examples were half untimed prints a
@@ -70,6 +84,17 @@
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel above and may legitimately differ from it. It is also not the
             shard split on that panel: a CI partition is not a code area.
+            <%# With a layer asked every figure below is the LAYER's — the rank, the timed fraction,
+                the directory count — because the layer rides into the query before the LIMIT. %>
+            <% if @spec_directory_durations.layer? %>
+              Ranked by the time of the examples that declared
+              <code><%= @spec_directory_durations.layer %></code> as their layer in their own
+              <code>@intent</code> (never inferred from the path): every figure on this panel — each
+              directory's total, its examples timed, the directory count, the descriptions and layer
+              counts — is that layer's alone, so a directory appears here only if at least one of its
+              examples declared it. Opening an area below shows ALL of its files and examples, not
+              only that layer's.
+            <% end %>
             <%# What the THIRD column was counted over, on the same terms as the second — and the
                 sentence that stops the new figure being read as a verdict.
 
@@ -112,7 +137,7 @@
                 reaches it. %>
             The "Declared layers" column is how many of each listed directory's examples declared
             each layer in their own <code>@intent</code>, counted over every example the run recorded
-            in that directory. "Undeclared" is the examples that declared no layer — never a layer
+            in that directory (with a layer asked, every example of that layer there). "Undeclared" is the examples that declared no layer — never a layer
             inferred from the path. Counts are for the directories listed, not the whole run.
           </p>
           <%# What the "Declared layers" column was counted over — the same kind of sentence as the
@@ -217,6 +242,14 @@
               </tr>
             <% end %>
           <% end %>
+          <% if @spec_directory_durations.layer? %>
+            <p class="text-xs mb-3" id="spec-directory-durations-clear-layer">
+              <%= link_to "Clear layer filter",
+                          drill_down_path(@repository, layer: nil, anchor: "spec-directory-durations"),
+                          class: "underline underline-offset-2 decoration-app-border-light " \
+                                 "text-app-content hover:decoration-app-content" %>
+            </p>
+          <% end %>
           <%# THE WIDENING ASK — the directories panel's own copy of the control the by-file panel
               above renders, to the SAME shared ceiling and through the SAME `drill_down_path`
               carry. The `?limit=` ask names a magnitude, not a panel, so both rollups widen on
@@ -259,7 +292,7 @@
               them and print a suite-wide-looking figure covering part of the run. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No timings on this run",
-                description: "This run recorded examples in " \
+                description: (@spec_directory_durations.layer? ? "This run recorded #{@spec_directory_durations.layer}-layer examples in " : "This run recorded examples in ") + \
                              "#{number_with_delimiter(@spec_directory_durations.directory_count)} " \
                              "#{'directory'.pluralize(@spec_directory_durations.directory_count)} " \
                              "and a duration for none of them, so there is no wall clock to " \

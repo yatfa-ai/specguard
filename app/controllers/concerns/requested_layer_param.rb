@@ -2,11 +2,12 @@
 
 # `?layer=` read as one of the five declared-layer keys — `unit`, `integration`, `request`,
 # `system` or `undeclared` — or `nil` for "no ask". It narrows the run-grain `slowest_examples` ranking
-# AND the `spec_files` ("Heaviest spec files") rollup on `GET /api/v1/repository`, and the matching
-# "Slowest tests" / "Heaviest spec files" panels on repositories#show, to the examples that declared
-# that layer (or, for `undeclared`, declared none). For `spec_files` the layer rides into the query
-# before `LIMIT`, so the rollup is ranked by that layer's own time. Any block another slice has since
-# taken the same ask on is listed by that slice's own comment; this header names only these.
+# AND the `spec_files` ("Heaviest spec files") and `spec_directories` ("Heaviest spec directories")
+# rollups on `GET /api/v1/repository`, and the matching "Slowest tests" / "Heaviest spec files" /
+# "Heaviest spec directories" panels on repositories#show, to the examples that declared that layer
+# (or, for `undeclared`, declared none). For the two rollups the layer rides into the query before
+# `LIMIT`, so each is ranked by that layer's own time. Any block another slice has since taken the
+# same ask on is listed by that slice's own comment; this header names only these.
 #
 # Deliberately its own module rather than a widening of any sibling `Requested*Param`: one module per
 # parameter is the point of the split, the argument `RequestedSpecFileParam` makes for itself. What
