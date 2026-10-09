@@ -56,13 +56,15 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
   end
 
   # Three same-sharded runs whose layer times all differ: the MIDDLE is a decoy, so comparing adjacent
-  # runs rather than the two ends would serve different numbers.
+  # runs rather than the two ends would serve different numbers. The ANCHOR carries a third request
+  # example (2 -> 3) so the count operands differ between the ends and a baseline/anchor swap of
+  # `baseline_count`/`anchor_count` (or of the timed counts) cannot pass.
   def comparable_window(repo: repository, branch: "main")
     ingest(timed_mix("unit" => [1.0, 1.0], "request" => [2.0, 3.0], "undeclared" => [0.5]),
            commit_sha: "baseline0001", at: 30.days.ago, repo: repo, branch: branch)
     ingest(timed_mix("unit" => [9.0, 9.0], "request" => [50.0, 60.0], "undeclared" => [7.0]),
            commit_sha: "middle000001", at: 20.days.ago, repo: repo, branch: branch)
-    ingest(timed_mix("unit" => [1.0, 1.0], "request" => [22.0, 24.2], "undeclared" => [0.25]),
+    ingest(timed_mix("unit" => [1.0, 1.0], "request" => [20.0, 22.0, 4.2], "undeclared" => [0.25]),
            commit_sha: "anchor000001", at: 10.days.ago, repo: repo, branch: branch)
   end
 
@@ -71,7 +73,7 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
   describe "a branch-scoped window of three comparable runs" do
     before { comparable_window }
 
-    # @intent: { entity: "layer_runtime_window_growth", action: "serve the window time movement", behavior: "oldest comparable run request 5.0s against newest 46.2s serves baseline, anchor, timed counts, counts and change 41.2 in the closed enum order, an unmoved layer as a measured zero", layer: "request" }
+    # @intent: { entity: "layer_runtime_window_growth", action: "serve the window time movement", behavior: "oldest comparable run request 5.0s over 2 examples against newest 46.2s over 3 examples serves baseline, anchor, distinct timed counts and counts, and change 41.2 in the closed enum order, an unmoved layer as a measured zero", layer: "request" }
     it "serves per-layer seconds, timed counts and change between the two ends" do
       window, block = blocks
 
@@ -82,8 +84,8 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
       expect(block.keys).to eq(["layers"])
       expect(block["layers"].keys).to eq(layers)
       expect(block["layers"]["request"]).to include("baseline_seconds" => 5.0, "anchor_seconds" => 46.2,
-                                                    "baseline_timed_count" => 2, "anchor_timed_count" => 2,
-                                                    "baseline_count" => 2, "anchor_count" => 2)
+                                                    "baseline_timed_count" => 2, "anchor_timed_count" => 3,
+                                                    "baseline_count" => 2, "anchor_count" => 3)
       expect(block["layers"]["request"]["change"]).to be_within(0.001).of(41.2)
       expect(block["layers"]["unit"]["change"]).to eq(0.0)
       expect(block["layers"]["undeclared"]["change"]).to be_within(0.001).of(-0.25)
