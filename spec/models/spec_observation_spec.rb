@@ -254,6 +254,22 @@ RSpec.describe SpecObservation do
         expect(repeated_timed).to eq(3)
       end
 
+      # The five declared-layer operands ride AFTER the eight positions above, in
+      # DECLARED_LAYER_KEYS order, from the same grouped statement. Positions 0..7 are unchanged.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each repeated-description tuple carries five declared-layer counts after the window totals, summing to the group's example count", layer: "unit" }
+      it "appends the group's declared-layer counts after the window totals" do
+        repeat("mixed layers", [1.0, 1.0, 1.0, 1.0])
+        described_class.where(name: "mixed layers").order(:line_number).each_with_index do |row, index|
+          row.update_columns(intent_layer: [ "unit", "request", "request", nil ][index])
+        end
+
+        tuple = described_class.repeated_descriptions_in(run, limit: 100).first
+
+        expect(tuple.size).to eq(8 + described_class::DECLARED_LAYER_KEYS.size)
+        expect(tuple[8..]).to eq([1, 0, 2, 0, 1])
+        expect(tuple[8..].sum).to eq(tuple[2])
+      end
+
       # The gate an empty ranking cannot provide for itself: a run that wrote no rows and a run
       # whose every description is unique both return nothing, and only the first of them is
       # silence.

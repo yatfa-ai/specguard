@@ -53,20 +53,33 @@
 class RepeatedDescriptions
   def self.for(test_run, limit: SpecObservation::REPEATED_DESCRIPTIONS_LIMIT)
     tuples = SpecObservation.repeated_descriptions_in(test_run, limit: limit)
-    rows = tuples.map do |name, total, recorded, timed, file_paths, *|
+    rows = tuples.map do |name, total, recorded, timed, file_paths, _groups, _repeated, _repeated_timed, *layers|
+      # The five trailing operands ride in `SpecObservation::DECLARED_LAYER_KEYS` order — the closed
+      # layer enum, then undeclared — and are zipped by that list, never by position at the call site.
+      layer_counts = SpecObservation::DECLARED_LAYER_KEYS.zip(layers.map(&:to_i)).to_h
       Row.new(name: name, total_seconds: total, recorded_count: recorded.to_i,
-              timed_count: timed.to_i, file_paths: file_paths)
+              timed_count: timed.to_i, file_paths: file_paths, layer_counts: layer_counts)
     end
 
     # Off any row, because the three window totals ride back the same on all of them; `to_i` over
     # the nil of an empty read, where "no repeated descriptions" is the honest count.
-    window = tuples.first&.last(3).to_a
+    #
+    # BY INDEX, not by `.last(3)`: the declared-layer operands ride AFTER the window totals, so the
+    # end of the tuple is three layer counts now, and `.last(3)` would serve them as the group,
+    # recorded and timed totals SILENTLY. `fetch` raises where `.last` would guess.
+    first = tuples.first
+    window = first ? WINDOW_INDEXES.map { |index| first.fetch(index) } : []
     presence = SpecObservation.description_presence_in(test_run)
 
     new(rows: rows, group_count: window[0].to_i,
         repeated_recorded_count: window[1].to_i, repeated_timed_count: window[2].to_i,
         recorded_count: presence[:recorded_count], unnamed_row_count: presence[:unnamed_count])
   end
+
+  # Where `COUNT(*) OVER ()`, `SUM(COUNT(*)) OVER ()` and `SUM(COUNT(duration_seconds)) OVER ()` sit in
+  # one tuple of `SpecObservation.repeated_descriptions_in`. Named here, beside the only read of
+  # them, so the tuple shape is a stated contract between the two objects.
+  WINDOW_INDEXES = [5, 6, 7].freeze
 
   def initialize(rows:, group_count:, repeated_recorded_count:, repeated_timed_count:,
                  recorded_count:, unnamed_row_count:)
@@ -166,8 +179,16 @@ class RepeatedDescriptions
   def coverage_label = SpecObservation.coverage_fraction(repeated_timed_count, repeated_recorded_count)
 
   # One description, the examples of one run that share it, and what they cost between them.
-  Row = Struct.new(:name, :total_seconds, :recorded_count, :timed_count, :file_paths,
+  Row = Struct.new(:name, :total_seconds, :recorded_count, :timed_count, :file_paths, :layer_counts,
                    keyword_init: true) do
+    # How many of this description's examples DECLARED each layer, plus how many declared none —
+    # operands, never a label or verdict. `{unit:, integration:, request:, system:, undeclared:}`, a
+    # measured zero where nothing declared that layer (never nil), summing to `recorded_count`.
+    # Counted off the stored `intent_layer` only: no path inference.
+
+    # Spelled for the panel, through the one spelling the directory rows and drill-ins use.
+    def layer_counts_label = SpecDirectoryDurations.layer_counts_label(layer_counts)
+
     # This group has a measured total. False when every one of its examples went untimed, which is
     # SQL NULL out of the aggregate and stays nil all the way to the cell.
     def timed? = !total_seconds.nil?

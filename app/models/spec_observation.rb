@@ -2474,6 +2474,14 @@ class SpecObservation < ApplicationRecord
   # disclosure `.file_durations_in` documents. The two `SUM(COUNT(...)) OVER ()` totals are the
   # `.files_in_directory` construct and are here for the same reason: the panel's timing coverage
   # has to describe the whole repeated population rather than the head of it that fit on the page.
+  #
+  # == The trailing declared-layer operands
+  #
+  # After those eight, five more: the DESCRIPTION's declared-layer counts
+  # ({.directory_layer_count_expressions}, in {DECLARED_LAYER_KEYS} order), each a `COUNT(*) FILTER`
+  # in the SAME grouped pass — no second statement. They are appended AFTER the window totals so
+  # `RepeatedDescriptions::WINDOW_INDEXES` keeps its meaning; the caller reads the totals by those
+  # indexes, never from the tail.
   def self.repeated_descriptions_in(test_run, limit: REPEATED_DESCRIPTIONS_LIMIT)
     where(test_run_id: test_run.id)
       .where.not(name: nil)
@@ -2486,7 +2494,8 @@ class SpecObservation < ApplicationRecord
              Arel.sql("ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)"),
              Arel.sql("COUNT(*) OVER ()"),
              Arel.sql("SUM(COUNT(*)) OVER ()"),
-             Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"))
+             Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"),
+             *directory_layer_count_expressions)
   end
 
   # Whether ONE run's rows carry descriptions at all, and how many of them do not — the two facts a
