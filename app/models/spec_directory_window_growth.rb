@@ -118,53 +118,19 @@ class SpecDirectoryWindowGrowth
   #   the others' branch.
   # @param branch [String, nil] the branch every figure is drawn on, for the caption.
   def self.for(runs, branch: nil, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT)
-    runs = RunWindow.wrap(runs)
-    window_runs = runs.oldest_first
-    anchor = window_runs.last
-    context = { branch: branch, window_run_count: runs.size, anchor_run: anchor }
+    baseline = WindowBaseline.for(runs)
+    context = { branch: branch, window_run_count: baseline.window_run_count, anchor_run: baseline.anchor,
+                skipped_unmeasured_count: baseline.skipped_unmeasured_count,
+                skipped_assembled_differently_count: baseline.skipped_assembled_differently_count }
 
-    return new(state: :anchor_unmeasured, **context) unless anchor&.suite_size_measured?
-    return new(state: :no_earlier_run, **context) if runs.size < 2
+    # Not found: the state is the walk's own — see {WindowBaseline} for the three it can name and
+    # the precedence between the two the walk produces. The walk is shared with {LayerWindowGrowth},
+    # so the two presenters cannot land on different baselines for one window.
+    return new(state: baseline.state, **context) unless baseline.found?
 
-    compare(window_runs, anchor, context, limit)
+    from_tuples(SpecObservation.directory_growth_between(baseline.anchor, baseline.run, limit: limit),
+                **context, baseline_run: baseline.run, runs_back: baseline.runs_back)
   end
-
-  # The walk, and what it found. Separate from `.for` so the two questions asked of the anchor alone
-  # stay legible above it, and private because the baseline rule is this object's own — a caller
-  # that picked its own baseline would be a second spelling of the comparability predicates, which
-  # is the thing this class comment exists to refuse.
-  def self.compare(runs, anchor, context, limit)
-    unmeasured = 0
-    mismatched = 0
-    index = nil
-
-    # From the OLDEST end, so the comparison spans as much of the window as is sound. Each step is
-    # two in-memory predicates over a row already loaded; nothing here touches the database.
-    runs[0..-2].each_with_index do |run, position|
-      next unmeasured += 1 unless run.suite_size_measured?
-      next mismatched += 1 unless anchor.assembled_like?(run)
-
-      index = position
-      break
-    end
-
-    context = context.merge(skipped_unmeasured_count: unmeasured,
-                            skipped_assembled_differently_count: mismatched)
-
-    # No baseline, and WHICH condition ran the window out is the whole answer: a window whose
-    # earlier runs all reported zero tests and one whose earlier runs were all sharded differently
-    # are the same blank panel and two different things to go and fix. Composition takes precedence
-    # because it is the stronger statement — reaching it means the walk DID find runs that measured
-    # a suite, so "no earlier run measured anything" would be false of this window.
-    if index.nil?
-      return new(state: mismatched.positive? ? :no_comparable_composition : :no_measured_baseline,
-                 **context)
-    end
-
-    from_tuples(SpecObservation.directory_growth_between(anchor, runs[index], limit: limit),
-                **context, baseline_run: runs[index], runs_back: runs.size - 1 - index)
-  end
-  private_class_method :compare
 
   # The three window totals ride on every row of the aggregate and are identical on all of them, so
   # they are read off the first; `to_i` on the nil of an empty read, where zero areas and zero rows

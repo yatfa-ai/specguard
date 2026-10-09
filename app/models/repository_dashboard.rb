@@ -913,6 +913,9 @@ class RepositoryDashboard
       # the size of the suite or with the length of the window: see `SpecDirectoryWindowGrowth`.
       @spec_directory_window_growth =
         SpecDirectoryWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
+      # The declared-layer MIX across the SAME window (no new window query) — the one line under the
+      # panel it sits beside. The same shared baseline walk, so it lands on the same run.
+      @layer_window_growth = LayerWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
       # The WALL CLOCK at the grain the two panels above already speak at, and the one grain this
       # page has never had. "Slowest tests" above is ONE run, and its own comment says why it stays
       # there: `example_id` is positional and not stable across refactors, so a ranking that spanned

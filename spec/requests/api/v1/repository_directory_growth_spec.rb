@@ -787,9 +787,11 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       # SIXTEEN since SPGD-1681: the comparable run pair also reads the previous run's layer mix
-      # (a second run-readings-grain statement; see `ObservationGrainReads`).
+      # (a second run-readings-grain statement; see `ObservationGrainReads`). EIGHTEEN since
+      # SPGD-1744: `layer_growth` reads the layer mix of the window's two endpoint runs (see
+      # `repository_layer_growth_spec.rb` for the pin of those two).
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(16)
+        .to eq(18)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

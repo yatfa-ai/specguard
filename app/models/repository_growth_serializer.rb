@@ -340,6 +340,53 @@ class RepositoryGrowthSerializer
     }
   end
 
+  # The contract block for `layer_growth` — the declared-layer mix over the `?branch=` window, the
+  # layer sibling of `directory_growth_window` and shaped like it: `basis: "two_endpoints"` (the
+  # figures compare the window's two ENDS and are not a series — an example added in run 12 and
+  # removed in run 25 reads `change: 0`), `branch_scope`, `branch`, `grouped`. `grouped` is read off
+  # whether the presenter was CONSTRUCTED, never re-spelled from `requested_branch`, so it is exactly
+  # `layer_growth_window.state != null`; without `?branch=` it is false, `state` is null, and no
+  # query ran — there is no all-branches fallback, for the reason `directory_growth_window` gives.
+  #
+  # `state` is `LayerWindowGrowth#state` (eight); the two commit shas and `runs_back` name the
+  # baseline the SHARED {WindowBaseline} walk landed on, so they equal `directory_growth`'s for the
+  # same window. `comparable` is exactly `layer_growth != null`.
+  def serialized_layer_growth_window
+    growth = layer_window_growth
+    baseline = growth&.baseline_run
+
+    {
+      basis: "two_endpoints",
+      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch: requested_branch,
+      grouped: !growth.nil?,
+      state: growth&.state,
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: growth&.anchor_run&.commit_sha,
+      baseline_commit_sha: baseline&.commit_sha,
+      runs_back: baseline && growth.runs_back
+    }
+  end
+
+  # The declared-layer mix movement over the window — `null` in EVERY non-comparable state, never a
+  # block of zeros (a zero would be a fabricated measurement for a run that recorded no mix), and
+  # `null` without `?branch=`. Same body as `layer_run_growth`: per layer, in
+  # `SpecObservation::DECLARED_LAYER_KEYS` order, `{baseline_count, anchor_count, change}`; the
+  # changes sum to `anchor_recorded_count - baseline_recorded_count`.
+  def serialized_layer_growth
+    growth = layer_window_growth
+
+    return nil unless growth&.comparable?
+
+    {
+      layers: growth.rows.transform_values do |row|
+        { baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
+      end,
+      baseline_recorded_count: growth.baseline_recorded_count,
+      anchor_recorded_count: growth.anchor_recorded_count
+    }
+  end
+
   # The contract block for `layer_run_growth`, shaped like `directory_run_growth_window` and
   # carrying the same two runs (`anchor_commit_sha` = the latest/named run, `baseline_commit_sha` =
   # its predecessor ON ITS OWN BRANCH). `state` is `LayerRunGrowth#state`, plus the two
@@ -1227,5 +1274,17 @@ class RepositoryGrowthSerializer
 
     @spec_directory_window_growth =
       requested_branch && SpecDirectoryWindowGrowth.for(history_runs.oldest_first, branch: requested_branch)
+  end
+
+  # The window's declared-layer-mix presenter, or `nil` without `?branch=` — gated and oriented
+  # exactly as {#spec_directory_window_growth} is (same `requested_branch` gate, same
+  # `history_runs.oldest_first` window, same shared {WindowBaseline} walk), memoized across the nil.
+  # The walk is in-memory; the only reads are the two endpoint runs' `layer_counts`, and none at all
+  # in a state the walk decides.
+  def layer_window_growth
+    return @layer_window_growth if defined?(@layer_window_growth)
+
+    @layer_window_growth =
+      requested_branch && LayerWindowGrowth.for(history_runs.oldest_first, branch: requested_branch)
   end
 end

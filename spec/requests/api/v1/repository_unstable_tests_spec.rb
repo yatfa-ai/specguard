@@ -817,9 +817,11 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       # FIFTEEN at the last recount, plus the flakiness grain's fifth read and the two identity
       # reads the resolving fixtures now pay: eighteen — and NINETEEN since SPGD-1681, whose
-      # `layer_run_growth` reads the previous run's layer mix when the pair is comparable.
+      # `layer_run_growth` reads the previous run's layer mix when the pair is comparable —
+      # and TWENTY-ONE since SPGD-1744, whose `layer_growth` reads the layer mix of the window's two
+      # endpoint runs.
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(19)
+        .to eq(21)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
