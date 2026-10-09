@@ -75,11 +75,11 @@ class LayerRuntimeGrowth
     new(state: :comparable, rows: rows)
   end
 
-  # Some layer on this side carries a real summed duration.
+  # Some layer on this side carries a real summed duration. Public so {LayerWindowRuntimeGrowth}
+  # decides its untimed arms with the same predicate rather than a second spelling of it.
   def self.timed?(durations)
     durations.values.any? { |figures| !figures[:total_seconds].nil? }
   end
-  private_class_method :timed?
 
   def initialize(state:, rows: {})
     @state = state
