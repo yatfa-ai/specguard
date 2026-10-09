@@ -1575,10 +1575,23 @@ class SpecObservation < ApplicationRecord
   # @return [Array<Array>] `[spec_identity_id, candidate_count]` per kept identity, where
   #   `candidate_count` is the same figure on every row: how many identities failed in the window
   #   in all.
-  def self.unstable_identity_candidates_in(run_ids, limit: UNSTABLE_CANDIDATE_LIMIT)
+  #
+  # == `layer:` (SPGD-1755)
+  #
+  # With a {DECLARED_LAYER_KEYS} member the FAILED rows are narrowed through {.in_declared_layer} — the
+  # one predicate {.slowest_identity_candidates_in} narrows through, never retyped — BEFORE the group,
+  # the order and the cap. So an identity is a candidate under `request` exactly when it failed in at
+  # least one example declared `request`, the 200 cap is applied to THAT population (a window broadly
+  # red in `unit` cannot cut the wanted layer out), and the `COUNT(*) OVER ()` figure counts the layer's
+  # candidates. The ordering counts failures WITHIN the narrowed rows, which is what "fewest failures
+  # first" means for the population being ranked. `nil` — the default — is byte-identical SQL to before
+  # the keyword existed. The composition step is deliberately NOT narrowed: see `UnstableTests.for`.
+  #
+  # @param layer [String, Symbol, nil] a {DECLARED_LAYER_KEYS} member; `KeyError` otherwise.
+  def self.unstable_identity_candidates_in(run_ids, limit: UNSTABLE_CANDIDATE_LIMIT, layer: nil)
     return [] if run_ids.empty?
 
-    where(test_run_id: run_ids, outcome: "failed")
+    in_declared_layer(where(test_run_id: run_ids, outcome: "failed"), layer)
       .where.not(spec_identity_id: nil)
       .group(:spec_identity_id)
       .order(Arel.sql("COUNT(*) ASC"), Arel.sql("spec_identity_id ASC"))

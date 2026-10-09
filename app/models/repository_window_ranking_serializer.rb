@@ -81,8 +81,24 @@ class RepositoryWindowRankingSerializer
       tie_break_served: true,
       branch_scope: requested_branch ? "single_branch" : "all_branches",
       branch: requested_branch,
-      grouped: !unstable_tests.nil?
+      grouped: !unstable_tests.nil?,
+      **unstable_tests_layer_echo
     }
+  end
+
+  # `?layer=` ASKED (SPGD-1755): the declared layer the CANDIDATE step of `unstable_tests` was narrowed
+  # to, echoed so the figures are read as the layer's — the rows are the durable tests that FAILED in at
+  # least one example declared that layer, while each row's `run_count` / `failed_run_count` / `outcomes`
+  # stay the whole test's history across the window (so `declared_layers` may list several layers).
+  # `candidate_count` is then the LAYER's candidate count and `truncated` / `unexamined_count` follow it;
+  # the cap applies AFTER the narrowing. `unnamed_count` / `unresolved_count` and the comparability gate
+  # stay window-wide. A layer with no failures is `rows: []` with `candidate_count: 0` — not "nothing is
+  # flaky". ABSENT — not `null` — when no layer was asked or the ask was malformed (an unasked body is
+  # byte-identical to before), and absent when `branch` is not asked: the layer ask does not unlock the
+  # ranking, and a key echoing a narrowing nothing applied would be a false statement. Mirrors
+  # `slowest_tests_layer_echo`.
+  def unstable_tests_layer_echo
+    unstable_tests && requested_layer ? { layer: requested_layer } : {}
   end
 
   # WHICH TESTS ARE UNSTABLE ACROSS RUNS — the agent-readable half of the "Tests whose outcome
@@ -685,6 +701,6 @@ class RepositoryWindowRankingSerializer
     return @unstable_tests if defined?(@unstable_tests)
 
     @unstable_tests =
-      requested_branch && UnstableTests.for(repository, history_runs, branch: requested_branch)
+      requested_branch && UnstableTests.for(repository, history_runs, branch: requested_branch, layer: requested_layer)
   end
 end

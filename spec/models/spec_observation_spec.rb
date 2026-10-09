@@ -1164,6 +1164,39 @@ RSpec.describe SpecObservation do
           .to eq([@identity_ids[6]])
       end
 
+      # SPGD-1755 — `layer:` narrows the FAILED rows before the group, the order and the cap.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a layer narrows the failing identities to those with a failed example declared that layer, counts them as the candidate total and leaves the unasked read unchanged", layer: "unit" }
+      it "narrows the failing identities to the asked layer, and only when asked" do
+        unasked = described_class.unstable_identity_candidates_in(window_ids)
+        failed = described_class.where(test_run_id: window_ids, outcome: "failed")
+        described_class.where(id: failed.where(spec_identity_id: @identity_ids[12]).select(:id))
+                       .update_all(intent_layer: "request")
+        described_class.where(id: failed.where.not(spec_identity_id: @identity_ids[12]).select(:id))
+                       .update_all(intent_layer: nil)
+
+        narrowed = described_class.unstable_identity_candidates_in(window_ids, layer: "request")
+
+        expect(narrowed.map(&:first)).to eq([@identity_ids[12]])
+        expect(narrowed.map(&:last)).to eq([1])
+        expect(described_class.unstable_identity_candidates_in(window_ids, layer: "undeclared").map(&:last))
+          .to all(eq(unasked.size - 1))
+        expect(described_class.unstable_identity_candidates_in(window_ids, layer: "system")).to eq([])
+        expect(described_class.unstable_identity_candidates_in(window_ids, layer: nil)).to eq(unasked)
+      end
+
+      # The cap bites on the NARROWED population: the least-failing LAYER identity is kept.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "under a layer the cap keeps the layer's least-failing identities and the total counts the layer's candidates", layer: "unit" }
+      it "applies the cap after the layer narrowing" do
+        described_class.where(test_run_id: window_ids, outcome: "failed")
+                       .where.not(spec_identity_id: @identity_ids[12]).update_all(intent_layer: "unit")
+        described_class.where(test_run_id: window_ids, outcome: "failed", spec_identity_id: @identity_ids[12])
+                       .update_all(intent_layer: "request")
+
+        capped = described_class.unstable_identity_candidates_in(window_ids, limit: 1, layer: "request")
+
+        expect(capped).to eq([[@identity_ids[12], 1]])
+      end
+
       # A row with no durable identity is not a test this read can follow across runs, so it never
       # becomes a group — and neither does the UNANNOTATED rename's passing half, which resolved to
       # a new identity and never failed under it.
@@ -1397,6 +1430,16 @@ RSpec.describe SpecObservation do
 
         expect(plan).to include("index_spec_observations_on_test_run_id_and_outcome")
         expect(plan).to match(SCAN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "narrowing the failures to a declared layer is still served by the by-outcome index and never scans the table", layer: "unit" }
+      it "keeps the by-outcome index when the failures are narrowed to a layer" do
+        plan = plan_for_actual_sql("spec_observations") do
+          described_class.unstable_identity_candidates_in(window_ids, layer: "request")
+        end
+
+        expect(plan).to include("index_spec_observations_on_test_run_id_and_outcome")
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 

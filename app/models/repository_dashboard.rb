@@ -850,7 +850,8 @@ class RepositoryDashboard
     # turned out to hold. Not in the carry set and not an ask — it qualifies the one above.
     @unstable_test_origin_request = requested_unstable_test_origin
     if trajectory_runs.any?
-      @unstable_tests = UnstableTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
+      @unstable_tests = UnstableTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch,
+                                                       layer: @layer_request)
       # ONE ROW of that ranking, opened: not which tests changed their outcome but WHAT THIS ONE
       # ACTUALLY DID, run by run and in the window's own order. The rung the flakiness ladder never
       # had, and the end of it — `UnstableTests` is `COUNT`s and `ARRAY_AGG(DISTINCT …)`

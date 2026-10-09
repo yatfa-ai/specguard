@@ -32,6 +32,29 @@ module UnstableTestsHelper
       "#{unstable_tests_silent_runs_clause(unstable)}"
   end
 
+  # With `?layer=` asked (SPGD-1755) the ranking is narrowed at its CANDIDATE step: the tests listed are
+  # those that FAILED in at least one example declared that layer. Each row still reports the whole test's
+  # history across the window, which is why a row's declared layers can list more than the one asked for.
+  # `nil` unasked, so the unasked basis paragraph is unchanged (ERB renders nil as nothing).
+  def unstable_tests_layer_clause(unstable)
+    return nil unless unstable.layer?
+
+    "Narrowed to the #{unstable.layer} layer: only tests that failed in at least one " \
+      "#{unstable.layer}-layer example in this window are candidates, and each row still counts the " \
+      "whole test across the window."
+  end
+
+  # The layer-narrowed ranking's empty state: no example declared this layer failed anywhere in the
+  # window. A fact about what failed under that declaration, NOT "nothing is flaky" — the tests are
+  # narrowed by the layer their own @intent declared, never inferred from the spec path.
+  def unstable_tests_empty_layer_description(unstable)
+    "None of the #{number_with_delimiter(unstable.runs_reporting_outcomes)} " \
+      "#{"run".pluralize(unstable.runs_reporting_outcomes)}#{window_branch_clause(unstable)} that reported " \
+      "outcomes holds a failed example declared #{unstable.layer}, so there is no #{unstable.layer}-layer " \
+      "failure to compare across runs. That says nothing about whether this suite is flaky: tests are " \
+      "narrowed by the layer their own @intent declared, never inferred from the spec path."
+  end
+
   # The matching rule, said on the panel rather than left in the code — because it is a rule a
   # reader has to know to read the list at all, and because it is the one thing here that is a
   # DECISION rather than a measurement. A test that moved keeps its history; a renamed one starts a

@@ -78,12 +78,20 @@ class UnstableTests
   #   fetched "the last thirty runs on this branch" separately would be its own window, agreeing
   #   today with no structural reason to keep agreeing, and this one's captions name the others'
   #   branch.
-  def self.for(repository, runs, branch: nil)
+  #
+  # @param layer [String, nil] a `SpecObservation::DECLARED_LAYER_KEYS` member (SPGD-1755) narrowing the
+  #   CANDIDATE step ONLY — the identities that failed in at least one example declared that layer
+  #   (`undeclared`: declared none). The composition step stays whole-window over those identities, exactly
+  #   as `SlowestTests.for` does for its own ranking, so a kept row's `run_count` / `failed_run_count` /
+  #   `outcomes` are the test's WHOLE history and its `declared_layers` may list several layers. The
+  #   comparability gate, `unnamed_count` and `unresolved_count` stay window-wide and unchanged;
+  #   `candidate_count` / `examined_count` are the LAYER's. `nil` is today's behavior, byte for byte.
+  def self.for(repository, runs, branch: nil, layer: nil)
     runs = RunWindow.wrap(runs)
     run_ids = runs.runs.map(&:id)
     reporting = SpecObservation.window_outcome_reporting(run_ids)
 
-    window = { branch: branch, run_count: runs.size, **reporting }
+    window = { branch: branch, layer: layer, run_count: runs.size, **reporting }
     # Nothing below this line may be read as a fact about outcomes on a window that reported fewer
     # than two of them, so nothing below this line is asked. See `#comparable?`.
     #
@@ -105,7 +113,7 @@ class UnstableTests
                  unnamed_count: nil, unresolved_count: nil)
     end
 
-    candidates = SpecObservation.unstable_identity_candidates_in(run_ids)
+    candidates = SpecObservation.unstable_identity_candidates_in(run_ids, layer: layer)
     identity_ids = candidates.map(&:first)
 
     new(**window,
@@ -120,9 +128,10 @@ class UnstableTests
                                                                   run_ids: run_ids))
   end
 
-  def initialize(branch:, run_count:, runs_with_rows:, runs_reporting_outcomes:, groups:,
+  def initialize(branch:, layer: nil, run_count:, runs_with_rows:, runs_reporting_outcomes:, groups:,
                  candidate_count:, examined_count:, unnamed_count:, unresolved_count:)
     @branch = branch
+    @layer = layer
     @run_count = run_count
     @runs_with_rows = runs_with_rows
     @runs_reporting_outcomes = runs_reporting_outcomes
@@ -148,6 +157,12 @@ class UnstableTests
   # branch-anchored exactly as that panel's is — same `?branch=` selector, same anchor run, same
   # `Repository::TRAJECTORY_LIMIT`.
   attr_reader :branch
+
+  # The declared layer the candidate step was narrowed to (SPGD-1755), or `nil` when no layer was asked.
+  # Set even on an incomparable window — the ask is echoed there, though nothing was narrowed.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
 
   # How many runs the window holds, and how many of them wrote example rows at all. The second is
   # not derivable from the first: a run ingested before per-example rows existed, or one whose

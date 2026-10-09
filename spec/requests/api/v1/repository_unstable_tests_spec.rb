@@ -1001,4 +1001,165 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(block["shared_description_rows"]).to all(include("declared_layers" => ["system"]))
     end
   end
+
+  # SPGD-1755 — `?layer=` narrows the CANDIDATE step of the flaky ranking: the rows are the durable tests
+  # that FAILED in at least one example declared that layer, while each row's totals stay the whole
+  # test's history (so `declared_layers` may list several layers). Rows go through the real ingest path.
+  describe "?layer= narrowing the candidate step" do
+    # One test per entry: `[name, layer_per_run, outcome_per_run]`. `layer` nil leaves the example
+    # unannotated in that run. The intent triple is keyed on the name so each name is one identity.
+    def layered_spec(name, layer, outcome, index)
+      file = "spec/#{name.parameterize}_spec.rb"
+      if layer
+        annotated_spec(file_path: file, line_number: 1, name: name, outcome: outcome, layer: layer)
+          .merge(intent: { entity: name, action: "behave", behavior: "behaves as #{name}", layer: layer })
+      else
+        example_spec(name: name, outcome: outcome, line_number: 1, file_path: file)
+      end
+    end
+
+    def layered_runs(tests)
+      runs = tests.values.first[:outcomes].size
+      runs.times do |index|
+        specs = tests.map do |name, t|
+          layered_spec(name, t[:layers][index], t[:outcomes][index], index)
+        end
+        ingest(repository, specs, commit_sha: "lay#{format("%010d", index)}", at: (30 - index).days.ago)
+      end
+    end
+
+    REQ_FLAKY = "Checkout charges the card"
+    UNIT_FLAKY = "Money rounds half to even"
+    SHIFTER = "Cart totals the lines"
+    PLAIN_FLAKY = "Legacy importer parses an old file"
+
+    def standard_window
+      layered_runs(
+        REQ_FLAKY => { layers: %w[request request request request], outcomes: %w[failed passed failed passed] },
+        UNIT_FLAKY => { layers: %w[unit unit unit unit], outcomes: %w[failed failed passed passed] },
+        # Failed once as `request`, then ran as `unit` — so it is a request-layer failure whose own
+        # history spans two declared layers.
+        SHIFTER => { layers: %w[request unit unit unit], outcomes: %w[failed passed passed passed] },
+        PLAIN_FLAKY => { layers: [nil, nil, nil, nil], outcomes: %w[failed passed failed passed] }
+      )
+    end
+
+    def names_of(block) = block["rows"].map { |row| row["name"] }
+
+    # @intent: { entity: "repository unstable_tests block", action: "narrow candidates by layer", behavior: "layer=request lists exactly the tests that failed in a request-declared example and omits the test that failed only as unit", layer: "request" }
+    it "keeps exactly the identities that failed in an example declared the asked layer" do
+      standard_window
+
+      window, block = blocks(query: { branch: "main", layer: "request" })
+
+      expect(names_of(block)).to contain_exactly(REQ_FLAKY, SHIFTER)
+      expect(window["layer"]).to eq("request")
+      expect(block["candidate_count"]).to eq(2)
+      expect(block["examined_count"]).to eq(2)
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "keep whole-window history", behavior: "a kept row still reports its whole-window run and failure counts and may list several declared layers", layer: "request" }
+    it "keeps whole-window figures on a kept row, whose declared_layers may span layers" do
+      standard_window
+
+      _w, block = blocks(query: { branch: "main", layer: "request" })
+      row = row_named(block, SHIFTER)
+
+      expect(row).to include("run_count" => 4, "failed_run_count" => 1, "reported_outcome_count" => 4)
+      expect(row["declared_layers"]).to eq(%w[request unit])
+      expect(row["outcome_words"]).to eq(%w[failed passed])
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "select undeclared failures", behavior: "layer=undeclared selects failed rows with no declared layer", layer: "request" }
+    it "selects the NULL-layer failures for undeclared" do
+      standard_window
+
+      window, block = blocks(query: { branch: "main", layer: "undeclared" })
+
+      expect(names_of(block)).to eq([PLAIN_FLAKY])
+      expect(window["layer"]).to eq("undeclared")
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "ignore a malformed layer", behavior: "bogus array and NUL layer asks serve the unasked body byte for byte with no layer key", layer: "request" }
+    it "treats a bogus, array or NUL layer as no ask at all" do
+      standard_window
+      unasked = get_repository(query: { branch: "main" }).slice("unstable_tests", "unstable_tests_window")
+
+      [{ layer: "bogus" }, { layer: ["request"] }, { layer: "\u0000" }, { layer: "" }].each do |ask|
+        body = get_repository(query: { branch: "main" }.merge(ask))
+
+        expect(response).to have_http_status(:ok)
+        expect(body.slice("unstable_tests", "unstable_tests_window")).to eq(unasked)
+        expect(body["unstable_tests_window"]).not_to have_key("layer")
+      end
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "serve the unasked key set", behavior: "an unasked window block keeps exactly its five keys with no layer key while an asked one adds layer", layer: "request" }
+    it "adds the layer key to the window only when a layer was asked" do
+      standard_window
+
+      unasked, _b = blocks(query: { branch: "main" })
+      asked, _b = blocks(query: { branch: "main", layer: "unit" })
+
+      expect(unasked.keys).to contain_exactly("order", "tie_break_served", "branch_scope", "branch", "grouped")
+      expect(asked.keys).to contain_exactly("order", "tie_break_served", "branch_scope", "branch", "grouped", "layer")
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "gate on branch", behavior: "a layer ask without a branch leaves unstable_tests null and echoes no layer", layer: "request" }
+    it "does not unlock the ranking without a branch" do
+      standard_window
+
+      window, block = blocks(query: { layer: "request" })
+
+      expect(block).to be_nil
+      expect(window).to include("grouped" => false)
+      expect(window).not_to have_key("layer")
+    end
+
+    # @intent: { entity: "repository unstable_tests block", action: "serve an empty layer", behavior: "a layer with no failures keeps comparable true and serves no rows and a zero candidate count while echoing the layer", layer: "request" }
+    it "serves a layer with no failures as comparable with no rows and zero candidates" do
+      standard_window
+
+      window, block = blocks(query: { branch: "main", layer: "system" })
+
+      expect(window["layer"]).to eq("system")
+      expect(block).to include("comparable" => true, "rows" => [], "candidate_count" => 0,
+                               "examined_count" => 0, "truncated" => false, "unexamined_count" => 0)
+    end
+
+    # The cap is applied AFTER narrowing: five unit tests that failed once each outrank (fewest failures
+    # first) a request test that failed three times, so under a cap of three the unfiltered block cannot
+    # reach it — and only a narrowed candidate step can.
+    # @intent: { entity: "repository unstable_tests block", action: "cap after narrowing", behavior: "the candidate cap applies after the layer narrowing so the most-failing request test is listed under layer=request and the candidate count is the layer's", layer: "request" }
+    it "applies the candidate cap after the layer narrowing" do
+      stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 3)
+      tests = (1..5).to_h do |i|
+        ["Unit probe #{i} holds", { layers: %w[unit unit unit unit], outcomes: %w[failed passed passed passed] }]
+      end
+      tests[REQ_FLAKY] = { layers: %w[request request request request], outcomes: %w[failed failed failed passed] }
+      layered_runs(tests)
+
+      _w, unfiltered = blocks(query: { branch: "main" })
+      window, narrowed = blocks(query: { branch: "main", layer: "request" })
+
+      expect(names_of(unfiltered)).not_to include(REQ_FLAKY)
+      expect(unfiltered).to include("candidate_count" => 6, "examined_count" => 3, "truncated" => true)
+      expect(names_of(narrowed)).to eq([REQ_FLAKY])
+      expect(narrowed).to include("candidate_count" => 1, "examined_count" => 1, "truncated" => false,
+                                  "unexamined_count" => 0)
+      expect(window["layer"]).to eq("request")
+    end
+
+    # Extra predicate on the existing candidate query — no new read.
+    # @intent: { entity: "repository unstable_tests block", action: "cost the same reads", behavior: "an asked and an unasked window issue the same number of observation reads", layer: "request" }
+    it "issues the same number of observation reads asked and unasked" do
+      standard_window
+      get_repository(key: api_key)
+
+      unasked = flakiness_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }.length
+      asked = flakiness_grain_reads { get_repository(key: api_key, query: { branch: "main", layer: "request" }) }.length
+
+      expect(asked).to eq(unasked)
+    end
+  end
 end
