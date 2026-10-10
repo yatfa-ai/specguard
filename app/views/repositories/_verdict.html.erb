@@ -57,7 +57,7 @@
         <span class="rc-stat-value"><%= number_with_delimiter(f.total) %></span>
         <% if f.size_delta %>
           <span><%= delta_tag(suite_size_change(f.size_delta), tone: f.size_delta.zero? ? :flat : :info,
-                              label: suite_size_change_reading(f.size_delta)) %></span>
+                              label: suite_size_change_reading(f.size_delta), id: "suite-size-delta") %></span>
         <% end %>
         <span class="rc-stat-sub"><%= f.size_delta ? "vs the previous run" : "no earlier run to compare" %></span>
       <% else %>
@@ -88,7 +88,7 @@
         <% if f.wall_delta %>
           <span><%= delta_tag(runtime_change(f.wall_delta),
                               tone: delta_tone_for(TestRun.seconds_unchanged?(f.wall_delta) ? 0 : f.wall_delta, bigger_is_worse: true),
-                              label: wall_clock_change_reading(f.wall_delta)) %></span>
+                              label: wall_clock_change_reading(f.wall_delta), id: "runtime-delta") %></span>
         <% end %>
         <span class="rc-stat-sub"><%= f.sharded ? "slowest shard · #{run.wall_clock_coverage}" : (f.wall_delta ? "vs the previous run" : "no earlier run to compare") %></span>
       <% else %>
@@ -98,3 +98,9 @@
     </div>
   </div>
 </section>
+
+<%# Why the three deltas above are (or are not) shown — the old Overview's own notes. One line each,
+    a click away, directly under the figures they qualify. %>
+<div class="rc-notes" style="margin-top: -0.5rem">
+  <%= render "repositories/comparison_basis", f: f -%>
+</div>

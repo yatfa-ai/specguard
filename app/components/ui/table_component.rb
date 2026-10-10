@@ -11,10 +11,11 @@
 # inside a scrolling page is a nested scroll container, and it takes `position: sticky` away from
 # the header. Long paths wrap (`overflow-wrap: anywhere`) instead; only a narrow viewport scrolls it.
 class UI::TableComponent < ApplicationComponent
-  def initialize(columns: [], describedby: nil, sortable: false, **options)
+  def initialize(columns: [], describedby: nil, sortable: false, table_id: nil, **options)
     @columns = columns
     @describedby = describedby
     @sortable = sortable
+    @table_id = table_id
     @options = options
     super
   end
@@ -34,6 +35,7 @@ class UI::TableComponent < ApplicationComponent
   def table_attributes
     attributes = { class: sortable? ? "dt" : "w-full text-sm" }
     attributes["aria-describedby"] = @describedby if @describedby.present?
+    attributes["id"] = @table_id if @table_id.present?
     attributes
   end
 

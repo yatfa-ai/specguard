@@ -101,7 +101,7 @@
       <%= render UI::TableComponent.new(
             columns: ["Group", { label: "Tests", end: true }, { label: "Examples", end: true }, { label: "Time", end: true },
                       "Layers", { label: "Alike at", end: true }, "Matched on"],
-            sortable: true, id: "near-duplicate-cluster-list") do %>
+            sortable: true, table_id: "near-duplicate-cluster-list") do %>
         <% census["clusters"].each_with_index do |cluster, index| %>
           <% layer_groups = Array(cluster["layer_groups"]) %>
           <% declared_layers = layer_groups.filter_map { |group| group["layer"] } %>
