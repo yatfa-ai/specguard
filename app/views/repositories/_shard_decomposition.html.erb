@@ -107,7 +107,7 @@
         <% max_seconds = @latest_test_run.test_run_shards.maximum(:duration_seconds).to_f %>
         <%= render UI::TableComponent.new(
               columns: ["Shard", { label: "Duration", end: true }, "Against the slowest", { label: "Tests", end: true }, { label: "Cost per test", end: true }],
-              describedby: "wall-clock-decomposition", sortable: true) do %>
+              describedby: "wall-clock-decomposition", sortable: true, table_id: "shard-distribution") do %>
           <% shard_rows = @latest_test_run.test_run_shards.order(duration_seconds: :desc, id: :asc).to_a %>
           <% @latest_test_run.shard_distribution_labels.each_with_index do |(name, duration, size, per_spec), index| %>
             <% shard = shard_rows[index] %>

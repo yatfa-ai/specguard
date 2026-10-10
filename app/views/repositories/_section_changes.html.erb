@@ -37,6 +37,9 @@
               </tr>
             <% end %>
           <% end %>
+          <% if @layer_run_growth&.comparable? %>
+            <p class="text-xs text-app-content-secondary" id="layer-run-growth">Since <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span> on <%= @latest_test_run.branch %>: <%= @layer_run_growth.label %></p>
+          <% end %>
           <%= render UI::NoteComponent.new(summary: "How declared layers are counted", id: "declared-layers-basis") do %>
             "Declared layers" is how many of this run's <%= number_with_delimiter(readings.recorded) %>
             recorded <%= "example".pluralize(readings.recorded) %> declared each layer in their own
@@ -80,6 +83,9 @@
               </tr>
             <% end %>
           <% end %>
+          <% if @layer_runtime_growth&.comparable? %>
+            <p class="text-xs text-app-content-secondary" id="layer-runtime-growth">Since <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span> on <%= @latest_test_run.branch %>: <%= @layer_runtime_growth.label %></p>
+          <% end %>
           <%= render UI::NoteComponent.new(summary: "What machine time means here", id: "layer-durations-basis") do %>
             Each figure is the sum of its examples' own durations — machine time, not wall clock, so
             it can exceed the run's wall clock when the suite runs in parallel or across shards — and
@@ -89,7 +95,7 @@
             (machine time) between two runs and matches no tests: a test that changes its declared
             <code>@intent</code> layer reads as one layer gaining time and another losing it.
             <% if @layer_window_growth&.comparable? %>
-              Across the window: <%= @layer_window_growth.label %>.
+              <span id="layer-window-growth">Declared layers across this window: <%= @layer_window_growth.label %></span>
             <% end %>
           <% end %>
         </div>

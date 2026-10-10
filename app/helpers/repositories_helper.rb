@@ -1237,8 +1237,8 @@ module RepositoriesHelper
 
   # A comparison delta that can never wrap inside its cell. Tone is a reading, not a verdict:
   # `good` when the thing a reader wants smaller got smaller, `bad` when it grew, `info` for size.
-  def delta_tag(text, tone: :flat, label: nil)
-    content_tag(:span, text, class: "delta delta-#{tone}", aria: { label: label })
+  def delta_tag(text, tone: :flat, label: nil, id: nil)
+    content_tag(:span, text, class: "delta delta-#{tone}", id: id, aria: { label: label })
   end
 
   def delta_tone_for(change, bigger_is_worse:)
