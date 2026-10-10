@@ -532,6 +532,20 @@
                            aria: { current: layer.to_s == @layer_request ? "true" : nil } %>
               <% end %>
             </p>
+            <%# The third route from a layer: WHICH spec DIRECTORIES (code areas) hold its time. Same shape
+                and same reasons as the files line above — a line of its own, through `drill_down_path`. %>
+            <p class="text-xs text-app-content-secondary" id="layer-durations-directories">
+              <span class="font-medium">Spec directories by declared layer</span>:
+              <% SpecDirectoryDurations.layer_durations_parts(@latest_test_run.layer_durations,
+                                                              @latest_test_run.layer_counts)
+                                       .each_with_index do |(layer, _figures), index| %>
+                <%= " · " if index.positive? %><%= link_to layer.to_s,
+                           drill_down_path(@repository, layer: layer.to_s, anchor: "spec-directory-durations"),
+                           class: "underline underline-offset-2 decoration-app-border-light " \
+                                  "text-app-content hover:decoration-app-content",
+                           aria: { current: layer.to_s == @layer_request ? "true" : nil } %>
+              <% end %>
+            </p>
             <%# The movement of that time against the previous run on this branch — the same
                 `LayerRuntimeGrowth` object `layer_runtime_growth` on the API is built from. Shown
                 only when comparable; a layer untimed on either side reads "not reported", never 0. %>

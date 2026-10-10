@@ -170,11 +170,11 @@ class RunDrillInSerializer
   # `spec/models/spec_observation_spec.rb` rather than asserted here.
   def serialized_spec_directories(test_run)
     limit = requested_limit || SpecObservation::HEAVIEST_DIRECTORIES_LIMIT
-    durations = SpecDirectoryDurations.for(test_run, limit: limit)
+    durations = SpecDirectoryDurations.for(test_run, limit: limit, layer: requested_layer)
 
     return nil unless durations.recorded?
 
-    {
+    body = {
       rows: durations.rows.map do |row|
         {
           path: row.path,
@@ -204,6 +204,13 @@ class RunDrillInSerializer
       # clamped by the same guard, and both sit beside a count taken before the LIMIT.
       limit: limit
     }
+    # `?layer=` ranks the rollup by that declared layer's time, so every figure above is the layer's.
+    # Echoed ONLY when asked — the key is ABSENT, never null, unasked, so an unasked or malformed-ask
+    # body is byte-identical to before the parameter reached this block. A layer matching no areas is
+    # `rows: []` / `directory_count: 0` with the block present; `nil` above still means the run
+    # recorded no per-example rows.
+    body[:layer] = durations.layer if durations.layer?
+    body
   end
 
   # WHICH TESTS ARE SLOW — the per-EXAMPLE grain, and the one question the two blocks above are

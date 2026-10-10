@@ -6,6 +6,7 @@
 #   - `slowest_examples`: the run-grain ranking on `GET /api/v1/repository`;
 #   - `spec_files`: the "Heaviest spec files" rollup, where the layer rides into the query before
 #     `LIMIT` so the rollup is ranked by that layer's own time;
+#   - `spec_directories`: the "Heaviest spec directories" rollup, ranked the same way;
 #   - `slowest_tests`: the window-grain ranking (candidate step);
 #   - `unstable_tests`: the window-grain ranking (candidate step: the tests that FAILED in an example
 #     of that layer — SPGD-1755);

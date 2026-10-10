@@ -2278,8 +2278,20 @@ class SpecObservation < ApplicationRecord
   # A `text_pattern_ops` index governs a prefix PREDICATE — "every row under `spec/models/`" — and
   # this read has no prefix predicate to serve. All of it is EXPLAIN-certified at the 20-run seed in
   # that spec rather than argued for here.
-  def self.directory_durations_in(test_run, limit: HEAVIEST_DIRECTORIES_LIMIT)
-    where(test_run_id: test_run.id)
+  #
+  # == `layer:` — the layer in the query, before `GROUP BY` and `LIMIT`
+  #
+  # With a declared layer asked ({DECLARED_LAYER_KEYS} member), the rows are narrowed through
+  # {.in_declared_layer} — the one shared predicate {.slowest_in}, {.coverage_in} and
+  # {.file_durations_in} use, never retyped — BEFORE grouping, so the ranking is by THAT layer's
+  # `SUM(duration_seconds)` and the cut is made over that layer's areas. It cannot be recovered from
+  # the unfiltered top ten: an area whose request-layer time is large and whose all-layer time is not
+  # would sit below the cut. `COUNT(*)` / `COUNT(duration_seconds)` are then the layer's own per-area
+  # counts, and `COUNT(*) OVER ()` (still the tuple's index 6) is the number of areas with at least one
+  # example in the layer. `nil` — the default — is byte-identical to the unnarrowed read, and the
+  # layer-asked read is still ONE grouped statement.
+  def self.directory_durations_in(test_run, limit: HEAVIEST_DIRECTORIES_LIMIT, layer: nil)
+    in_declared_layer(where(test_run_id: test_run.id), layer)
       .group(Arel.sql(DIRECTORY_EXPRESSION))
       .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
       .limit(limit)

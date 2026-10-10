@@ -572,7 +572,9 @@ class RepositoryDashboard
     #
     # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
     # see `SpecDirectoryDurations`.
-    @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run, limit: rollup_limit(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)) if @latest_test_run
+    # `layer: @layer_request` (assigned above) ranks the rollup by that declared layer's time, in the
+    # query itself, so the panel and `latest_run.spec_directories` agree row for row.
+    @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run, limit: rollup_limit(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT), layer: @layer_request) if @latest_test_run
     # The SAME grain as the line above and a different AXIS, which is why it is a second read rather
     # than a column on that one. That rollup ranks areas by WALL CLOCK and its coverage figure is
     # TIMING coverage; this one ranks them by how many of their examples carry no `@intent`. An
