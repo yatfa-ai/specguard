@@ -21,7 +21,7 @@
   <label class="flex items-start gap-2 rounded-md border border-app-border-light bg-app-surface-raised p-3">
     <%= check_box_tag "#{param_name}[permissions][]", permission, selected.include?(permission),
                       id: "#{param_name}_permissions_#{permission.parameterize}",
-                      class: "mt-0.5 rounded border-app-border-light" %>
+                      class: "mt-0.5 rounded-control border-app-border-light" %>
     <span class="space-y-0.5">
       <span class="block font-mono text-sm text-app-content"><%= permission %></span>
       <span class="block text-xs text-app-muted"><%= grant_permission_description(permission) %></span>

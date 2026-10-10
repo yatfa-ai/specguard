@@ -26,7 +26,7 @@ class UI::PanelComponent < ApplicationComponent
   # if you can guarantee it happens exactly once, and this way you no longer have to.
   def wrapper_class
     @wrapper_class ||= merge_classes(
-      "bg-app-surface border border-app-panel-border rounded-lg shadow-app",
+      "bg-app-surface border border-app-border rounded-card shadow-app",
       @options.delete(:class)
     )
   end

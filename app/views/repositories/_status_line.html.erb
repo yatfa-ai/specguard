@@ -1,0 +1,28 @@
+<%# DELIVERY HEALTH, FIRST SCREEN. If CI is not reaching this repository, or its runs are being
+    refused, every figure below is stale — so this reads before the verdict does. The connection
+    sentence is the old header indicator's own (same states, same words); what is new is the line
+    around it. Member-readable: nothing here is credential metadata. %>
+<div class="rc-status" id="delivery-status" role="status">
+  <%= render "repositories/connection_indicator" %>
+  <% if @rejected_ingests.any? && !@rejected_ingests.refusing? %>
+    <span class="rc-sep" aria-hidden="true"></span>
+    <span>
+      <%= pluralize(@rejected_ingests.retained_window.total, "rejected ingest") %> in the retained window, none since the
+      last accepted run. <a href="#delivery">See Delivery</a>
+    </span>
+  <% end %>
+  <% if @latest_test_run && !@latest_test_run.observations_retained? %>
+    <span class="rc-sep" aria-hidden="true"></span>
+    <span id="observations-aged-out">
+      This run is older than the last <%= number_with_delimiter(SpecObservation::BRANCH_RETENTION_RUNS) %> runs
+      of its branch, so its per-example observations have aged out of retention: the counts stand, but the
+      per-test sections below may have little or nothing left to show.
+    </span>
+  <% end %>
+</div>
+<% if (anchor_notice = run_anchor_notice(@run_anchor_request, @run_anchor_run, @latest_test_run)) %>
+  <%= render UI::AlertComponent.new(tone: :info, id: "run-anchor-notice") do %><%= anchor_notice %><% end %>
+<% end %>
+<% if (fallback_notice = trajectory_branch_fallback_notice(@trajectory_branch_request, @suite_trajectory)) %>
+  <%= render UI::AlertComponent.new(tone: :info, id: "suite-trajectory-branch-fallback") do %><%= fallback_notice %><% end %>
+<% end %>

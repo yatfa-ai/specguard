@@ -1,143 +1,20 @@
-    <%# == The unannotated tests THEMSELVES, for the place the reader picked
-        The last rung of the ladder the Overview panel opens and "How SpecGuard reads this suite, by
-        area" narrows. The Overview used to print "Not visible to SpecGuard" as `total_specs_count -
-        annotated_specs_count` and say *"SpecGuard cannot see the other N tests"*; the ranking above
-        names the AREAS that count is concentrated in. Neither names a TEST, and until this panel the
-        only route to one was `GET /api/v1/repository?unannotated_examples=1&spec_directory=…` with
-        an API key — a route off the product, for the reader the product had just handed a worklist
-        to.
-
-        SPGD-711 then corrected what may be said ABOUT these rows without changing which rows they
-        are. Every example here lacks an authored `@intent` — exact, and the same predicate the
-        Overview subtracts. Most of them SpecGuard nonetheless READS, from the description the client
-        sends and this platform stores; the last column shows exactly what it read, so a reader can
-        check the reading rather than take a badge's word for it. The rows it read nothing from come
-        FIRST, because the list is capped at a hundred and those are the ones that must not fall off
-        the page.
-
-        Rendered only when a narrowing was ASKED for, and the read is taken only then. The model's
-        narrowings are OPTIONAL and whole-run is a complete ask on the JSON endpoint; this surface
-        deliberately does not take it, for the reason the controller states: a hundred rows of debt
-        nobody asked for is the Overview's subtraction again at length.
-
-        NO NEW PARAMETER. It rides `?spec_directory=` and `?spec_file=`, so one ask opens EVERY
-        panel that reads it, each answering in its own grain over the same area. `show.html.erb`
-        states the rule at "Areas that grew or shrank": that is how `drill_down_path` composes asks,
-        and it is not a collision to be fixed by minting a second parameter.
-
-        NO "Close" BUTTON, and its absence is a decision rather than an omission. The three panels
-        that carry one each OWN an ask, and closing it is the gesture that dismisses them. This panel
-        owns neither of the asks it rides: a "Close" here would have to clear `?spec_directory=`,
-        which would close the two panels that ask belongs to as a side effect — the precise inversion
-        of the carry-through rule `RepositoriesHelper#drill_down_path` exists to keep ("closing an
-        area is not a request to close the file", and in every other direction). The reader dismisses
-        this panel with the Close button of the panel that owns the ask, which is where they set it.
-
-        It PRESENTS and does not judge — the rule `UnannotatedExamples` and `UnannotatedDirectories`
-        both state, and it governs this partial too: rows, and never a fraction, a threshold or a
-        colour-coded verdict on one of them.
-
-        Same visibility rule and same gate as the panels around it: read-only suite telemetry on
-        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+    
     <% if @unannotated_examples %>
-      <%# What this population was narrowed BY, as the object holds it — read off the panel's own
-          subject rather than off the request ivars, the discipline the area→file link one panel over
-          already keeps. Both may be present, in which case the read AND-ed them (see
-          `SpecObservation.unannotated_in`, where the absence of a precedence rule is argued), and
-          every sentence below has to describe the intersection rather than either half. %>
       <% narrowings = [@unannotated_examples.spec_file, @unannotated_examples.spec_directory].compact %>
-      <%= render UI::PanelComponent.new(title: "Unannotated tests here", id: "unannotated-examples",
-                                        class: "lg:col-span-3") do %>
+      <%= render UI::PanelComponent.new(title: "Unannotated tests here", id: "unannotated-examples") do %>
         <% if narrowings.size > 1 %>
-          <%# WHAT THE READ NARROWED BY, hoisted OUT of the caption below and above the branch,
-              because it is a disclosure about the POPULATION rather than a claim about the list —
-              SPGD-363's rule, and this is the branch that proves it. Two asks are AND-ed and neither
-              wins (`SpecObservation.unannotated_in` refuses a precedence rule), so a file outside
-              that area returns NOTHING — and the state a reader then meets is the empty one, where a
-              caption living inside the rows-present branch has already vanished. Told only that
-              there is "nothing unannotated" in two paths that each hold plenty, they would read a
-              rendering bug; the honest answer is that the intersection is empty. %>
           <p class="text-xs text-app-muted mb-3">
             Both asks narrow this list and a row must match each of them, so a file outside that area
             is an empty intersection rather than one of the two having been dropped.
           </p>
         <% end %>
         <% if @unannotated_examples.rows.any? %>
-          <%# THE CAP, folded in the view rather than asked of the object. `UnannotatedExamples`
-              refuses a `truncated?` and says why: a predicate no surface calls is a claim nothing has
-              ever checked, and it may only arrive WITH the spec that runs it against an empty and a
-              capped read. Its class comment names the alternative in as many words — *"`recorded_count
-              > rows.size` is a client's sentence to write"* — and this is the client. Both operands
-              are the object's own integers off one read, and this asks only which is larger; the same
-              shape "How SpecGuard reads this suite, by area" folds `carries_debt` in, one grain up. %>
           <% truncated = @unannotated_examples.recorded_count > @unannotated_examples.rows.size %>
-
-          <%# HOW MANY OF THE READINGS ARE ON THIS PAGE — a PAGE-grain figure, and it exists because
-              the caption's split below is a POPULATION-grain one. `#derived_count` and
-              `#unreadable_count` are `COUNT(*) FILTER (…) OVER ()`, evaluated after the WHERE and
-              therefore over the whole narrowed population; `truncated` above is the state in which
-              that population and the rendered rows are different row sets. A clause pointing at "the
-              last column" is a claim about the rendered rows, and printing one off a population count
-              was wrong on exactly the cut page — the read's own ordering leads with the rows nothing
-              could be read from, so the readings are the ones that fall past the cap.
-
-              COUNTED THROUGH `#derived_intent`, WHICH IS THE CALL THE CELL ITSELF MAKES — not
-              `rows.size - unreadable_count`, and not a second read. The last column renders
-              `observation.derived_intent` and shows the three fields or the "Nothing" sentence on
-              that one predicate, so counting through it means the figure and the column cannot
-              disagree about a row: they are one method evaluated on one object. Arithmetic over the
-              two window counts would agree today and would be a second rule the moment either the
-              ordering or the windows changed.
-
-              FREE, rather than cheap. `SpecObservation#derived_intent` memoizes through `defined?`,
-              and every row on this page has its cell rendered below — so this fold pays the
-              derivation the cell was going to pay anyway and the cell reads the memo. At the hundred-
-              row cap that is a hundred memo writes moved earlier, not a hundred extra regexes.
-
-              Folded in the view on the same rule `truncated` is: `UnannotatedExamples` refuses a
-              predicate no surface calls, and its class comment hands the client the comparison to
-              write. This is the client, the operands are the object's own rows, and the sentence
-              that needs it is three lines away. %>
           <% derived_on_page = @unannotated_examples.rows.count { |observation| observation.derived_intent } %>
-
-          <%# AGREEMENT AT N = 1, decided once here rather than inside four arms. Each of these three
-              counts is an independent operand of the sentences below — they do not move together —
-              so each gets its own predicate, and a shared `one` would silently make one clause agree
-              with a different clause's noun.
-
-              NONE OF THE THREE IS A CONTRIVED STATE, which is the argument for spending four lines
-              on them:
-
-              * `derived_past_cap == 1` is the population one past the cap. `derived_count -
-                derived_on_page` is exactly `recorded_count - UNANNOTATED_EXAMPLES_LIMIT` whenever
-                any reading renders (the unreadable rows lead, so the page fills with them first),
-                so an area of 101 lands here — the most ordinary truncation there is, and the state
-                a reader meets FIRST as an area crosses the cap.
-              * `one_derived` is a suite with a single derived reading left, and `one_unreadable` a
-                single dark one. Those are the states this ticket is steering adopters TOWARD, so
-                the good outcome must not be the one that reads badly.
-
-              The rule is the one `UnstableTestsHelper#unstable_tests_unexamined_caveat` states for
-              the same cap on the same page — verb and pronoun agree with the noun, and the count is
-              a pre-LIMIT total so `LIMIT + 1` is reachable. Following it here rather than restating
-              it: that helper carries the argument, this is a second site for it.
-
-              `derived_past_cap` is also NAMED rather than subtracted twice inline, because it is the
-              operand of both the figure and the verb beside it — spelling the subtraction out at each
-              would be two places for one of them to keep the old form. %>
           <% derived_past_cap = @unannotated_examples.derived_count - derived_on_page %>
           <% one_derived = @unannotated_examples.derived_count == 1 %>
           <% one_unreadable = @unannotated_examples.unreadable_count == 1 %>
-
-          <%# What the list IS, before the list — the discipline every panel on this page keeps. Every
-              figure is counted off THE SAME READ that returned the rows: the population count rides
-              back as a window (`SpecObservation::UNANNOTATED_POPULATION_COUNTS`) and the window is
-              evaluated after the WHERE, so it describes the NARROWED population rather than the run,
-              and a caption cannot come to describe a different row set from the table under it. %>
-          <p class="text-xs text-app-muted mb-3" id="unannotated-examples-basis">
-            <%# The subject, named before anything is claimed about it. An empty state without a
-                subject is a sentence about nothing, and so is a caption — "all 3 examples this run
-                recorded here" is not a fact until "here" has been said. %>
+          <%= render UI::NoteComponent.new(summary: "How to read this", id: "unannotated-examples-basis") do %>
             <% if @unannotated_examples.spec_file %>
               <span class="font-mono text-app-content-secondary"><%= @unannotated_examples.spec_file %></span>
             <% end %>
@@ -146,28 +23,11 @@
               <span class="font-mono text-app-content-secondary"><%= @unannotated_examples.spec_directory %></span>
             <% end %>
             —
-            <%# The cap, disclosed whether or not anything was cut, for the reason every capped list
-                here states: `rows.size` cannot state the population — it IS the truncated figure — so
-                a list whose length happens to equal a limit the reader cannot see reads as the whole
-                story. The two sentences are written out rather than assembled, because the untruncated
-                one is a claim about the whole of what was recorded and the truncated one is a claim
-                about a head, and a shared clause would let an edit meant for one land on both.
-
-                "In the order you would open them" and never "worst first": this read RANKS NOTHING —
-                `SpecObservation.unannotated_in` orders by `spec_file_path`, then `line_number`, then
-                `id`, and says in full that it is a worklist rather than a ranking. A caption promising
-                an order nothing measured is the defect `#spec_file_examples_scope_sentence` is five
-                sentences long to avoid. %>
             <% if truncated %>
               The first <%= number_with_delimiter(@unannotated_examples.rows.size) %> of the
               <%= number_with_delimiter(@unannotated_examples.recorded_count) %> examples this run
               recorded here without an <code>@intent</code>, in the order you would open them — by
               spec file, then by line.
-              <%# The population the read DROPPED, which is the one disclosure that would survive
-                  every branch of this caption if the other branches could reach it (they cannot: an
-                  uncut list dropped nothing, and an empty read has nothing to drop). Stated as what
-                  is missing rather than as a bare limit, because a reader who annotates these and
-                  re-delivers is exactly the reader the remainder is a fact about. %>
               The other
               <%= number_with_delimiter(@unannotated_examples.recorded_count - @unannotated_examples.rows.size) %>
               are not on this page: this is a worklist capped at
@@ -179,84 +39,11 @@
               without an <code>@intent</code>, in the order you would open them — by spec file, then
               by line.
             <% end %>
-            <%# The two paths, said once, where a reader meets the column that shows them — the same
-                sentence "Examples in this spec file" carries, and needed more here: that panel is
-                keyed on one including file, and this list spans files and is ORDERED by the one that
-                RAN each example, so the column a reader sorts by and the coordinate they go and open
-                are two different files on exactly the rows a shared example group produced. %>
             Each row names the spec file that RAN the example, and under the name where it is
             DEFINED — the same file for every ordinary example, and a different one for an example a
             shared example group defines elsewhere.
-            <%# Named, not scored. `UnannotatedDirectories` refuses a fraction one grain up and says
-                why; at THIS grain the temptation is a verdict on the row rather than a percentage
-                over it, and the refusal is the same one. %>
             Named and not scored: nothing here says whether a test ought to carry an
             <code>@intent</code>, only that this run recorded it without one.
-            <%# THE SPLIT SPGD-711 PUT IN THIS CAPTION. Every row here is unannotated, which is
-                exact — and this list used to be captioned, on the API and the MCP bridge, as the
-                tests SpecGuard cannot see, which was not. Both figures come off windows over the
-                same rows the read narrowed to (see `UnannotatedExamples#derived_count`), so the
-                sentence cannot describe a different POPULATION from the one this list was cut from.
-
-                ⚠️ THAT IS THE POPULATION AND NOT THE PAGE, and the two are the same row set only
-                while nothing was cut. The unreadable rows are at the HEAD of the list by the read's
-                own ordering, which is deliberate — they are the small group and the only one any
-                "cannot see this test" sentence may describe, so the cap must not drop them. The
-                exact consequence is that on a CUT page it is the READINGS that are past the cap,
-                and a clause pointing a reader at "the last column" for a figure counted over the
-                population pointed at a column that showed the opposite. `derived_on_page` above is
-                the page-grain operand that closes it, and every clause below that names the column
-                is now printed off THAT figure while every clause that names the population is
-                printed off the windows. %>
-            <%# BRANCHED ON WHAT WAS READ, THEN ON WHETHER THE PAGE HOLDS IT — five arms over two
-                axes, and the second axis is what round 6 added.
-
-                THE READING AXIS. The Overview two panels up holds the same rule on both of ITS
-                zero-derived arms: `show.html.erb` keeps the derived clause and its caveat out of
-                the fully-authored suite AND out of the suite nothing derived from, because the
-                reason is the same in both and is nothing to do with what is left over. Where
-                nothing was derived, "SpecGuard reads N of them from the test's own description"
-                describes an EMPTY SET, "shown in the last column" points at a column showing the
-                opposite, and the caveat after it warns a reader about the weakness of a reading
-                NOTHING on the page rests on — while "the other M" and "those are listed first" are
-                both said of a population that is the whole list. That branch is not exotic here:
-                narrow to `spec/requests` and the ordinary `POST /api/v1/ingest rejects a malformed
-                body` shape lands in it, which is `DerivedIntent`'s own canonical unreadable
-                example.
-
-                THE CAP AXIS, and why it is on two of the three arms rather than all three. A
-                derived arm's column clause is a claim about the RENDERED rows and its counts are
-                over the POPULATION, so the two arms that carry one need the cut and uncut sentences
-                written apart. THE ZERO-DERIVED ARM DOES NOT, and that is structural rather than an
-                omission: `derived_count` is zero over the whole narrowed population, the page is a
-                subset of that population, so every rendered row is unreadable and "the last column
-                says so row by row" is true of the page whether or not anything was cut. There is no
-                cut/uncut pair to write because the cap cannot separate the two grains when one of
-                them is empty.
-
-                WHAT THE CUT ARMS MAY ASSERT, which the ordering decides. The unreadable rows head
-                the list, so a cut page fills with them first: if ANY derived row is on the page
-                then every unreadable row is too, and `derived_on_page` is `rows.size -
-                unreadable_count`, which is strictly below `derived_count` because the list was cut.
-                And if none is, `derived_on_page` is zero. So on a cut page `derived_on_page <
-                derived_count` ALWAYS, and "the other N are past the cap" is never a sentence about
-                an empty remainder — which is why both cut arms may state the subtraction flatly
-                rather than guarding it.
-
-                ONE SENTENCE ACROSS BOTH CUT SUB-CASES, rather than a "none of them" arm beside an
-                "N of them" one. Where the readings are ENTIRELY past the cap the clause reads "shows
-                0 of those 5 readings on this page, and the other 5 are past the cap", which is
-                slightly stiff and exactly true — the two figures still close on `derived_count`, and
-                "the other" contrasts with the ones on the page whether that is none or sixty. A
-                fourth arm would buy the stiffness back at the price of another cell nothing renders
-                against, which is the trade that produced this finding in the first place.
-
-                Each arm is written out whole rather than assembled from a shared clause, on this
-                caption's existing rule — see the truncated/untruncated pair above, where a shared
-                clause would let an edit meant for one land on both. That rule is why the cap axis
-                is nested here instead of hoisted into one qualifier appended after the branch: an
-                appended sentence would have to be guarded on `derived_count` anyway to stay off the
-                zero-derived arm, and its "shown" would have lost the noun it points at. %>
             <% if @unannotated_examples.derived_count.zero? %>
               SpecGuard reads none of them from the test's own description either — the last column
               says so row by row. These are the tests it genuinely cannot see: not merely tests
@@ -310,105 +97,35 @@
                 There is none here it cannot read at all.
               <% end %>
             <% end %>
-            <%# Counted off THIS RUN's per-example rows. The Overview's figure is a subtraction over
-                the run's own counters, and while both sides read the same `status` the payload wrote,
-                the two populations are not guaranteed identical — and this list is narrowed on top of
-                that. So the figures here are not promised to add up to the headline, and saying so is
-                cheaper than a reader discovering it with a calculator. %>
             Counted off the per-example rows this run reported, which is a different population from
-            the suite size on the Overview panel above and may legitimately differ from it.
-          </p>
-
-          <%= render UI::TableComponent.new(columns: ["Test", "Spec file", "What SpecGuard reads"],
-                                            describedby: "unannotated-examples-basis") do %>
+            the suite size on the Summary at the top of this page and may legitimately differ from it.
+          <% end %>
+          <%= render UI::TableComponent.new(
+                columns: ["Test", "Spec file", "What SpecGuard reads"],
+                describedby: "unannotated-examples-basis", sortable: true) do %>
             <% @unannotated_examples.rows.each do |observation| %>
-              <tr>
-                <td class="px-3 py-2 text-app-content">
-                  <%# The definition-site cell, through `repositories/_definition_site_link` — the
-                      same partial "Slowest tests" and "Examples in this spec file" render, so one
-                      example cannot be named one way in a ranking and another way in the worklist.
-                      Which of the two lines carries the link, the ref it is pinned against and the
-                      new-tab convention are that partial's decisions and are documented there.
-
-                      WHY THIS PANEL CARRIES THE COORDINATE AT ALL, and why it is the panel that
-                      first needed it: the reader's next action here is singular and known — open
-                      that file at that line and write an `@intent` — and this is the one panel on
-                      the page whose whole purpose is to hand them that action. A worklist whose rows
-                      cannot be acted on is a list of complaints.
-
-                      The "Spec file" cell beside this one keeps rendering `spec_file_path` and is
-                      NOT a link: that is the file that RAN the example and the column this list is
-                      ordered by, which for a shared example group is a different file from the one
-                      the reader must edit.
-
-                      A run whose sha was never pushed produces a link GitHub answers 404 to. That is
-                      GitHub telling the truth about an unpushed commit, on the same sha this page
-                      already prints in "Recent runs" — and this panel PRESENTS and does not judge,
-                      so there is no guard, no probe and no conditional rendering.
-
-                      ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both already loaded
-                      by the time this partial renders, and `#github_blob_url` is string composition
-                      that asks GitHub nothing. %>
-                  <%= render "repositories/definition_site_link", observation: observation %>
+              <% derived = observation.derived_intent %>
+              <%= drawer_row(observation.id, kind: "Unannotated test", title: observation.label,
+                    facts: [["Defined at", observation.location_label], ["Spec file that ran it", observation.spec_file_path],
+                            ["SpecGuard reads", derived ? "#{derived.entity} #{derived.action} — #{derived.behavior}" : "Nothing — no @intent, and the description does not give an entity, an action and a behavior."],
+                            ["Layer (inferred from the directory)", derived&.layer]],
+                    actions: [["Open on GitHub", @repository.github_blob_url(observation.file_path, observation.line_number, @latest_test_run.commit_sha), :primary]]) do %>
+                <td>
+                  <%= row_open(observation.label) %>
+                  <span class="rc-sec mono"><%= observation.location_label %></span>
                 </td>
-                <td class="px-3 py-2 font-mono text-xs text-app-content-secondary">
-                  <%# The file that RAN it, which is the column this list is ordered by — shown
-                      because a worklist whose sort key is invisible reads as unordered, and because
-                      it is the file the reader opens to reach the example even when the definition
-                      site above sits somewhere else. %>
-                  <%= observation.spec_file_path %>
-                </td>
-                <td class="px-3 py-2 text-xs text-app-content-secondary">
-                  <%# WHAT SPECGUARD GOT FROM THE DESCRIPTION, or a plain statement that it got
-                      nothing — the column that stops this list being captioned as tests the product
-                      cannot see.
-
-                      The three fields are shown rather than a badge reading "derived", because the
-                      reader's question is not "did a regex match" but "is what SpecGuard read
-                      actually right about my test". Shown, they can be checked; summarised, they
-                      have to be trusted. `layer` is deliberately absent from the cell: it is the
-                      guessed field (`DerivedIntent::DEFAULT_LAYER`) and the caption already says the
-                      layer is inferred, so printing it per row would spend the most space on the
-                      least evidence.
-
-                      No new query. `SpecObservation#derived_intent` runs the same rule the read
-                      counted with, in Ruby, over columns this row already carries. %>
-                  <% derived = observation.derived_intent %>
+                <td class="rc-ext" style="font-family: var(--font-mono)"><span class="rc-sec mono" style="margin:0"><%= observation.spec_file_path %></span></td>
+                <td class="text-xs">
                   <% if derived %>
-                    <span class="font-mono text-app-content"><%= derived.entity %></span>
-                    <span class="font-mono text-app-content"><%= derived.action %></span>
-                    <span class="block text-app-muted"><%= derived.behavior %></span>
+                    <span class="rc-intent" style="margin:0"><span class="mono"><%= derived.entity %> <%= derived.action %></span> <%= derived.behavior %></span>
                   <% else %>
-                    <span class="text-app-muted">Nothing — no <code>@intent</code>, and the
-                      description does not give an entity, an action and a behavior.</span>
+                    <span class="text-app-content-secondary">Nothing — no <code>@intent</code>, and the description does not give an entity, an action and a behavior.</span>
                   <% end %>
                 </td>
-              </tr>
+              <% end %>
             <% end %>
           <% end %>
         <% elsif @unannotated_directories&.recorded? %>
-          <%# NOTHING CAME BACK FROM A RUN THAT DID WRITE PER-EXAMPLE ROWS — the good news, and the
-              state the whole metric exists to reach. `UnannotatedExamples` says so: a fully-annotated
-              read is the SUCCESS case rather than the exotic one, and the surface says "nothing left"
-              rather than erroring on it.
-
-              Decided off `@unannotated_directories#recorded?` and NOT off a second query. That object
-              is already on this page whenever there is a run, its `recorded?` answers exactly "did
-              this run write per-example rows at all", and it was counted off a read the page has
-              already paid for. `UnannotatedExamples` deliberately cannot answer it — its own comment
-              points a client at the sibling block for the same reason — so asking it would mean either
-              a predicate on that object with no way to tell the two states apart, or a query bought
-              to learn something the page already knows.
-
-              WHAT THIS STATE CANNOT SEPARATE, said out loud rather than left for the reader to
-              discover: a place whose every example carries an intent and a place this run recorded
-              NOTHING in produce the same empty list. The model refuses to tell them apart here and
-              says where a client can. Claiming only the first would be *Vacuous Green* at the grain of
-              an empty state — "nothing to check" wearing the spelling of "everything passed" — so the
-              description states the finding AND the other reading, and points at the panel that
-              settles it. That panel is on this page by construction: `?spec_directory=` renders "Spec
-              files in this directory" and `?spec_file=` renders "Examples in this spec file", under
-              the same guard this one is rendered under. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "Nothing unannotated here",
                 description: "This run recorded no example without an @intent in " \
@@ -420,15 +137,6 @@
                              "panel, open on the same ask, names what this run actually recorded there."
               ) %>
         <% else %>
-          <%# A run with no per-example rows AT ALL — ingested before those rows existed, or from a
-              client that sends only totals. The same pair "How SpecGuard reads this suite, by area" keeps
-              apart one grain up, and the one thing this state may not do is read as the state above
-              it: "nobody sent the detail" and "nothing is unannotated" are the same empty table and
-              opposite news.
-
-              The panel stays rather than disappearing, because the reader asked for this list and an
-              absent panel is a third indistinguishable thing on a page where the Overview may be
-              printing a five-figure invisible count at the same time. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No per-example detail on this run",
                 description: "This run reported suite totals without the per-example rows SpecGuard " \

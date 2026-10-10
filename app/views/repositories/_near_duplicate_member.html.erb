@@ -1,23 +1,11 @@
-<%# ONE member row of a near-duplicate cluster, shared by the layer-grouped and the flat lists so the
-    two cannot drift (they were byte-duplicated before SPGD-1636).
 
-    `member` is a string-keyed Hash exactly as the census stores it. Its `file_path:line_number` is
-    the DEFINITION site and links to GitHub in a new tab, with the class string and `rel` the
-    sibling per-example panels use (`_definition_site_link`) — but pinned to the census's WEIGHED
-    run (`@near_duplicate_weighed_sha`), never `@latest_test_run`: the line number describes the
-    file as that run read it, and the panel itself says the census can be older than the latest run.
-
-    HONEST DEGRADATION: when the weighed run's sha is unknown (no `weighed_run_id`, or the run row
-    was deleted) the coordinate is plain text, as it was before the link existed — never a link to
-    a guessed ref. %>
 <% weighed_sha = @near_duplicate_weighed_sha %>
 <% coordinate = "#{member['file_path']}:#{member['line_number']}" %>
 <li class="font-mono text-xs text-app-content break-words">
   <% if weighed_sha.present? %>
     <%= link_to coordinate,
                 @repository.github_blob_url(member["file_path"], member["line_number"], weighed_sha),
-                class: "underline underline-offset-2 decoration-app-border-light " \
-                       "text-app-content hover:decoration-app-content",
+                class: "rc-ext",
                 target: "_blank", rel: "noopener noreferrer" %>
   <% else %>
     <%= coordinate %>
@@ -26,9 +14,6 @@
   <span class="text-app-muted tabular-nums">
     (<%= number_with_delimiter(member["example_count"]) %>
     <%= "example".pluralize(member["example_count"].to_i) %>)
-    <%# The member's STORED wall clock over its timed examples in the weighed run. NEVER a zero for an
-        untimed member: `total_seconds` is nil when nothing was timed, and "0.00s" would be this
-        surface inventing the measurement it is missing (same rule as the cluster line). %>
     ·
     <% if member["total_seconds"].nil? %>
       not timed

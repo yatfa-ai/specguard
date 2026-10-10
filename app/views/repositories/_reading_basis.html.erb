@@ -1,0 +1,44 @@
+<%# What SpecGuard can read of this run, in the old panel's own words. locals: f (run figures) %>
+<% readings = f.readings %>
+<% measured_tests = f.measured %>
+    <% if measured_tests %>
+      <p class="text-xs text-app-muted">
+        <%= test_run_annotated_share(@latest_test_run) %>
+        <% if !readings.recorded? %>
+          This run reported suite totals without the per-example rows SpecGuard reads test
+          descriptions from, so there is nothing here to say how much of the rest it can
+          make out — not that it can make out none of it.
+        <% elsif readings.derived.zero? && readings.unreadable? %>
+          Of the <%= number_with_delimiter(readings.recorded) %>
+          <%= "example".pluralize(readings.recorded) %> this run recorded, SpecGuard cannot
+          read <%= number_with_delimiter(readings.unreadable) %> — every one of them that
+          carries no @intent. Their descriptions do not give it an entity, an action and a
+          behavior, so none of them yielded a reading either.
+        <% elsif readings.unreadable? %>
+          Of the <%= number_with_delimiter(readings.recorded) %>
+          <%= "example".pluralize(readings.recorded) %> this run recorded, SpecGuard reads
+          <%= number_with_delimiter(readings.read) %> — the annotated ones and
+          <%= number_with_delimiter(readings.derived) %> more from the test's own description
+          — and cannot read the remaining <%= number_with_delimiter(readings.unreadable) %>.
+          A description is a weaker reading than an @intent: it carries no preconditions, and
+          its layer is inferred from the directory rather than declared.
+        <% elsif readings.derived.positive? %>
+          SpecGuard reads every one of the
+          <%= number_with_delimiter(readings.recorded) %>
+          <%= "example".pluralize(readings.recorded) %> this run recorded — the annotated ones,
+          and the rest from the test's own description, which is a weaker reading than an
+          @intent: it carries no preconditions, and its layer is inferred from the directory
+          rather than declared.
+        <% else %>
+          Every one of the <%= number_with_delimiter(readings.recorded) %>
+          <%= "example".pluralize(readings.recorded) %> this run recorded carries an @intent
+          its author wrote — nothing here is inferred from a test's description.
+        <% end %>
+      </p>
+    <% else %>
+      <p class="text-xs text-app-muted">
+        The latest run reported no tests at all, so there is no share to take and no coverage
+        figure to show — not a coverage figure of zero. That is a fact about this run, not
+        about the suite.
+      </p>
+    <% end %>

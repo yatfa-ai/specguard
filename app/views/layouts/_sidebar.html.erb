@@ -12,14 +12,14 @@
     <% if signed_in? %>
       <p class="section-label px-2 py-2 text-app-content-secondary">Workspace</p>
       <%= link_to "Repositories", repositories_path,
-                  class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
+                  class: "block rounded-control px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
       <%= link_to "Register a repository", new_repository_path,
-                  class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
+                  class: "block rounded-control px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
       <%# The account page, and the first nav item that is not about repositories. It exists because
           `sgu_` user API keys belong to the person rather than to any one repository, so there is
           no repository page they could have lived on. %>
       <%= link_to "Account", account_path,
-                  class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
+                  class: "block rounded-control px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
     <% else %>
       <p class="px-2 py-2 text-sm text-app-content-secondary">
         Sign in to register a repository and mint an API key.
@@ -32,7 +32,7 @@
         it up actually costs before signing in. %>
     <p class="section-label px-2 pt-4 pb-2 text-app-content-secondary">Docs</p>
     <%= link_to "Integration guide", integration_guide_path,
-                class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
+                class: "block rounded-control px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
   </nav>
 
   <div class="border-t border-app-border p-3">

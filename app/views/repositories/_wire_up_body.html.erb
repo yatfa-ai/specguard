@@ -1,0 +1,45 @@
+<%# The wire-up instructions, without a panel around them: the onboarding checklist shows them as
+    step 3, and Delivery folds them away once runs exist. locals: has_api_keys %>
+
+  <% if has_api_keys %>
+    <p class="text-sm text-app-content-secondary">
+      Hand this to your coding agent. It names this repository, says where the key is, and sends
+      the agent to the guide to work out the rest for whatever language and test framework this
+      project actually uses.
+    </p>
+    <div data-controller="copy-text">
+      <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_agent_prompt(
+            repository: @repository,
+            guide_url: integration_guide_url,
+            endpoint: integration_guide_endpoint
+          ) %><% end %>
+    </div>
+    <p class="text-xs text-app-muted">
+      The prompt refers to the key by the name of the CI secret, not by its value: SpecGuard
+      keeps only a digest and cannot show an existing key again.
+      <% if repository_policy.can?(:keys_manage) %>
+        If it has been lost, regenerate it in
+        <a href="#credentials" class="rc-link">Credentials</a> — the replacement is shown once,
+        with the prompt already carrying it.
+      <% end %>
+    </p>
+  <% elsif local_assigns[:onboarding] %>
+    <% elsif repository_policy.can?(:keys_manage) %>
+    <p class="text-sm text-app-content-secondary">
+      This repository has no API key yet, so there is nothing for CI to authenticate with.
+      Mint a key in <a href="#credentials" class="rc-link">Credentials</a> — the prompt to hand
+      your coding agent is shown with the key already in it, once.
+    </p>
+  <% else %>
+    <p class="text-sm text-app-content-secondary">
+      This repository has no API key yet, so there is nothing for CI to authenticate with. Ask
+      <%= @repository.user.display_name %> to mint one.
+    </p>
+  <% end %>
+  <p class="text-xs text-app-muted">
+    Reading it yourself:
+    <%= link_to "the integration guide", integration_guide_path, class: "underline" %>
+    covers the Ruby client gem, the intent annotation syntax, the linter that needs no
+    credential at all, and the complete ingest wire contract for a project in a language that
+    has no client.
+  </p>

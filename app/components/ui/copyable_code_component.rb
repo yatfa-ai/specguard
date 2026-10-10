@@ -30,7 +30,7 @@
 class UI::CopyableCodeComponent < ApplicationComponent
   # The `<code>` element must contain the bare payload and nothing else: the Stimulus controller
   # copies `textContent.trim()` verbatim, so any decoration added here lands on the clipboard.
-  CODE_CLASSES = "min-w-0 flex-1 overflow-x-auto rounded-md border border-app-border-light " \
+  CODE_CLASSES = "min-w-0 flex-1 overflow-x-auto rounded-control border border-app-border " \
                  "bg-app-surface-raised px-3 py-2 font-mono text-sm text-app-content"
 
   def initialize(multiline: false, **options)

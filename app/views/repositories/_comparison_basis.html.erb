@@ -1,0 +1,80 @@
+<%# Why the deltas in the verdict are (or are not) shown, in the old panel's own words. locals: f %>
+<% suite_size_delta = f.size_delta %>
+<% measured_tests = f.measured %>
+<% comparison_measured = f.previous&.suite_size_measured? %>
+<% comparison_assembled_like = f.previous && f.run.assembled_like?(f.previous) %>
+<% wall_clock_delta = f.wall_delta %>
+<% machine_time_delta = f.machine_delta %>
+<% presented_as_sharded = f.sharded %>
+<% shard_count = f.shards %>
+    <%= render UI::NoteComponent.new(summary: "How the suite-size change is measured", id: "suite-size-basis") do %>
+      <% if suite_size_delta %>
+        Suite size is measured against
+        <span class="font-mono"><%= f.previous.commit_sha.first(7) %></span>,
+        the previous run on <%= @latest_test_run.branch %>,
+        <%= time_ago_in_words(f.previous.created_at) %> ago.
+        Only runs on the same branch are compared<%= ", and only runs assembled from the same #{shard_count} shard #{"report".pluralize(shard_count)}" if shard_count.positive? %>.
+      <% elsif @latest_test_run.branch.blank? %>
+        This run reported no branch, so SpecGuard cannot place it in a history and has no
+        earlier run to measure it against. Runs that name no branch are not pooled together —
+        they may come from anywhere.
+      <% elsif f.previous.nil? %>
+        No earlier run on <%= @latest_test_run.branch %>, so there is no change to show — this
+        is the first run SpecGuard has from that branch. Runs on other branches are
+        deliberately not compared: a suite size from somewhere else is not a change this one
+        made.
+      <% elsif !measured_tests %>
+        This run reported no tests, so there is nothing to take a change from. A difference
+        measured against a run that reported nothing would describe the report and not the
+        suite — which is the same distinction the line above draws.
+      <% elsif !comparison_measured %>
+        The previous run on <%= @latest_test_run.branch %>
+        (<span class="font-mono"><%= f.previous.commit_sha.first(7) %></span>)
+        reported no tests, so there is nothing to measure this run's suite size against.
+        Counting the whole suite as growth would charge a commit for a gap in the reporting.
+      <% else %>
+        This run was <%= @latest_test_run.delivery_description %>, while
+        <span class="font-mono"><%= f.previous.commit_sha.first(7) %></span> was
+        <%= f.previous.delivery_description %> — so the two are not measuring the same
+        thing and no change is shown. A run's test count is the sum of the shards it has
+        reported so far, which climbs while a sharded build is still arriving; a difference
+        taken across two compositions would report a change no commit made.
+      <% end %>
+    <% end %>
+    <% if comparison_assembled_like %>
+      <%= render UI::NoteComponent.new(summary: "How the runtime change is measured", id: "runtime-basis") do %>
+        <% if wall_clock_delta %>
+          <%= presented_as_sharded ? "The wall clock" : "The total runtime" %> is
+          measured against
+          <span class="font-mono"><%= f.previous.commit_sha.first(7) %></span>,
+          the previous run on <%= @latest_test_run.branch %>,
+          <%= time_ago_in_words(f.previous.created_at) %> ago<%= ", and so is the machine time" if machine_time_delta %>.
+          <% if presented_as_sharded %>
+            Only runs that timed the same number of shards are compared, and both of these
+            timed <%= @latest_test_run.timed_shard_count %> of their
+            <%= shard_count %> <%= "shard".pluralize(shard_count) %>.
+          <% end %>
+        <% elsif !@latest_test_run.duration_reported? %>
+          This run reported no timing at all, so there is no runtime to take a change from —
+          which is not the same as a runtime of zero, and the row above says so in those
+          words rather than printing a number.
+        <% elsif !f.previous.duration_reported? %>
+          The previous run on <%= @latest_test_run.branch %>
+          (<span class="font-mono"><%= f.previous.commit_sha.first(7) %></span>)
+          reported no timing, so there is nothing to measure this run's runtime against.
+          Counting the whole wall clock as new cost would charge a commit for a gap in the
+          reporting.
+        <% else %>
+          This run timed <%= @latest_test_run.timed_shard_count %> of its
+          <%= shard_count %> <%= "shard".pluralize(shard_count) %>, while
+          <span class="font-mono"><%= f.previous.commit_sha.first(7) %></span> timed
+          <%= f.previous.timed_shard_count %> of its
+          <%= shard_count %> — so the two wall clocks were measured over different
+          denominators and no change is shown. A wall clock is the slowest shard that
+          <em>reported</em>, and a shard that reported nothing is usually a cancelled or
+          timed-out job, which is usually the slowest one: differencing the two would report
+          a speed-up produced by the missing telemetry rather than by the suite.
+        <% end %>
+      <% end %>
+    <% end %>
+  <% end %>

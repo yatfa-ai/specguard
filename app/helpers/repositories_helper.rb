@@ -95,6 +95,7 @@ module RepositoriesHelper
     # the hash rather than inside it, so an explicit `limit: nil` override ("Back to the 10
     # heaviest") still beats a carried widening through the ordinary `merge` below.
     asks[:limit] = @limit_request if @limit_request
+    asks[:window] = @window_request if @window_request
     # `?layer=` rides the same conditional carry for the same reason: it narrows the "Slowest tests"
     # panel only, and opening a file or an area must not silently drop the layer the reader chose —
     # while a default page's links stay byte-identical because no `layer:` is emitted without an ask.
@@ -1201,5 +1202,174 @@ module RepositoriesHelper
     "#{number_with_delimiter(count)} #{"example".pluralize(count)} in the weighed run reached no " \
       "resolvable text and #{count == 1 ? "was" : "were"} not compared; that matching runs just " \
       "after a run lands rather than during it."
+  end
+
+  # --- the console (`repositories/show`) -----------------------------------------------------
+
+  # Every ask that opens a drill-in, as the set a "close" link has to clear. The global asks
+  # (branch, window, layer, commit_sha) are left alone: closing a drawer must not change the page.
+  DRILL_IN_ASKS = %i[spec_file spec_directory repeated_description unstable_test unstable_test_from].freeze
+
+  def drill_in_open?
+    [@spec_file_examples, @spec_directory_files, @spec_directory_file_growth, @unannotated_examples,
+     @repeated_description_examples, @unstable_test_runs].any?
+  end
+
+  def close_drill_in_path(repository)
+    drill_down_path(repository, anchor: nil, **DRILL_IN_ASKS.index_with { nil })
+  end
+
+  # An outcome strip cell per run of the window, oldest first. `outcomes` is {run_id => outcome}.
+  # Absent = the test did not appear in that run (a gap, not a pass).
+  def outcome_strip(runs, outcomes)
+    cells = runs.map do |run|
+      outcome = outcomes[run.id]
+      state = if !outcomes.key?(run.id) then "absent"
+              elsif outcome.nil? then "unreported"
+              else outcome
+              end
+      title = "#{run.commit_sha.first(7)} · #{state == 'absent' ? 'not run' : (state == 'unreported' ? 'outcome not reported' : state)}"
+      content_tag(:i, "", data: { o: state }, title: title)
+    end
+    content_tag(:span, safe_join(cells), class: "rc-strip", role: "img",
+                aria: { label: "Outcome in each of the last #{runs.size} runs, oldest first" })
+  end
+
+  # A comparison delta that can never wrap inside its cell. Tone is a reading, not a verdict:
+  # `good` when the thing a reader wants smaller got smaller, `bad` when it grew, `info` for size.
+  def delta_tag(text, tone: :flat, label: nil)
+    content_tag(:span, text, class: "delta delta-#{tone}", aria: { label: label })
+  end
+
+  def delta_tone_for(change, bigger_is_worse:)
+    return :flat if change.nil? || change.zero?
+
+    (change.positive? == bigger_is_worse) ? :bad : :good
+  end
+
+  # The global filter bar's branch menu: the branches with the most history, the one being read
+  # pulled to the front, and an honest line about what is not listed.
+  BRANCH_MENU_LIMIT = 12
+
+  def console_branch_items(repository, histories, current_branch)
+    shown = histories.first(BRANCH_MENU_LIMIT)
+    current = histories.find { |history| history.name == current_branch }
+    shown = [current, *shown.first(BRANCH_MENU_LIMIT - 1)] if current && shown.none? { |history| history.name == current_branch }
+    shown.map do |history|
+      { name: history.name,
+        runs: history.capped? ? "#{history.run_count}+ runs" : pluralize(history.run_count, "run"),
+        href: drill_down_path(repository, branch: history.name, commit_sha: nil, anchor: nil,
+                              **DRILL_IN_ASKS.index_with { nil }),
+        current: history.name == current_branch }
+    end
+  end
+
+  def console_window_items(repository)
+    @window_choices.map do |size|
+      { label: "#{size} runs", current: size == @window_size,
+        href: drill_down_path(repository, window: (size == Repository::TRAJECTORY_LIMIT ? nil : size),
+                              anchor: nil, **DRILL_IN_ASKS.index_with { nil }) }
+    end
+  end
+
+  def console_layer_items(repository)
+    [["All layers", nil], *SpecObservation::DECLARED_LAYER_KEYS.map { |layer| [layer.to_s, layer.to_s] }].map do |label, value|
+      { label: label, current: value == @layer_request,
+        href: drill_down_path(repository, layer: value, anchor: nil) }
+    end
+  end
+
+  # The figures the old Overview panel computed inline, computed once. Every rule is the panel's own
+  # (a delta is withheld unless both runs were measured and assembled the same way); only the place
+  # moved, so the verdict, the cost panel and the notes read one answer.
+  RunFigures = Struct.new(:run, :previous, :total, :annotated, :readings, :measured, :comparable,
+                          :size_delta, :runtime_comparable, :wall_delta, :machine_delta, :sharded,
+                          :shards, keyword_init: true)
+
+  def run_figures(run, previous)
+    return nil if run.nil?
+
+    like = previous && run.assembled_like?(previous)
+    comparable = run.suite_size_measured? && previous&.suite_size_measured? && like
+    runtime_comparable = like && run.duration_reported? && previous.duration_reported? &&
+                         run.timed_shard_count == previous.timed_shard_count
+    wall = run.duration_seconds - previous.duration_seconds if runtime_comparable
+    sharded = run.multi_shard?
+    machine = if sharded && wall && run.machine_seconds_reported? && previous.machine_seconds_reported?
+                run.machine_seconds - previous.machine_seconds
+              end
+    RunFigures.new(run: run, previous: previous, total: run.total_specs_count.to_i,
+                   annotated: run.annotated_specs_count.to_i, readings: run.intent_readings,
+                   measured: run.suite_size_measured?, comparable: comparable,
+                   size_delta: (run.total_specs_count.to_i - previous.total_specs_count.to_i if comparable),
+                   runtime_comparable: runtime_comparable, wall_delta: wall, machine_delta: machine,
+                   sharded: sharded, shards: run.shard_count)
+  end
+
+  # --- the detail drawer -----------------------------------------------------------------------
+  # A table row that opens the drawer. `facts` are [label, value] pairs; `actions` are
+  # [label, href, variant] links (a row's real destinations — the server drill-in, GitHub);
+  # `body` is optional extra markup. Nothing is fetched: the detail is a <template> in the row.
+  def drawer_row(seed, kind:, title:, facts: [], actions: [], body: nil, &cells)
+    id = "row-#{kind.parameterize}-#{Digest::SHA1.hexdigest(seed.to_s).first(8)}"
+    detail = tag.template(data: { drawer_body: "" }) do
+      safe_join([
+        (tag.dl(class: "rc-facts") do
+          safe_join(facts.reject { |_, value| value.blank? }.flat_map { |label, value| [tag.dt(label), tag.dd(value)] })
+        end if facts.any?),
+        body,
+        (tag.div(class: "rc-drawer-actions") do
+          safe_join(actions.map do |label, href, variant|
+            link_to(label, href, class: UI::ButtonComponent.classes(variant: variant || :secondary, size: :sm),
+                    target: (href.to_s.start_with?("http") ? "_blank" : nil), rel: "noopener noreferrer")
+          end)
+        end if actions.any?)
+      ].compact)
+    end
+    tag.tr(safe_join([capture(&cells), detail]), id: id, data: { drawer_title: title, drawer_kind: kind })
+  end
+
+  # The cell that is the row's keyboard handle: a real button, so Enter/Space open the drawer and
+  # the row does not need an underlined link to be discoverable.
+  def row_open(label, mono: false)
+    tag.button(label, type: "button", class: "row-open#{' mono' if mono}")
+  end
+
+  def layers_stack(layer_counts, key: true)
+    return nil if layer_counts.nil?
+
+    total = layer_counts.values.sum
+    return nil if total.zero?
+
+    ranks = { unit: "1", integration: "2", request: "3", system: "4", undeclared: "x" }
+    parts = layer_counts.select { |_, count| count.positive? }
+    bar = tag.span(class: "rc-stack", role: "img",
+                   aria: { label: parts.map { |layer, count| "#{layer} #{number_with_delimiter(count)}" }.join(", ") }) do
+      safe_join(parts.map { |layer, count| tag.i("", data: { r: ranks[layer] }, style: "flex: #{count} 1 0") })
+    end
+    key_list = tag.ul(class: "rc-key") do
+      safe_join(parts.map { |layer, count| tag.li(safe_join([layer.to_s, " ", tag.strong(number_with_delimiter(count))]), data: { r: ranks[layer] }) })
+    end
+    key ? safe_join([bar, key_list]) : bar
+  end
+
+  # The runs the pass/fail strips are drawn across, oldest first — the same window every other
+  # trajectory panel reads, so a strip's cell N is the run the suite-growth chart's point N is.
+  def trajectory_runs_for_strips = @suite_trajectory.runs
+
+  # What the server-rendered drawer is about, named from whichever drill-in the URL opened. The
+  # newest ask (the narrowest) names it; the others ride inside it.
+  def drill_in_kind
+    if @unstable_test_runs then "Test, run by run"
+    elsif @repeated_description_examples then "Repeated description"
+    elsif @unannotated_examples && !@spec_file_examples then "Unannotated tests"
+    elsif @spec_file_examples then "Spec file"
+    elsif @spec_directory_files || @spec_directory_file_growth then "Spec directory"
+    end
+  end
+
+  def drill_in_title
+    @unstable_test_runs&.name || @repeated_description_examples&.name || @spec_file_examples&.path ||
+      @spec_directory_files&.path || @spec_directory_file_growth&.path
   end
 end
