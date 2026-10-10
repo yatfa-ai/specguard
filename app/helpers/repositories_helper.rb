@@ -665,6 +665,10 @@ module RepositoriesHelper
   # not answer.
   def spec_directory_listed_in_rollup?(rollup, path)
     return false if rollup.nil?
+    # A rollup ranked by a declared layer states the LAYER's figures for each row, while the open
+    # area (`SpecDirectoryFiles`) stays all-layer: the two no longer state "the same fraction", so
+    # the cross-reference is withheld rather than made false.
+    return false if rollup.layer?
 
     rollup.rows.any? { |row| row.path == path }
   end

@@ -66,8 +66,20 @@
 # returns a redundancy verdict — the figures are operands for a reader, and there is no
 # `#over_covered?` here to be tempted by.
 class SpecDirectoryDurations
-  def self.for(test_run, limit: SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)
-    tuples = SpecObservation.directory_durations_in(test_run, limit: limit)
+  # `layer:` ranks the rollup by ONE declared layer's time (`SpecObservation::DECLARED_LAYER_KEYS`):
+  # the layer rides into the query before `LIMIT`, so every figure on this object — each area's
+  # total and counts, `directory_count` — is the LAYER's. `nil` (the default) is the all-layer
+  # rollup, unchanged to the query.
+  #
+  # With a layer asked, "did this run record anything at all" can no longer be read off `rows` — a
+  # layer with no areas would look like a run with no rows, and the surface would blank a block with
+  # a real, empty answer. That question is the RUN's, answered by `TestRun#intent_readings.recorded?`
+  # (the memoized run-grain aggregate every page already issues), exactly as `SpecFileDurations`
+  # does. It is deliberately NOT read when no layer is asked: the unasked path decides `#recorded?`
+  # as it always has, from `rows`, and issues nothing new.
+  def self.for(test_run, limit: SpecObservation::HEAVIEST_DIRECTORIES_LIMIT, layer: nil)
+    run_recorded = layer.nil? ? nil : test_run.intent_readings.recorded?
+    tuples = SpecObservation.directory_durations_in(test_run, limit: limit, layer: layer)
     rows = tuples.map do |path, total, recorded, timed, distinct_names, named, _directory_count, *layers|
       # The five trailing operands ride in `SpecObservation::DECLARED_LAYER_KEYS` order — the closed
       # layer enum, then undeclared — and are zipped by that list, never by position at the call site.
@@ -85,7 +97,8 @@ class SpecDirectoryDurations
     # SILENTLY — a description count served as a directory count renders a caption that is merely
     # wrong rather than a page that breaks. `fetch` raises where `.last` would guess, so the next
     # column added to that read fails here loudly instead.
-    new(rows: rows, directory_count: tuples.first&.fetch(DIRECTORY_COUNT_INDEX).to_i)
+    new(rows: rows, directory_count: tuples.first&.fetch(DIRECTORY_COUNT_INDEX).to_i, layer: layer,
+        run_recorded: run_recorded)
   end
 
   # Where `COUNT(*) OVER ()` sits in one tuple of `SpecObservation.directory_durations_in`. Named
@@ -93,10 +106,18 @@ class SpecDirectoryDurations
   # objects rather than a positional habit.
   DIRECTORY_COUNT_INDEX = 6
 
-  def initialize(rows:, directory_count:)
+  def initialize(rows:, directory_count:, layer: nil, run_recorded: nil)
     @rows = rows
     @directory_count = directory_count
+    @layer = layer&.to_s
+    @run_recorded = run_recorded
   end
+
+  # The declared layer this rollup was ranked by (`"request"`, `"undeclared"` …), or nil for the
+  # all-layer rollup. Every figure on this object is the LAYER's when this is set.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
 
   # The rollup, heaviest first. Never longer than the limit it was built with.
   attr_reader :rows
@@ -123,7 +144,10 @@ class SpecDirectoryDurations
   # no per-area grain to disclose. The `recorded?` / `any_timed?` split is `SpecFileDurations`', and
   # `SlowestExamples`' before it: "this run reported no tests" and "this run reported no timings"
   # are different facts and the panel says them differently.
-  def recorded? = rows.any?
+  #
+  # A RUN-level question even when a layer is asked: a layer matching no areas is an empty answer
+  # (`rows` empty over a run that recorded examples), not a run that recorded nothing.
+  def recorded? = layer? ? @run_recorded : rows.any?
 
   # At least one area has a total to rank. False for a run that recorded examples and timed none of
   # them — every group's SUM is NULL, so there is a list of areas but no ranking, and a column of

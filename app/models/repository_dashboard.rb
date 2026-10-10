@@ -534,7 +534,9 @@ class RepositoryDashboard
     # answers so the panel branches on one read rather than the controller taking a second.
     #
     # ONE query, not growing with the size of the suite: see `SpecFileDurations`.
-    @spec_file_durations = SpecFileDurations.for(@latest_test_run, limit: rollup_limit(SpecObservation::HEAVIEST_FILES_LIMIT)) if @latest_test_run
+    # `layer: @layer_request` (assigned above) ranks the rollup by that declared layer's time, in
+    # the query itself, so the panel and `latest_run.spec_files` agree row for row.
+    @spec_file_durations = SpecFileDurations.for(@latest_test_run, limit: rollup_limit(SpecObservation::HEAVIEST_FILES_LIMIT), layer: @layer_request) if @latest_test_run
     # One file out of that rollup, opened: not which files the wall clock went into but WHICH
     # EXAMPLES are in the one the reader picked. The rollup is a capped ten and every panel on this
     # page is, so a reader who has found the heavy file has so far found the end of the road — this
@@ -570,7 +572,9 @@ class RepositoryDashboard
     #
     # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
     # see `SpecDirectoryDurations`.
-    @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run, limit: rollup_limit(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)) if @latest_test_run
+    # `layer: @layer_request` (assigned above) ranks the rollup by that declared layer's time, in the
+    # query itself, so the panel and `latest_run.spec_directories` agree row for row.
+    @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run, limit: rollup_limit(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT), layer: @layer_request) if @latest_test_run
     # The SAME grain as the line above and a different AXIS, which is why it is a second read rather
     # than a column on that one. That rollup ranks areas by WALL CLOCK and its coverage figure is
     # TIMING coverage; this one ranks them by how many of their examples carry no `@intent`. An
