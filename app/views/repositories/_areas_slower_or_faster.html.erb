@@ -1,0 +1,152 @@
+    <% if @spec_directory_runtime_growth %>
+      <%= render UI::PanelComponent.new(title: "Areas that got slower or faster",
+                                        id: "spec-directory-runtime-growth") do %>
+        <% if @spec_directory_runtime_growth.comparable? && @spec_directory_runtime_growth.anything_to_show? %>
+          <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-runtime-growth-basis") do %>
+            <% if @spec_directory_runtime_growth.truncated? %>
+              The <%= number_with_delimiter(@spec_directory_runtime_growth.rows.size) %>
+              <%= "area".pluralize(@spec_directory_runtime_growth.rows.size) %> whose time moved
+              most, of the <%= number_with_delimiter(@spec_directory_runtime_growth.directory_count) %>
+              either run recorded — largest movement first, in both directions
+            <% else %>
+              All <%= number_with_delimiter(@spec_directory_runtime_growth.directory_count) %>
+              <%= "area".pluralize(@spec_directory_runtime_growth.directory_count) %> either run
+              recorded — largest movement first, in both directions
+            <% end %>
+            — measured between this run and
+            <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>, the
+            previous run on this branch.
+            <% if @spec_directory_runtime_growth.any_unmoved? %>
+              Where the movement runs out before the list does, areas whose time did not move are
+              listed too, as ±0.
+            <% end %>
+            <% if @spec_directory_runtime_growth.any_timing_gap? %>
+              Areas one of the two runs reported no timing for are listed last, as "Not timed" —
+              nothing about them got faster.
+            <% end %>
+            Each area is the immediate parent directory of the files that ran its examples, so the
+            areas sit side by side rather than inside one another.
+            A test that was MOVED is the same test, and this panel cannot see the difference: a
+            renamed or relocated directory appears here as one area gaining time and another losing
+            the same amount, with nothing having got slower and nothing faster.
+            Summed off the
+            <%= number_with_delimiter(@spec_directory_runtime_growth.previous_timed_count) %> of
+            <%= number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count) %> and
+            <%= number_with_delimiter(@spec_directory_runtime_growth.latest_timed_count) %> of
+            <%= number_with_delimiter(@spec_directory_runtime_growth.latest_recorded_count) %>
+            example rows the two runs recorded here that reported a timing — never the run wall
+            clock on the Summary at the top of this page, which is a maximum over the run's shards.
+          <% end %>
+          <%= render UI::TableComponent.new(
+                columns: ["Directory", { label: "Time then", end: true }, { label: "Time now", end: true }, { label: "Change", end: true }, { label: "Timed", end: true }],
+                describedby: "spec-directory-runtime-growth-basis", sortable: true) do %>
+            <% @spec_directory_runtime_growth.rows.each do |area| %>
+              <tr>
+                <td class="font-mono text-xs [overflow-wrap:anywhere]"><%= area.path %></td>
+                <td class="num mute" data-sort="<%= area.previous_seconds %>"><%= area.previous_label %></td>
+                <td class="num mute" data-sort="<%= area.latest_seconds %>"><%= area.latest_label %></td>
+                <td class="num" data-sort="<%= area.change %>" aria-label="<%= area.change_reading %>"><%= delta_tag(area.change_label, tone: area.change ? delta_tone_for(area.change, bigger_is_worse: true) : :flat) %></td>
+                <td class="num mute text-xs"><%= area.coverage_label %></td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif @spec_directory_runtime_growth.comparable? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No area changed pace",
+                description: "Every area these two runs timed took the same time in both, so no " \
+                             "area of the suite got slower or faster between them. Summed off the " \
+                             "#{number_with_delimiter(@spec_directory_runtime_growth.previous_timed_count)} " \
+                             "of " \
+                             "#{number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count)} " \
+                             "and " \
+                             "#{number_with_delimiter(@spec_directory_runtime_growth.latest_timed_count)} " \
+                             "of " \
+                             "#{number_with_delimiter(@spec_directory_runtime_growth.latest_recorded_count)} " \
+                             "example rows the two runs recorded here that reported a timing."
+              ) %>
+        <% else %>
+          <% case @spec_directory_runtime_growth.state %>
+          <% when :latest_unmeasured %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run reported no tests, so there is no suite to time area by " \
+                               "area. A run that reported zero tests has a count but not a " \
+                               "measurement."
+                ) %>
+          <% when :previous_unmeasured %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The previous run on this branch " \
+                               "(#{@previous_test_run.commit_sha.first(7)}) reported no tests, so " \
+                               "there is nothing to time this run's areas against. Counting the " \
+                               "whole suite as new time would charge a commit for a gap in the " \
+                               "reporting."
+                ) %>
+          <% when :assembled_differently %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run was #{@latest_test_run.delivery_description}, while " \
+                               "#{@previous_test_run.commit_sha.first(7)} was " \
+                               "#{@previous_test_run.delivery_description} — so the two are not " \
+                               "measuring the same thing. A run's examples arrive shard by shard, " \
+                               "so a difference taken across two compositions would report areas " \
+                               "getting slower and faster that no commit touched."
+                ) %>
+          <% when :previous_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The previous run on this branch " \
+                               "(#{@previous_test_run.commit_sha.first(7)}) recorded no per-example " \
+                               "detail, so it has no areas to time against — every area of this " \
+                               "run would read as time newly appearing. A run ingested before that " \
+                               "detail was stored, or sent by a client that reports only totals, " \
+                               "has a suite size and none of these rows."
+                ) %>
+          <% when :latest_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run recorded no per-example detail, so it has no areas to " \
+                               "time — every area of the previous run would read as time " \
+                               "disappearing. A client that reports only totals sends a suite size " \
+                               "and none of these rows."
+                ) %>
+          <% when :previous_untimed %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The previous run on this branch " \
+                               "(#{@previous_test_run.commit_sha.first(7)}) reported no timings — " \
+                               "it recorded " \
+                               "#{number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count)} " \
+                               "examples and a duration for none of them — so there is nothing to " \
+                               "measure this run's areas against. Every area would otherwise read " \
+                               "as time newly appearing."
+                ) %>
+          <% when :latest_untimed %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run reported no timings — it recorded " \
+                               "#{number_with_delimiter(@spec_directory_runtime_growth.latest_recorded_count)} " \
+                               "examples and a duration for none of them — so its areas cannot be " \
+                               "timed. Every area of the previous run would otherwise read as time " \
+                               "disappearing, which is a reporting gap and not a speedup."
+                ) %>
+          <% when :neither_timed %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "Neither this run nor the previous run on this branch reported a " \
+                               "duration for any example, so there is no time to compare area by " \
+                               "area. Both recorded their examples; neither client sent timings " \
+                               "with them."
+                ) %>
+          <% else %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "Neither this run nor the previous run on this branch recorded " \
+                               "per-example detail, so there are no areas to time. The change in " \
+                               "the run's total wall clock is on the Summary at the top of this page, which " \
+                               "reads the run totals rather than these rows."
+                ) %>
+          <% end %>
+        <% end %>
+      <% end %>
+    <% end %>

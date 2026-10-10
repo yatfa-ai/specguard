@@ -1,0 +1,11 @@
+<%# WHAT IS UNSTABLE — tests whose outcome differs between runs of the window: a pass/fail strip and a
+    rate per test, and one test run by run. %>
+<% if @unstable_tests&.recorded? %>
+  <section class="rc-section" id="unstable" aria-labelledby="unstable-h">
+    <div class="rc-section-head">
+      <h2 class="text-app-h2" id="unstable-h">What is unstable</h2>
+      <p>Tests that passed in some of the last <%= @window_size %> runs on <code><%= @suite_trajectory.branch %></code> and failed in others.</p>
+    </div>
+    <%= render "repositories/unstable_tests" -%>
+    </section>
+<% end %>

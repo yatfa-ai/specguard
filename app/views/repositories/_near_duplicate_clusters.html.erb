@@ -1,39 +1,7 @@
-<%# == Which groups of tests READ ALIKE, off the STORED census
-    The suite-wide near-duplicate census (`NearDuplicateCensus`, taken at ingest by
-    `Ingest::NearDuplicateCensusJob` and served to agents by `GET /api/v1/repository?near_duplicates=`)
-    until now rendered on no dashboard page: a signed-in person could not see which tests read alike.
 
-    STORED READ ONLY. `@near_duplicate_census` is `NearDuplicateCensus.stored_block_for` — one
-    indexed row, a string-keyed Hash exactly as stored — and this partial renders from that Hash. It
-    never asks `NearDuplicateClusters.for`, the live minutes-scale computation: an absent row is
-    stated as absent, never computed on the request path.
-
-    Unlike the per-example panels around it this one is NOT anchored on `@latest_test_run`. The
-    census is repository-wide and has its own stamps — `weighed_run_id` (which run its weight figures
-    were measured in) and `computed_at` — so the panel dates itself instead of borrowing the
-    anchored run's date, and a reader can see when it is older than the run beside it.
-
-    Four states, each with its own text, and the order of the checks is the point:
-      (a) no stored row            — nothing was ever computed; NO numerals, because any figure here
-                                     would be a census of nothing wearing the spelling of a result;
-      (b) `recorded_count` is 0    — the weighed run recorded no per-example rows, so the census had
-                                     nothing to read and an empty list means "nobody told us";
-      (c) `clusters` is empty      — the success state: tests were read and nothing reads alike at
-                                     this floor (and the sub-case of no embedded identities, which
-                                     is not that claim and says so);
-      (d) clusters present         — the ranking, in the stored order (multi-file groups first, then costliest, when the
-                                     stored `ranking_basis` says so; costliest-first on a row stored before it).
-
-    Presented for review and not as a finding of duplication — the claim boundary the "Descriptions
-    this run recorded more than once" panel carries, for a stronger reason here: the floor is
-    UNCALIBRATED (see `NearDuplicateClusters::SIMILARITY`), so membership is a measurement of
-    similarity at a threshold nobody has validated, never a verdict that two tests are redundant.
-
-    Outside the `manage_keys` gate, for the reason the panels around it are: read-only suite
-    telemetry, nothing credential and nothing actionable. %>
 <% census = @near_duplicate_census %>
 <%= render UI::PanelComponent.new(title: "Groups of tests that read alike",
-                                  id: "near-duplicate-clusters", class: "lg:col-span-3") do %>
+                                  id: "near-duplicate-clusters") do %>
   <% if census.nil? %>
     <div id="near-duplicate-clusters-none-yet">
       <%= render UI::EmptyStateComponent.new(
@@ -52,49 +20,13 @@
           ) %>
     </div>
   <% else %>
-    <%# The basis, the floor and the age come BEFORE any cluster, for the reason the API block puts
-        `similarity_floor` and `similarity_basis` first: a cluster count without what "alike" meant
-        is a confident number over an uncalibrated threshold. %>
-    <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-basis">
-      Tests are grouped by <%= census["similarity_basis"] %>: two tests are placed together when
-      their descriptions score at least <%= census["similarity_floor"] %> against each other, a floor
-      that has not been calibrated. Presented for review and not as a finding of duplication — tests
-      that read alike can be a table-driven loop, a shared example group, or a deliberate cover of
-      the same behaviour at another level, and these rows do not decide which.
+    <%# The stamp (when, and which run) is a fact about the CENSUS, so it reads whether or not any group
+        was found — an empty answer from a stale census is a different claim from one from today's. %>
+    <p class="text-xs text-app-content-secondary" id="near-duplicate-clusters-stamp-line">
+      Taken <%= time_ago_in_words(Time.zone.parse(census["computed_at"])) %> ago<% if @near_duplicate_weighed_sha.present? %>,
+      weighing run <%= link_to @near_duplicate_weighed_sha.first(7), drill_down_path(@repository, commit_sha: @near_duplicate_weighed_sha, anchor: "summary"), class: "rc-link" %><% if @near_duplicate_weighed_branch.present? %>
+      on <code><%= @near_duplicate_weighed_branch %></code><% end %><% if @near_duplicate_weighed_sha != @latest_test_run&.commit_sha %> (not the run this page is on)<% end %><% end %>. Stored at ingest: this page reads it and never recomputes it, so a census can be older than the run being read.
     </p>
-    <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-stamp">
-      Taken <%= time_ago_in_words(Time.zone.parse(census["computed_at"])) %> ago
-      (<time datetime="<%= census["computed_at"] %>"><%= census["computed_at"] %></time>),
-      <%# The weighed run is named by commit and branch, as the Recent runs panel names runs, and never
-          by `weighed_run_id` (a bare bigint no person can see anywhere else on the page). The sha
-          links the way that panel's cell does. When the run row is gone or none was recorded the
-          stamp says so in words: no numeral, no guessed link. %>
-      <% weighed_sha = @near_duplicate_weighed_sha %>
-      <% if weighed_sha.present? %>
-        weighing run
-        <%= link_to weighed_sha.first(7),
-                    drill_down_path(@repository, commit_sha: weighed_sha, anchor: "overview"),
-                    class: "underline underline-offset-2 decoration-app-border-light " \
-                           "text-app-content hover:decoration-app-content" %><% if @near_duplicate_weighed_branch.present? %>
-        on <code><%= @near_duplicate_weighed_branch %></code><% end %><% if weighed_sha != @latest_test_run&.commit_sha %>
-        (not the run this page is on)<% end %>.
-      <% elsif census["weighed_run_id"].nil? %>
-        no weighed run recorded.
-      <% else %>
-        weighing a run that has since been deleted.
-      <% end %>
-      Stored at ingest: this page reads it and never recomputes it, so
-      a census can be older than the run listed above.
-    </p>
-    <%# SATURATION, stated ONCE for the panel and never per cluster (the stored count is census-level).
-        Rendered only when positive and there is a group to qualify: a "0 tests" clause would be
-        arithmetic, against this panel's convention. %>
-    <% if census["saturated_identity_count"].to_i.positive? && census["clusters"].present? %>
-      <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-saturation">
-        Some tests had a full ten neighbours at or above the floor, and only ten are kept per test,
-        so a group listed here may be part of a larger one.
-      </p>
-    <% end %>
     <% if census["clusters"].empty? %>
       <% if census["identity_count"].to_i.zero? %>
         <div id="near-duplicate-clusters-unembedded">
@@ -122,10 +54,7 @@
         </div>
       <% end %>
     <% else %>
-      <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-page">
-        <%# The ordering sentence follows the STORED `ranking_basis`: its presence marks a census computed
-            under the multi-file-first order, and a row without it keeps the wording of the order it
-            was actually computed under. %>
+      <p class="text-sm text-app-content-secondary" id="near-duplicate-clusters-page">
         <% ranked_multi_file_first = census["ranking_basis"].present? %>
         <% order_words = ranked_multi_file_first ? "groups spanning more than one spec file first, then costliest" : "costliest first" %>
         <% if census["truncated"] %>
@@ -136,120 +65,101 @@
         <% else %>
           All <%= number_with_delimiter(census["cluster_count"]) %>
           <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>.
-        <% end %>
-        Each group counts its members (distinct test texts) and its examples (every run row those
-        texts resolved to) separately: a table-driven loop is one member and several examples.
-        A member's time counts only its timed examples in the weighed run, so for a partially timed
-        member the figure is a floor.
-      </p>
-      <%# COVERAGE and the examples NOT compared, each stated ONCE for the panel off the stored Hash
-          (both helpers return nil when their keys are absent, so an older stored census renders
-          neither sentence and no zero). %>
+        <% end %></p>
       <% coverage_sentence = near_duplicate_coverage_sentence(census) %>
       <% if coverage_sentence %>
-        <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-coverage"><%= coverage_sentence %></p>
       <% end %>
       <% unresolved_clause = near_duplicate_unresolved_clause(census) %>
       <% if unresolved_clause %>
-        <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-unresolved"><%= unresolved_clause %></p>
       <% end %>
-      <%# THE LAYER PROVENANCE, stated ONCE for the panel and never per cluster. `layer_source` is the
-          census's own stamp: non-nil only when at least one clustered member declared a layer, so a
-          suite that declared nothing gets no layer text anywhere on this panel. %>
       <% if census["layer_source"].present? %>
-        <p class="text-xs text-app-muted mb-3" id="near-duplicate-clusters-layer-source">
-          Layers shown below are as declared by each test's <code>@intent</code>
+      <% end %>
+      <% weighed_sha = @near_duplicate_weighed_sha %>
+      <details class="dc-note" id="near-duplicate-clusters-basis-all">
+        <summary>How to read these groups</summary>
+        <div class="rc-notes-body">
+        <section id="near-duplicate-clusters-members"><h4 class="rc-h">What a group counts</h4><p>Each group counts its members (distinct test texts) and its examples (every run row those
+        texts resolved to) separately: a table-driven loop is one member and several examples.
+        A member's time counts only its timed examples in the weighed run, so for a partially timed
+        member the figure is a floor.</p></section>
+        <section id="near-duplicate-clusters-basis"><h4 class="rc-h">How tests are grouped</h4><p>Tests are grouped by <%= census["similarity_basis"] %>: two tests are placed together when
+      their descriptions score at least <%= census["similarity_floor"] %> against each other, a floor
+      that has not been calibrated. Presented for review and not as a finding of duplication — tests
+      that read alike can be a table-driven loop, a shared example group, or a deliberate cover of
+      the same behaviour at another level, and these rows do not decide which.</p></section>
+
+        <% if census["saturated_identity_count"].to_i.positive? && census["clusters"].present? %><section id="near-duplicate-clusters-saturation"><h4 class="rc-h">Why a group may be larger than shown</h4><p>Some tests had a full ten neighbours at or above the floor, and only ten are kept per test,
+        so a group listed here may be part of a larger one.</p></section><% end %>
+        <section id="near-duplicate-clusters-coverage"><h4 class="rc-h">What the ranking covers</h4><p><%= coverage_sentence %></p></section>
+        <section id="near-duplicate-clusters-unresolved"><h4 class="rc-h">Tests not compared yet</h4><p><%= unresolved_clause %></p></section>
+        <section id="near-duplicate-clusters-layer-source"><h4 class="rc-h">How layers are read here</h4><p>Layers shown below are as declared by each test's <code>@intent</code>
           (<%= census["layer_source"] %>), never inferred from file paths. A test that declared two
           layers is listed under both, so a layer group can hold more tests than its cluster has
-          members.
-        </p>
-      <% end %>
-      <ul class="space-y-4" id="near-duplicate-cluster-list">
-        <% census["clusters"].each do |cluster| %>
-          <li class="rounded-md border border-app-border p-3" data-near-duplicate-cluster>
-            <p class="text-sm text-app-content tabular-nums">
-              <%= number_with_delimiter(cluster["member_count"]) %>
-              <%= "member".pluralize(cluster["member_count"].to_i) %>
-              ·
-              <%= number_with_delimiter(cluster["example_count"]) %>
-              <%= "example".pluralize(cluster["example_count"].to_i) %>
-              ·
-              <%# NEVER a zero for an untimed group: `total_seconds` is nil when nothing was timed,
-                  and "0.00s" would be this surface inventing the measurement it is missing. %>
-              <% if cluster["total_seconds"].nil? %>
-                not timed
-              <% else %>
+          members.</p></section>
+        </div>
+      </details>
+      <%= render UI::TableComponent.new(
+            columns: ["Group", { label: "Tests", end: true }, { label: "Examples", end: true }, { label: "Time", end: true },
+                      "Layers", { label: "Alike at", end: true }, "Matched on"],
+            sortable: true, id: "near-duplicate-cluster-list") do %>
+        <% census["clusters"].each_with_index do |cluster, index| %>
+          <% layer_groups = Array(cluster["layer_groups"]) %>
+          <% declared_layers = layer_groups.filter_map { |group| group["layer"] } %>
+          <% range = cluster["similarity_range"] %>
+          <% range_ok = range.is_a?(Array) && range.size == 2 && range.all?(Numeric) %>
+          <% overlap_kind = cluster["overlap_kind"].presence ||
+               (Array(cluster["members"]).filter_map { |m| m["file_path"] }.uniq.size > 1 ? "multi_file" : "single_file") %>
+          <% members = Array(cluster["members"]) %>
+          <% lead = members.first %>
+          <% layer_text = case cluster["layer_redundancy"]
+                          when "cross_layer" then "spans #{declared_layers.size} declared #{'layer'.pluralize(declared_layers.size)}: #{declared_layers.join(', ')}"
+                          when "same_layer" then "one layer: #{declared_layers.join(', ')}"
+                          else "no layer declared" end %>
+          <% members_body = tag.div(class: "space-y-3") do
+               groups = (cluster["layer_redundancy"].present? && layer_groups.any?) ? layer_groups : [{ "layer" => nil, "members" => members, "plain" => true }]
+               safe_join(groups.map do |group|
+                 tag.div(data: { near_duplicate_layer_group: "" }) do
+                   safe_join([
+                     (tag.p(group["layer"] || "no layer declared", class: "rc-h mb-1") unless group["plain"]),
+                     tag.ul(class: "space-y-1.5 m-0 p-0 list-none") { safe_join(group["members"].map { |member| render("repositories/near_duplicate_member", member: member) }) }
+                   ].compact)
+                 end
+               end)
+             end %>
+          <%= drawer_row("cluster-#{index}-#{lead && lead['text']}", kind: "Group of tests that read alike", title: (lead ? lead["text"] : "Group #{index + 1}"),
+                facts: [["Tests", "#{number_with_delimiter(cluster['member_count'])} #{'member'.pluralize(cluster['member_count'].to_i)}"],
+                        ["Examples", number_with_delimiter(cluster["example_count"])],
+                        ["Time", cluster["total_seconds"].nil? ? "not timed" : "#{SpecObservation.humanized_duration(cluster['total_seconds'])}#{" (#{cluster['timed_count']} of #{cluster['example_count']} examples timed)" unless cluster['timed_count'].to_i == cluster['example_count'].to_i}"],
+                        ["Matched on", cluster["signal_source"]],
+                        ["Spec files", overlap_kind == "multi_file" ? "spans more than one spec file" : "one spec file"],
+                        ["Layers", layer_text],
+                        ["Similarity", range_ok ? (range[0] == range[1] ? "alike at #{format('%.2f', range[0])}" : "alike at #{format('%.2f', range[0])} at best, #{format('%.2f', range[1])} at worst") : nil],
+                        ["Note", cluster["unobserved_members"] ? "lists a test the weighed run did not observe (its link is pinned to the weighed run and may not resolve on GitHub)" : nil]],
+                body: members_body) do %>
+            <td>
+              <%= row_open(lead ? lead["text"] : "Group #{index + 1}") %>
+              <span class="rc-sec mono"><%= lead && "#{lead['file_path']}:#{lead['line_number']}" %><%= " +#{members.size - 1} more" if members.size > 1 %></span>
+            </td>
+            <td class="num" data-sort="<%= cluster['member_count'] %>"><%= number_with_delimiter(cluster["member_count"]) %></td>
+            <td class="num mute" data-sort="<%= cluster['example_count'] %>"><%= number_with_delimiter(cluster["example_count"]) %></td>
+            <td class="num" data-sort="<%= cluster['total_seconds'] %>">
+              <% if cluster["total_seconds"].nil? %><span class="text-app-content-secondary">not timed</span><% else %>
                 <%= SpecObservation.humanized_duration(cluster["total_seconds"]) %>
-                <% unless cluster["timed_count"].to_i == cluster["example_count"].to_i %>
-                  (<%= cluster["timed_count"] %> of <%= cluster["example_count"] %> examples timed)
-                <% end %>
+                <% unless cluster["timed_count"].to_i == cluster["example_count"].to_i %><span class="rc-sec"><%= cluster["timed_count"] %> of <%= cluster["example_count"] %> timed</span><% end %>
               <% end %>
-            </p>
-            <p class="text-xs text-app-muted mt-1">
-              matched on <%= cluster["signal_source"] %>
-              <%# Which kind of overlap, from the stored key or — for a row stored before it existed —
-                  derived from the cluster's own members, as the summary projection does. %>
-              <% overlap_kind = cluster["overlap_kind"].presence ||
-                   (Array(cluster["members"]).filter_map { |m| m["file_path"] }.uniq.size > 1 ? "multi_file" : "single_file") %>
-              · <%= overlap_kind == "multi_file" ? "spans more than one spec file" : "one spec file" %>
-              <%# The layer cut is read off the STORED `layer_groups` (members grouped by the layer their
-                  examples declared, alphabetical, the undeclared `layer: null` group last). A cluster
-                  whose `layer_redundancy` is nil declared nothing, so it renders no layer text at all
-                  — never one "no layer declared" group per cluster. %>
-              <% layer_groups = Array(cluster["layer_groups"]) %>
-              <% show_layers = cluster["layer_redundancy"].present? && layer_groups.any? %>
-              <% declared_layers = layer_groups.filter_map { |group| group["layer"] } %>
-              <% case cluster["layer_redundancy"] %>
-              <% when "cross_layer" %>
-                · spans <%= declared_layers.size %> declared <%= "layer".pluralize(declared_layers.size) %>:
-                <%= declared_layers.join(", ") %>
-              <% when "same_layer" %>
-                · one layer: <%= declared_layers.join(", ") %>
-              <% end %>
-              <%# The stretch of the group, from the STORED `similarity_range` ([strongest, weakest]).
-                  Membership is transitive and similarity is not, so the weakest figure can sit well
-                  below the strongest. A cluster stored before the key existed (or a malformed pair)
-                  renders nothing — never a "0.0". %>
-              <% range = cluster["similarity_range"] %>
-              <% if range.is_a?(Array) && range.size == 2 && range.all?(Numeric) %>
-                <% best, worst = range %>
-                <% if best == worst %>
-                  · alike at <%= format("%.2f", best) %>
-                <% else %>
-                  · alike at <%= format("%.2f", best) %> at best, <%= format("%.2f", worst) %> at worst
-                <% end %>
-              <% end %>
-              <% if cluster["unobserved_members"] %>
-                · lists a test the weighed run did not observe (its link is pinned to the weighed
-                run and may not resolve on GitHub)
-              <% end %>
-            </p>
-            <% if show_layers %>
-              <%# Grouped by declared layer INSTEAD of the flat list: every member sits in at least one
-                  group, an undeclared member under "no layer declared", and a member declaring two
-                  layers under both (group sizes can exceed `member_count` — the census's own rule). %>
-              <% layer_groups.each do |group| %>
-                <div class="mt-2" data-near-duplicate-layer-group>
-                  <p class="text-xs font-medium text-app-content">
-                    <%= group["layer"] || "no layer declared" %>
-                  </p>
-                  <ul class="mt-1 space-y-1">
-                    <% group["members"].each do |member| %>
-                      <%= render "repositories/near_duplicate_member", member: member %>
-                    <% end %>
-                  </ul>
-                </div>
-              <% end %>
-            <% else %>
-              <ul class="mt-2 space-y-1">
-                <% cluster["members"].each do |member| %>
-                  <%= render "repositories/near_duplicate_member", member: member %>
-                <% end %>
-              </ul>
-            <% end %>
-          </li>
+            </td>
+            <td data-sort="<%= declared_layers.size %>">
+              <% if declared_layers.any? %>
+                <span class="rc-chips">
+                  <% declared_layers.each do |layer| %><%= render UI::BadgeComponent.new(tone: cluster["layer_redundancy"] == "cross_layer" ? :info : :neutral) { layer } %><% end %>
+                </span>
+              <% else %><span class="text-app-content-secondary">none declared</span><% end %>
+            </td>
+            <td class="num" data-sort="<%= range_ok ? range[0] : "" %>"><%= range_ok ? format("%.2f", range[0]) : "—" %><% if range_ok && range[0] != range[1] %><span class="rc-sec"><%= format("%.2f", range[1]) %> worst</span><% end %></td>
+            <td class="mute"><%= cluster["signal_source"] %><span class="rc-sec"><%= overlap_kind == "multi_file" ? "spans more than one spec file" : "one spec file" %></span></td>
+          <% end %>
         <% end %>
-      </ul>
+      <% end %>
     <% end %>
   <% end %>
 <% end %>

@@ -1,140 +1,26 @@
-  <%# == Connection state, as an indicator rather than an essay (SPGD-705)
-      ==========================================================================================
-
-      This is what survives of the "Connect this repository" panel's Connection stat: the same
-      states, the same order, the same reasoning about which one wins — and one clause each instead
-      of a `UI::StatComponent` plus three paragraphs of prose about HTTP status codes.
-
-      What was dropped was dropped because it was explaining, in words, a table that sits further
-      down this same page. "Rejected deliveries" lists every refused delivery with its reason; a
-      panel above it teaching the reader to distinguish a 401 from a 400 by reasoning about which
-      one stamps `last_used_at` was a manual for a surface the reader can simply look at. The
-      refusing state links straight to it instead.
-
-      == The five states, and why they are in this order
-
-      Each of the first four is a strictly more specific condition than the one after it, so the
-      order is not a preference — reversing any adjacent pair would report the vaguer answer for a
-      repository the page can say something exact about.
-
-      1. REVOKED KEY STILL PRESENTED. A key this page's owner revoked has arrived at the API and
-         been refused, which stamped `last_refused_at` on the row `revoke!` kept (SPGD-804: a
-         revoked key is retired, not deleted, precisely so this state is observable). It outranks
-         everything below it, REFUSING included, and the reason is temporal, not a tone preference:
-         a pipeline presenting a revoked token cannot complete a delivery at all, so any refusals
-         on record predate the problem this state names and describe a pipeline that was at least
-         getting in. Reporting the vaguer state would send the owner to debug payloads while every
-         request is dying at the door. `:error` on state 2's own rule — work is being destroyed,
-         not merely absent — and the fix is named because it is off this page: the token lives in
-         someone else's secret store.
-         This state is bounded by what the platform can see, and the bound is stated on the
-         surface: `last_refused_at` is the LAST observed presentation, so the note dates it rather
-         than claiming the client is presenting right now; and a key revoked and never presented
-         again produces no row here — nothing is synthesized for it.
-
-      2. REFUSING. `@last_api_request_at` is `api_keys.last_used_at`, stamped by
-         `Api::BaseController#authenticate_api_key!` on the way IN, before the payload is looked at.
-         So it answers "did anything authenticate" and nothing else, and read alone it produced this
-         product's own vacuous green: a repository whose every run was refused for its payload read
-         "Connected", in success tone, over a pipeline throwing away 100% of its work. A delivery
-         being refused HAS authenticated, so this state implies the next one and must precede it.
-         `:error` rather than `:warning` because work is being destroyed, not merely absent.
-
-      3. CONNECTED. `@last_live_api_request_at` is the same figure restricted to keys still carrying
-         the token that stamped them. Restricted, because `regenerate!` retires a token with no
-         grace window and deliberately leaves `last_used_at` standing (it is the key's history), so
-         the unrestricted figure reports an age belonging to a credential that no longer exists.
-
-      4. ROTATED, NOT YET IN USE. Reached only when something authenticated but nothing live did —
-         i.e. every key that ever authenticated has since been rotated. Dated from the OLDEST
-         rotation in the set, which is the only date true of all of them at once: the NEWEST would
-         make "nothing has authenticated since <date>" read most reassuringly on the one indicator
-         that exists to stop reading reassuringly, and would date a five-day-dead pipeline at one
-         minute whenever a second key was rotated just now.
-
-      5. NOT CONNECTED YET. No LIVE key has ever authenticated. `:neutral`, not `:warning`: a
-         repository registered a minute ago has nothing wrong with it, and this is the only one of
-         the five that is an ordinary starting condition rather than a fault. Its note says "no
-         ACTIVE API key has been used" rather than "no API key has been used" — the note is a claim,
-         and since SPGD-804 revocations are retained rows whose history can contradict the
-         unqualified sentence. The revoked-key state above has already named any presentation the
-         platform saw; this branch is what the owner reads when CI has gone quiet on top of a
-         revocation.
-
-      Ungated, like its predecessor and like the Overview and Rejected-deliveries panels: a member
-      with `view` alone legitimately needs to know whether CI is reaching this repository, and
-      nothing here is credential metadata — no key name, no hint, no token. %>
-  <div class="flex flex-wrap items-center gap-2" id="connection-indicator">
-    <% if @presented_revoked_api_keys.any? %>
-      <%# `revocations` cannot be empty here: the set is restricted to rows carrying a refusal
-          stamp, and a revoked row is stamped `revoked_at` at the moment of its revocation — every
-          row in the set has both. `revocations.first` is the OLDEST revocation when there are
-          several, on the rule state 4 states for rotations: the only date true of all of them at
-          once. `last_refused_at` is the NEWEST stamp, because there the question the reader is
-          asking is "is this happening now", and the freshest observed presentation is the honest
-          answer.
-
-          THE SAME SEAM-AND-CONTAINERS SPLIT the refusal and rotation branches below render: the
-          wording lives in `revoked_key_label` / `revoked_keys_note` in ApplicationHelper, beside
-          those two pairs, so this indicator and the repositories grid's card cannot word one
-          repository's revocation two ways, and the next rename cannot move one surface without
-          the other. This surface keeps the COUNT-BEARING note — the credential-count gate is the
-          grid's own rule (`key_count_visible?` there) — and the card renders the count-free
-          generalization of this branch's singular, `revoked_key_note`. %>
-      <% revocations = @presented_revoked_api_keys.filter_map(&:revoked_at).sort %>
-      <% last_refusal = @presented_revoked_api_keys.filter_map(&:last_refused_at).max %>
-      <%= render UI::BadgeComponent.new(tone: :error) { revoked_key_label } %>
-      <span class="text-xs text-app-muted">
-        <%= revoked_keys_note(revocations.size, revocations.first, last_refusal) %>
-      </span>
-    <% elsif @rejected_ingests.refusing? %>
-      <%# THE SAME SEAMS THE REPOSITORIES GRID RENDERS — `refused_deliveries_label` and
-          `refused_deliveries_note` own the words, so a card and the page it links to cannot word
-          one repository's refusal two different ways, and the next rename of either cannot move one
-          surface without the other. That is the rule `test_run_delivery_note` and
-          `test_run_cost_rows` are already held to on this page's sibling.
-
-          The seams own the WORDING and not the markup: this surface and the card put the same
-          sentence in different containers, so each wraps it itself. The link below stays here
-          rather than going into the seam — it points at a panel that exists on THIS page only, and
-          the grid links to the page rather than to an anchor inside it. %>
-      <%= render UI::BadgeComponent.new(tone: :error) { refused_deliveries_label } %>
-      <span class="text-xs text-app-muted">
-        <%= refused_deliveries_note(@rejected_ingests.last_rejection_at) %> See
-        <a href="#rejected-ingests" class="underline">Rejected deliveries</a>.
-      </span>
-    <% elsif @last_live_api_request_at.present? %>
-      <%= render UI::BadgeComponent.new(tone: :success) { "Connected" } %>
-      <span class="text-xs text-app-muted">
-        Last request <%= time_ago_in_words(@last_live_api_request_at) %> ago.
-      </span>
-    <% elsif @last_api_request_at.present? %>
-      <%# `rotations` cannot be empty here: something authenticated and nothing live did, so the key
-          holding that use is stranded, and a stranded key has a `rotated_at`.
-
-          THE SAME SEAM-AND-CONTAINERS SPLIT the refusal branch above renders. The wording lives in
-          `rotated_key_label` / `rotated_keys_note` in ApplicationHelper, beside the refusal pair,
-          so this indicator and the repositories grid's card cannot word one repository's stranded
-          rotation two ways, and the next rename cannot move one surface without the other. This
-          surface keeps the COUNT-BEARING note — the credential-count gate is the grid's own rule
-          (`key_count_visible?` there), and this page's own counts render behind `keys.manage` where
-          they belong — while the card gets the count-free `rotated_key_note`. The seams own the
-          WORDING; the containers differ. %>
-      <% rotations = @rotated_unused_api_keys.filter_map(&:rotated_at).sort %>
-      <%= render UI::BadgeComponent.new(tone: :warning) { rotated_key_label } %>
-      <span class="text-xs text-app-muted">
-        <%= rotated_keys_note(rotations.size, rotations.first) %>
-      </span>
-    <% else %>
-      <%= render UI::BadgeComponent.new(tone: :neutral) { "Not connected yet" } %>
-      <%# ONE sentence for every sub-case that lands here — fresh repository, unused live keys,
-          every key revoked — because the sentence is a claim and it has to survive all three.
-          "No API key has been used" (the wording this branch carried before revocations were
-          retained) would be false in the third: a revoked row's history says it WAS used. "No
-          active API key has been used" is true of all three, and the revoked-key state above has
-          already named any presentation the platform saw — so this branch is what the owner reads
-          when CI has gone quiet on top of a revocation, and it must not dress that up as a
-          repository that was never wired up. %>
-      <span class="text-xs text-app-muted">No active API key has been used.</span>
-    <% end %>
-  </div>
+<%# The connection sentence: ONE of five states, most urgent first. Unchanged in logic from the
+    header indicator it replaces; renamed to the product's own term ("rejected ingests"). %>
+<div class="flex flex-wrap items-center gap-2" id="connection-indicator">
+  <% if @presented_revoked_api_keys.any? %>
+    <% revocations = @presented_revoked_api_keys.filter_map(&:revoked_at).sort %>
+    <% last_refusal = @presented_revoked_api_keys.filter_map(&:last_refused_at).max %>
+    <%= render UI::BadgeComponent.new(tone: :error) { revoked_key_label } %>
+    <span><%= revoked_keys_note(revocations.size, revocations.first, last_refusal) %></span>
+  <% elsif @rejected_ingests.refusing? %>
+    <%= render UI::BadgeComponent.new(tone: :error) { refused_deliveries_label } %>
+    <span>
+      <%= refused_deliveries_note(@rejected_ingests.last_rejection_at) %>
+      <a href="#delivery">See Delivery</a>
+    </span>
+  <% elsif @last_live_api_request_at.present? %>
+    <%= render UI::BadgeComponent.new(tone: :success) { "Connected" } %>
+    <span>Last request <%= time_ago_in_words(@last_live_api_request_at) %> ago.</span>
+  <% elsif @last_api_request_at.present? %>
+    <% rotations = @rotated_unused_api_keys.filter_map(&:rotated_at).sort %>
+    <%= render UI::BadgeComponent.new(tone: :warning) { rotated_key_label } %>
+    <span><%= rotated_keys_note(rotations.size, rotations.first) %></span>
+  <% else %>
+    <%= render UI::BadgeComponent.new(tone: :neutral) { "Not connected yet" } %>
+    <span>No active API key has been used.</span>
+  <% end %>
+</div>

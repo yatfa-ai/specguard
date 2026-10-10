@@ -1,0 +1,31 @@
+<%# WHAT IS NOT ANNOTATED — how much of the suite SpecGuard can read, and by area. %>
+<% f = run_figures(@latest_test_run, @previous_test_run) %>
+<section class="rc-section" id="annotations" aria-labelledby="annotations-h">
+  <div class="rc-section-head">
+    <h2 class="text-app-h2" id="annotations-h">What is not annotated</h2>
+    <p>Which tests carry an <code>@intent</code>, which SpecGuard can still read, and which it cannot.</p>
+  </div>
+
+  <% if f.measured && f.readings.recorded? %>
+    <%= render UI::PanelComponent.new(title: "How SpecGuard reads this run", id: "intent-readings") do %>
+      <div class="space-y-3">
+        <% r = f.readings %>
+        <% total = r.recorded %>
+        <span class="rc-stack" role="img" aria-label="Authored <%= r.authored %>, read from the description <%= r.derived %>, not readable <%= r.unreadable %>">
+          <i data-r="1" style="flex: <%= r.authored %> 1 0"></i>
+          <i data-r="3" style="flex: <%= r.derived %> 1 0"></i>
+          <i data-r="x" style="flex: <%= r.unreadable %> 1 0"></i>
+        </span>
+        <ul class="rc-key">
+          <li data-r="1"><strong><%= number_with_delimiter(r.authored) %></strong> carry an @intent their author wrote</li>
+          <li data-r="3"><strong><%= number_with_delimiter(r.derived) %></strong> read from the description</li>
+          <li data-r="x"><strong><%= number_with_delimiter(r.unreadable) %></strong> not readable by SpecGuard</li>
+        </ul>
+        <%= render "repositories/reading_basis", f: f -%>
+      </div>
+    <% end %>
+  <% end %>
+
+  <%= render "repositories/unannotated_directories" -%>
+  <%= render "repositories/unannotated_examples" -%>
+</section>

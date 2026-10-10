@@ -356,7 +356,8 @@ class RepositoryDashboard
     newest_test_run
     @run_anchor_request = requested_commit_sha
     @run_anchor_run = @run_anchor_request && @repository.latest_test_run_for_commit(@run_anchor_request)
-    @latest_test_run = @run_anchor_run || newest_test_run
+    @branch_run = @repository.latest_test_run_on_branch(requested_branch) if requested_branch.present?
+    @latest_test_run = @run_anchor_run || @branch_run || newest_test_run
     # The `?limit=` ask in its raw form, read once for both duration rollups below and carried by
     # every `drill_down_path` link on the page — the same rule `@trajectory_branch_request` and
     # friends follow: a link reproduces what the reader asked for, so widening one panel closes no
@@ -957,6 +958,10 @@ class RepositoryDashboard
     #
     # Set by ApiKeysController#create and #regenerate, and readable exactly once — see
     # ApiKeysController.
+    @window_size = window_size
+    @window_request = requested_window
+    @window_choices = WINDOW_CHOICES
+    @unstable_strips = unstable_strips
     @revealed_token = revealed_token
     @revealed_token_name = revealed_token_name
     # Whether the reveal is a rotation rather than a first minting: same token panel either way,
@@ -979,6 +984,27 @@ class RepositoryDashboard
   #
   # Memoized with `defined?` rather than `||=` because `nil` is a real answer — a repository
   # whose CI has never reported — and `||=` would re-issue the query on every read of it.
+  # Per-test pass/fail strips for the "Tests whose outcome changed" rows: one outcome per run of
+  # the window, oldest first. Read through `UnstableTestRuns`, the same reader the drill-in uses,
+  # so a strip can never disagree with the run-by-run list it opens.
+  def unstable_strips
+    return {} unless @unstable_tests&.comparable?
+
+    ids = @unstable_tests.rows.map(&:spec_identity_id)
+    return {} if ids.empty?
+
+    # ONE grouped read for every row's strip: (identity, run) -> outcome, a failure winning when a
+    # run carries the test more than once, so a strip never shows green over a red row.
+    by_identity = Hash.new { |hash, key| hash[key] = {} }
+    SpecObservation.where(repository_id: @repository.id, test_run_id: trajectory_runs.oldest_first.map(&:id),
+                          spec_identity_id: ids)
+                   .pluck(:spec_identity_id, :test_run_id, :outcome).each do |identity, run_id, outcome|
+      held = by_identity[identity][run_id]
+      by_identity[identity][run_id] = (held == "failed" ? held : (outcome || held))
+    end
+    by_identity
+  end
+
   def newest_test_run
     return @newest_test_run if defined?(@newest_test_run)
 
@@ -1002,8 +1028,22 @@ class RepositoryDashboard
   def trajectory_runs
     return @trajectory_runs if defined?(@trajectory_runs)
 
-    @trajectory_runs = RunWindow.oldest_first(@repository.suite_size_trajectory(@trajectory_run))
+    @trajectory_runs = RunWindow.oldest_first(
+      @repository.suite_size_trajectory(@trajectory_run, limit: window_size)
+    )
   end
+
+  WINDOW_CHOICES = [10, 20, 30].freeze
+
+  # `?window=` — how many runs back the page's history panels reach. A whole-page ask, like
+  # `?branch=`; anything outside the offered sizes falls back to the full window.
+  def requested_window
+    asked = @params[:window].to_s
+    asked = asked.to_i if asked.match?(/\A\d+\z/)
+    WINDOW_CHOICES.include?(asked) ? asked : nil
+  end
+
+  def window_size = requested_window || Repository::TRAJECTORY_LIMIT
 
   # The limit the two run-grain duration rollups were asked for, resolved against each panel's own
   # default. The `?limit=` ask names a magnitude and no panel, so the DEFAULT is per-call-site —

@@ -1,0 +1,11 @@
+<%# RUNS — what CI reported, newest first, every branch interleaved. %>
+<section class="rc-section" id="runs" aria-labelledby="runs-h">
+  <div class="rc-section-head">
+    <h2 class="text-app-h2" id="runs-h">Runs</h2>
+    <p>Every run CI reported, newest first, across all branches.</p>
+  </div>
+  <%= render "repositories/recent_runs" -%>
+  <% if @repository.test_runs.count > 0 %>
+    <p class="text-xs text-app-content-secondary"><%= number_with_delimiter(@repository.test_runs.count) %> test runs in total · owned by <%= @repository.user.display_name %><% if (viewer_access = repository_policy.grantable_permissions unless repository_policy.can?(:owner)) %> · your access: <%= viewer_access.join(", ") %><% end %></p>
+  <% end %>
+</section>

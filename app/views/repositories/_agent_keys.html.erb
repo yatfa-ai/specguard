@@ -1,23 +1,10 @@
     <% if manage_keys %>
-      <%# THE AGENT CREDENTIAL'S PANEL (SPGD-989) — the third credential kind beside the `sgk_`
-          table above, and the repository-side face of SPGD-112's rule for it: a member who minted
-          an agent key over this repository and later lost access leaves the key authenticating
-          (the grant is frozen at mint time — AgentApiKey's header), so the repository's
-          `keys.manage` holders need to SEE it and hold the same Revoke lever they hold over
-          `sgk_` keys. Minting deliberately does not live here: an agent key's grant is a set of
-          repositories and permissions chosen once, at /account, from the minter's own rights.
-
-          The controller loads these rows behind the same `keys.manage` gate — one SELECT against
-          `agent_api_keys`, pinned beside this page's other budgets — and hands the partial only
-          LIVE rows (SPGD-804's rule, on this table too: a revoked row is retained but must not
-          present as a live credential, so it leaves the listing rather than changing its badge). %>
       <%= render UI::PanelComponent.new(title: "Agent keys", id: "agent-keys", class: "lg:col-span-2") do |panel| %>
         <p id="agent-keys-caption" class="mb-3 text-sm text-app-content-secondary">
           Every live agent key whose grant covers this repository. Minted from the owner's
           <%= link_to "account page", account_path %> — revoking one here cuts its token on every
           repository in its set, which the confirm dialog names.
         </p>
-
         <% if @agent_api_keys.any? %>
           <%= render UI::TableComponent.new(columns: ["Name", "Owner", "Key", "Repositories", "Permissions", "Created", "Last used", ""],
                                             describedby: "agent-keys-caption") do %>
@@ -26,18 +13,7 @@
                 <td class="px-3 py-2"><%= agent_api_key.name %></td>
                 <td class="px-3 py-2 text-app-content-secondary">
                   <div class="flex flex-wrap items-center gap-2">
-                    <%# The OWNER, not a minting "Created by": an agent key speaks for nobody, but
-                        its rights were fixed by the person who minted it, and both the archived
-                        and the ex-member markers below are facts about that person. %>
                     <span><%= agent_api_key.user&.display_name || "Unknown" %></span>
-                    <%# An archived owner's token resolves to nothing (`authenticate`'s
-                        `merge(User.active)`), so this row is a record, not a live hazard —
-                        `:neutral`, the tone /account gives a revoked row for the same reason. It
-                        is nevertheless still a `revoked_at: nil` row this page's viewer may need
-                        to retire (an archived owner cannot sign in to do it), so it stays listed
-                        and marked rather than being filtered out. This is a fact about the
-                        CREDENTIAL's own validity, so it renders for every `keys.manage` viewer;
-                        the membership fact below keeps its stricter gate. %>
                     <% if agent_api_key.user&.archived? %>
                       <%= render UI::BadgeComponent.new(
                             tone: :neutral,
@@ -45,13 +21,6 @@
                                    "authenticates. The row stays until it is revoked."
                           ) { "owner archived" } %>
                     <% end %>
-                    <%# SPGD-124's marker, carried to the third credential: the person who minted
-                        this key no longer holds access to THIS repository, and the mint-time
-                        freeze means the key outlived their grant. Warning tone, matching what the
-                        `sgk_` table chose for the same fact. Renders only for a viewer who ALSO
-                        holds `members.manage` — see
-                        RepositoriesController#access_holder_ids; a `keys.manage`-only viewer is
-                        told nothing about membership status, not told less. %>
                     <% if former_member?(agent_api_key.user) %>
                       <%= render UI::BadgeComponent.new(
                             tone: :warning,
@@ -65,35 +34,18 @@
                   <%= agent_api_key.token_hint %>
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary tabular-nums">
-                  <%# The stored set's size — the blast radius one Revoke press covers, since the
-                      cut lands on every repository in the set at once. The confirm dialog names
-                      them; this is the glanceable half of the same fact. %>
                   <%= agent_api_key.repository_ids.size %>
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary">
-                  <%# The stored verb set, or the honest phrase for the minimal grant — the same
-                      rendering /account gives the same column, so one grant reads the same on
-                      both surfaces that show it. %>
                   <%= agent_api_key.permissions.any? ? agent_api_key.permissions.join(", ") : "read only" %>
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary tabular-nums">
                   <%= time_ago_in_words(agent_api_key.created_at) %> ago
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary tabular-nums">
-                  <%# SPGD-1108 — the offboarding arc's DECISION half, repository-side: the
-                      still-presented section below answers the AFTER-cut question ("is the dead
-                      token still arriving?"); this cell answers the BEFORE-cut one — "is this
-                      LIVE key still being used?" — for the keys.manage holder who is precisely
-                      NOT the key's owner and so cannot read /account. The same value, rendered
-                      the same way, as the sgk_ table above and /account give the same column:
-                      "N ago" or "never". %>
                   <%= agent_api_key.last_used_at ? "#{time_ago_in_words(agent_api_key.last_used_at)} ago" : "never" %>
                 </td>
                 <td class="px-3 py-2 text-right">
-                  <%# No Regenerate here, deliberately: the model has no `regenerate!` — a lost
-                      agent token is recovered by minting another and revoking this one. The
-                      confirm names the FULL stored set because the cut lands on all of it, not
-                      only this repository's share of it. %>
                   <%= button_to "Revoke", repository_agent_key_path(@repository, agent_api_key),
                                 method: :delete,
                                 class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
@@ -111,43 +63,18 @@
                 description: "When an owner mints an agent key whose set includes this repository, it is listed here."
               ) %>
         <% end %>
-
         <% if @presented_revoked_agent_keys.any? %>
-          <%# THE VERIFY HALF OF THE OFFBOARDING ARC, REPOSITORY-SIDE (SPGD-1054) — the same
-              answer SPGD-1023 serves over the API, rendered inside the panel that holds the
-              Revoke lever, so the web revoker who is not the key's minter (the common case)
-              does not have to curl for the fact this page's indicator already declares the
-              worst state a repository can be in. The rows are the still-presented side of the
-              revoked agent keys, read through `ApiKeyPartition` in the dashboard behind the
-              SAME gate as the live table above — this section sits inside the `manage_keys`
-              branch, so it renders for exactly the viewers who may act on it, and zero new
-              authorization exists.
-
-              Rendered only when rows exist: a key revoked and never presented again produces
-              no row, nothing synthesized — the indicator's honest-bound rule (state 1) and
-              the API endpoint's, shared.
-
-              Deliberately a LIST and not a second table: the request specs read the live
-              table through `#agent-keys table`, and a second <table> in the panel would make
-              that finder ambiguous — the live listing is the surface these specs pin, so it
-              keeps the panel's only table.
-
-              The caption carries the honesty clause the stamp's own epistemics demand
-              (AgentApiKey#revoked_and_still_presented?): `last_refused_at` is the LAST
-              observed presentation — a recency, never present tense. The "last presented N
-              ago" cell is /account's rendering of the same column, so one fact reads the same
-              on both surfaces. %>
           <div id="agent-keys-revoked" class="mt-6 border-t border-app-panel-border pt-4">
             <p id="agent-keys-revoked-caption" class="mb-3 text-sm text-app-content-secondary">
               <span class="font-medium text-app-content">Revoked and still presented.</span>
               Each key below was revoked and its token has arrived at the API since, where it
-              was refused. The presented age is the last time the platform saw the token — a
+              was rejected. The presented age is the last time the platform saw the token — a
               recency, never a claim that something is presenting it now. The token lives in
               the client's secret store; the fix is updating it.
             </p>
             <ul class="space-y-2">
               <% @presented_revoked_agent_keys.each do |agent_api_key| %>
-                <li class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-md border border-app-panel-border px-3 py-2 text-sm">
+                <li class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-control border border-app-panel-border px-3 py-2 text-sm">
                   <span class="font-medium text-app-content"><%= agent_api_key.name %></span>
                   <span class="text-app-content-secondary"><%= agent_api_key.user&.display_name || "Unknown" %></span>
                   <span class="font-mono text-xs text-app-content-secondary"><%= agent_api_key.token_hint %></span>

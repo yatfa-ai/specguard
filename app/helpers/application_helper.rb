@@ -32,7 +32,7 @@ module ApplicationHelper
   # nothing in the suite able to see it. The `:error` tone is deliberately NOT here: it is markup,
   # each caller picks its own badge, and both pick error for the reason the indicator gives — work
   # is being destroyed, not merely absent.
-  def refused_deliveries_label = "Deliveries refused"
+  def refused_deliveries_label = "Rejected ingests"
 
   # The sentence under that label: WHEN the last refusal landed, and the one thing a reader who has
   # just seen a green "Connected" needs told — that the credential is fine and the payload was not.
@@ -48,7 +48,7 @@ module ApplicationHelper
   # grid, which reads one grouped `MAX(occurred_at)` for the whole page — can render it without
   # constructing an object it has no other use for.
   def refused_deliveries_note(last_rejection_at)
-    "Last refused #{time_ago_in_words(last_rejection_at)} ago — " \
+    "Last rejected #{time_ago_in_words(last_rejection_at)} ago — " \
       "the key works, the payload did not."
   end
 

@@ -1,0 +1,30 @@
+<% drill_open = drill_in_open? %>
+<%# THE ONE DETAIL DRAWER. A table row fills it from the <template> it carries; a server drill-in
+    (an open spec file, directory or description) renders it already full, with a real URL, so it
+    survives a reload and the back button closes it. It is an overlay, never a nested scroll area
+    inside the page. %>
+<div class="rc-scrim" data-drawer-target="scrim" data-open="<%= drill_open %>"></div>
+<aside class="rc-drawer" data-drawer-target="panel" data-open="<%= drill_open %>" data-server="<%= drill_open %>" <%= "inert" unless drill_open %> role="dialog" aria-modal="false" aria-labelledby="drawer-title">
+  <div class="rc-drawer-head">
+    <div class="min-w-0 flex-1">
+      <p class="rc-drawer-kind" data-drawer-target="kind"><%= drill_in_kind if drill_open %></p>
+      <h2 class="rc-drawer-title" id="drawer-title" data-drawer-target="title"><%= drill_in_title if drill_open %></h2>
+    </div>
+    <% if drill_open %>
+      <%= link_to "Close", close_drill_in_path(@repository), class: UI::ButtonComponent.classes(variant: :ghost, size: :sm), data: { drawer_target: "close", turbo_action: "replace" } %>
+    <% else %>
+      <button type="button" class="<%= UI::ButtonComponent.classes(variant: :ghost, size: :sm) %>" data-drawer-target="close" data-action="drawer#close">Close</button>
+    <% end %>
+  </div>
+  <div class="rc-drawer-body" data-drawer-target="body">
+    <% if drill_open %>
+      <div class="rc-drill-stack">
+        <%= render "repositories/unstable_test_runs" -%>
+        <%= render "repositories/examples_in_this_spec_file" -%>
+        <%= render "repositories/spec_files_in_this_directory" -%>
+        <%= render "repositories/files_that_grew_or_shrank_in_this_directory" -%>
+        <%= render "repositories/examples_under_this_description" -%>
+      </div>
+    <% end %>
+  </div>
+</aside>

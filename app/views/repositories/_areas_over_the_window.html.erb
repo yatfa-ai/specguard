@@ -1,0 +1,118 @@
+    <% if @spec_directory_window_growth %>
+      <% window_growth = @spec_directory_window_growth %>
+      <%= render UI::PanelComponent.new(title: "Areas that grew or shrank over the window",
+                                        id: "spec-directory-window-growth") do %>
+        <% if window_growth.comparable? && window_growth.any_movement? %>
+          <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-window-growth-basis") do %>
+            <% if window_growth.truncated? %>
+              The <%= number_with_delimiter(window_growth.rows.size) %>
+              <%= "area".pluralize(window_growth.rows.size) %> that moved most across this window,
+              of the <%= number_with_delimiter(window_growth.directory_count) %> either end
+              recorded — largest movement first, in both directions.
+            <% else %>
+              All <%= number_with_delimiter(window_growth.directory_count) %>
+              <%= "area".pluralize(window_growth.directory_count) %> either end of this window
+              recorded — largest movement first, in both directions.
+            <% end %>
+            <%= spec_directory_window_growth_baseline_sentence(window_growth) %>
+            <%= spec_directory_window_growth_span_sentence(window_growth) %>
+            Only the two ends are compared, so what an area did between them is not shown: an area
+            that grew and shrank back to where it started reads here as an area that did not move.
+            <% if window_growth.any_unmoved? %>
+              Where the movement runs out before the list does, areas that did not move are listed
+              too, as ±0.
+            <% end %>
+            Each area is the immediate parent directory of the files that ran its examples, so the
+            areas sit side by side rather than inside one another.
+            A test that was MOVED is the same test, and this panel cannot see the difference: a
+            renamed or relocated directory appears here as one area growing and another shrinking
+            by the same amount, with nothing added and nothing deleted — and across a window this
+            long, that rename may be one nobody remembers.
+            Counted off the
+            <%= number_with_delimiter(window_growth.baseline_recorded_count) %> and
+            <%= number_with_delimiter(window_growth.anchor_recorded_count) %> example rows the two
+            ends recorded here, which may legitimately differ from the suite size on the Overview
+            panel above.
+          <% end %>
+          <%= render UI::TableComponent.new(
+                columns: ["Directory", { label: "Examples at baseline", end: true }, { label: "Examples now", end: true }, { label: "Change across window", end: true }],
+                describedby: "spec-directory-window-growth-basis", sortable: true) do %>
+            <% window_growth.rows.each do |area| %>
+              <tr>
+                <td class="font-mono text-xs [overflow-wrap:anywhere]"><%= area.path %></td>
+                <td class="num mute" data-sort="<%= area.previous_count %>"><%= area.baseline_count_label %></td>
+                <td class="num mute" data-sort="<%= area.latest_count %>"><%= area.anchor_count_label %></td>
+                <td class="num" data-sort="<%= area.change %>" aria-label="<%= area.change_reading %>"><%= delta_tag(area.change_label, tone: area.change.zero? ? :flat : :info) %></td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif window_growth.comparable? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No area moved across this window",
+                description: "Every one of the " \
+                             "#{number_with_delimiter(window_growth.directory_count)} " \
+                             "#{'area'.pluralize(window_growth.directory_count)} the two ends of " \
+                             "this window recorded holds the same number of examples in both. " \
+                             "#{spec_directory_window_growth_baseline_sentence(window_growth)} " \
+                             "#{spec_directory_window_growth_span_sentence(window_growth)} Only " \
+                             "those two ends were compared, so an area that grew and shrank back " \
+                             "in between is counted here as an area that did not move."
+              ) %>
+        <% else %>
+          <% case window_growth.state %>
+          <% when :anchor_unmeasured %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run reported no tests, so there is no suite to compare area " \
+                               "by area against anything earlier on this branch. A run that " \
+                               "reported zero tests has a count but not a measurement."
+                ) %>
+          <% when :no_earlier_run %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No window to compare across yet",
+                  description: "This branch has one run in the window so far, and a comparison " \
+                               "needs two ends. This panel fills in as soon as there is an earlier " \
+                               "run to measure against."
+                ) %>
+          <% when :no_measured_baseline, :no_comparable_composition %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: spec_directory_window_growth_no_baseline_description(window_growth)
+                ) %>
+          <% when :baseline_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The run this comparison landed on " \
+                               "(#{window_growth.baseline_run.commit_sha.first(7)}, " \
+                               "#{window_growth.runs_back} back in this window) recorded no " \
+                               "per-example detail, so it has no areas to compare against — every " \
+                               "area of this run would read as new. A run ingested before that " \
+                               "detail was stored, or sent by a client that reports only totals, " \
+                               "has a suite size and none of these rows."
+                ) %>
+          <% when :anchor_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run recorded no per-example detail, so it has no areas to " \
+                               "compare — every area of the earlier run would read as deleted. A " \
+                               "client that reports only totals sends a suite size and none of " \
+                               "these rows."
+                ) %>
+          <% else %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "Neither this run nor " \
+                               "#{window_growth.baseline_run.commit_sha.first(7)}, the run at the " \
+                               "far end of this window, recorded per-example detail, so there are " \
+                               "no areas to compare. Suite growth over the window as a whole is on " \
+                               "the chart above, which reads the run totals rather than these rows."
+                ) %>
+          <% end %>
+        <% end %>
+        <% if @layer_window_growth&.comparable? %>
+          <p class="text-xs text-app-content-secondary mt-3" id="layer-window-growth">
+            Declared layers across this window: <%= @layer_window_growth.label %>
+          </p>
+        <% end %>
+      <% end %>
+    <% end %>
