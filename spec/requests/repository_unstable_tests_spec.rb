@@ -1026,4 +1026,69 @@ RSpec.describe "Repository unstable tests", type: :request do
     expect(panel?).to be(true)
     expect(row_names).to eq(["Invoice finalize locks the line items"])
   end
+
+  # SPGD-1755 — `?layer=` narrows this panel's CANDIDATE step. The basis line must say so, a layer with
+  # no failures must read as that and not as "no test changed its outcome", and the row links must
+  # carry the layer so opening a test does not drop the reader's narrowing.
+  describe "?layer= narrowing the candidate step" do
+    def layered_repository
+      repository = create_repository(user: @user)
+      4.times do |index|
+        failing = index.even? ? "failed" : "passed"
+        specs = [
+          annotated_spec(file_path: "spec/requests/checkout_spec.rb", line_number: 1, name: "Checkout charges the card",
+                         outcome: failing, layer: "request")
+            .merge(intent: { entity: "Checkout", action: "charge", behavior: "charges", layer: "request" }),
+          annotated_spec(file_path: "spec/models/money_spec.rb", line_number: 1, name: "Money rounds half to even",
+                         outcome: index < 2 ? "failed" : "passed", layer: "unit")
+            .merge(intent: { entity: "Money", action: "round", behavior: "rounds", layer: "unit" })
+        ]
+        ingest(repository, specs, commit_sha: "lyr#{index}sha#{format("%07d", index)}", at: (30 - index).days.ago)
+      end
+      repository
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "narrow the unstable ranking", "behavior": "layer=request lists only the request test that failed and the basis line says the ranking is narrowed to the request layer", "layer": "request"}
+    it "lists only the layer's failing tests and says so in the basis line" do
+      get repository_path(layered_repository), params: { layer: "request" }
+
+      expect(row_names).to eq(["Checkout charges the card"])
+      expect(basis_line).to have_text("Narrowed to the request layer")
+      expect(section?("unstable-tests-empty-layer")).to be(false)
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "carry the layer through links", "behavior": "the row's drill-in link keeps the layer ask so opening a test does not drop the narrowing", "layer": "request"}
+    it "carries the layer through the row's drill-in link" do
+      get repository_path(layered_repository), params: { layer: "request" }
+
+      href = panel.find("tbody a", text: "Checkout charges the card")[:href]
+      expect(Rack::Utils.parse_query(URI(href).query)).to include("layer" => "request")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render an empty layer", "behavior": "a layer no failed example declared renders a named empty state instead of a titled empty table or the no-change message", "layer": "request"}
+    it "renders a defined empty state naming the layer" do
+      get repository_path(layered_repository), params: { layer: "system" }
+
+      expect(response).to have_http_status(:ok)
+      empty = panel.find("#unstable-tests-empty-layer")
+      expect(empty).to have_text("No failures by system-layer tests in this window")
+      expect(empty).to have_text("says nothing about whether this suite is flaky")
+      expect(panel).not_to have_css("tbody tr")
+      expect(section?("unstable-tests-none")).to be(false)
+      expect(section?("unstable-tests-incomparable")).to be(false)
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "keep the unasked page", "behavior": "an unasked or bogus layer leaves the panel identical with no layer empty state or narrowing sentence", "layer": "request"}
+    it "is unchanged when unasked or when the layer is outside the declared set" do
+      repository = layered_repository
+      get repository_path(repository)
+      unasked = [row_names, basis_line.text]
+      expect(section?("unstable-tests-empty-layer")).to be(false)
+
+      get repository_path(repository), params: { layer: "bogus" }
+
+      expect([row_names, basis_line.text]).to eq(unasked)
+      expect(basis_line).not_to have_text("Narrowed to")
+    end
+  end
 end

@@ -37,6 +37,8 @@
               has to be able to check against their own repository. %>
           <p class="text-xs text-app-muted mb-3" id="unstable-tests-basis">
             <%= unstable_tests_window_sentence(@unstable_tests) %>
+            <%# `?layer=` (SPGD-1755): names the narrowing, so the list is read as the layer's. %>
+            <%= unstable_tests_layer_clause(@unstable_tests) %>
             <%= unstable_tests_matching_sentence %>
             <%= unstable_tests_boundary_sentence %>
             <%# The two silences: rows the rule could not use, and candidates the narrowing did not
@@ -155,6 +157,16 @@
                 </tr>
               <% end %>
             <% end %>
+          <% elsif @unstable_tests.layer? && @unstable_tests.candidate_count.zero? %>
+            <%# Reachable ONLY under `?layer=` (SPGD-1755): no failed example declared this layer, so
+                "No test changed its outcome" below would be a claim about the whole window the
+                narrowing never read. Mirrors `#slowest-tests-window-empty-layer`. %>
+            <div id="unstable-tests-empty-layer">
+              <%= render UI::EmptyStateComponent.new(
+                    title: "No failures by #{@unstable_tests.layer}-layer tests in this window",
+                    description: unstable_tests_empty_layer_description(@unstable_tests)
+                  ) %>
+            </div>
           <% else %>
             <%# The honest zero, reachable only behind `comparable?` above — so it is only ever
                 printed over a window that DID report outcomes, and never over one that was silent.
