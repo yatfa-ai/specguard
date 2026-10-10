@@ -315,6 +315,12 @@ class RepositoryOverview
       # `grouped: false`) without `?branch=`. See `serialized_layer_growth_window`.
       layer_growth_window: growth.serialized_layer_growth_window,
       layer_growth: growth.serialized_layer_growth,
+      # BESIDE `layer_growth`, gated on `?branch=` the same way: the declared-layer MACHINE TIME over
+      # the window's two ENDPOINTS (`basis: "two_endpoints"`). `layer_runtime_growth` below cannot see a
+      # fixture that costs ~4s more per push; this can. Null (and `grouped: false`) without `?branch=`.
+      # See `serialized_layer_runtime_window_growth_window`.
+      layer_runtime_window_growth_window: growth.serialized_layer_runtime_window_growth_window,
+      layer_runtime_window_growth: growth.serialized_layer_runtime_window_growth,
       # BESIDE `directory_growth` and NEVER IN PLACE OF IT — a different comparison over the same
       # grain, not a refinement of that one. The pair above compares the two ENDPOINTS of a
       # thirty-run branch window and is served only when `?branch=` named the branch to walk; this

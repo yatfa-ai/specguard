@@ -387,6 +387,54 @@ class RepositoryGrowthSerializer
     }
   end
 
+  # The contract block for `layer_runtime_window_growth` — the declared-layer TIME movement over the
+  # `?branch=` window, the time sibling of `layer_growth_window` and shaped exactly like it:
+  # `basis: "two_endpoints"` (the figures compare the window's two ENDS and are not a series — a
+  # fixture slowed in run 12 and sped up in run 25 reads `change: 0.0`), `branch_scope`, `branch`,
+  # `grouped`. `grouped` is whether the presenter was CONSTRUCTED, so it is exactly
+  # `layer_runtime_window_growth_window.state != null`; without `?branch=` it is false, `state` is
+  # null, and no query ran. (`layer_runtime_growth{,_window}` are the previous-run pair, hence the name.)
+  #
+  # `state` is `LayerWindowRuntimeGrowth#state` (eleven); the two commit shas and `runs_back` name the
+  # baseline the SHARED {WindowBaseline} walk landed on, so they equal `directory_growth_window`'s and
+  # `layer_growth_window`'s for the same window. `comparable` is exactly
+  # `layer_runtime_window_growth != null`.
+  def serialized_layer_runtime_window_growth_window
+    growth = layer_window_runtime_growth
+    baseline = growth&.baseline_run
+
+    {
+      basis: "two_endpoints",
+      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch: requested_branch,
+      grouped: !growth.nil?,
+      state: growth&.state,
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: growth&.anchor_run&.commit_sha,
+      baseline_commit_sha: baseline&.commit_sha,
+      runs_back: baseline && growth.runs_back
+    }
+  end
+
+  # The declared-layer TIME movement over the window — `null` in EVERY non-comparable state, never
+  # zeros, and `null` without `?branch=`. The body of `layer_runtime_growth`: per layer, in
+  # `SpecObservation::DECLARED_LAYER_KEYS` order, the summed seconds at each end, how many examples
+  # each was summed over, the recorded example counts, and `change` (anchor − baseline, `null` unless
+  # BOTH ends timed that layer). Operands and difference only — no view strings, no verdict.
+  def serialized_layer_runtime_window_growth
+    growth = layer_window_runtime_growth
+
+    return nil unless growth&.comparable?
+
+    {
+      layers: growth.rows.transform_values do |row|
+        { baseline_seconds: row.baseline_seconds, anchor_seconds: row.anchor_seconds,
+          baseline_timed_count: row.baseline_timed_count, anchor_timed_count: row.anchor_timed_count,
+          baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
+      end
+    }
+  end
+
   # The contract block for `layer_run_growth`, shaped like `directory_run_growth_window` and
   # carrying the same two runs (`anchor_commit_sha` = the latest/named run, `baseline_commit_sha` =
   # its predecessor ON ITS OWN BRANCH). `state` is `LayerRunGrowth#state`, plus the two
@@ -1286,5 +1334,16 @@ class RepositoryGrowthSerializer
 
     @layer_window_growth =
       requested_branch && LayerWindowGrowth.for(history_runs.oldest_first, branch: requested_branch)
+  end
+
+  # The window's declared-layer TIME presenter, or `nil` without `?branch=` — gated and oriented
+  # exactly as {#layer_window_growth} is (same gate, same window, same shared {WindowBaseline} walk),
+  # memoized across the nil. The durations ride the same memoized per-run aggregate as `layer_counts`,
+  # so asking them of the two endpoints adds no observation read to the ones `layer_growth` makes.
+  def layer_window_runtime_growth
+    return @layer_window_runtime_growth if defined?(@layer_window_runtime_growth)
+
+    @layer_window_runtime_growth =
+      requested_branch && LayerWindowRuntimeGrowth.for(history_runs.oldest_first, branch: requested_branch)
   end
 end

@@ -1887,6 +1887,15 @@
             Declared layers across this window: <%= @layer_window_growth.label %>
           </p>
         <% end %>
+        <%# The same two ends in MACHINE TIME — the `LayerWindowRuntimeGrowth` object
+            `layer_runtime_window_growth` on the API is built from, worded by its own `#label`. It
+            compares the window's first and last comparable runs, not a trend, and summed example time
+            is not wall clock. Shown only when comparable. %>
+        <% if @layer_window_runtime_growth&.comparable? %>
+          <p class="text-xs text-app-content-secondary mt-1" id="layer-window-runtime-growth">
+            Declared-layer time, this window's two ends compared (not a trend): <%= @layer_window_runtime_growth.label %>
+          </p>
+        <% end %>
       <% end %>
     <% end %>
 
