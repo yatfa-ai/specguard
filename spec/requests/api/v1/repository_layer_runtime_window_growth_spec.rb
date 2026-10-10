@@ -285,6 +285,7 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
 
       expect(window_line).to have_text("two ends", normalize_ws: true)
       expect(window_line).to have_text("request +41.20s", normalize_ws: true)
+      expect(window_line).to have_text("unit ±0 · request +41.20s · undeclared −0.25s over 3 runs", normalize_ws: true)
       runs = RunWindow.oldest_first(repository.suite_size_trajectory(repository.test_runs.order(created_at: :desc).first))
       expect(window_line.text.squish).to include(LayerWindowRuntimeGrowth.for(runs, branch: "main").label)
     end
