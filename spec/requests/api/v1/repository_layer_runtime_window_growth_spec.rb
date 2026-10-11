@@ -275,7 +275,7 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
   end
 
   describe "the Overview panel line" do
-    def window_line = Capybara.string(response.body).find("#spec-directory-window-growth #layer-window-runtime-growth")
+    def window_line = Capybara.string(response.body).find("#changes #layer-window-runtime-growth")
 
     # @intent: { entity: "TestRun", action: "show the window time movement", behavior: "the window panel prints the LayerWindowRuntimeGrowth label worded as the window's two ends, equal to the object's label", layer: "request" }
     it "prints the movement for a comparable window, worded by LayerWindowRuntimeGrowth#label" do

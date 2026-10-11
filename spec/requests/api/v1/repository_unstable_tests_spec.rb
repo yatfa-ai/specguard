@@ -239,12 +239,10 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     def panel_rows
       panel = Capybara.string(response.body).find("#unstable-tests")
       panel.all("tbody tr").map do |row|
-        name_cell, seen_cell, failed_cell, outcome_cell = row.all("td")
-        files = name_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }.first
-        name = name_cell.text.gsub(/\s+/, " ").strip
-        name = name.delete_suffix(files).strip if files
-
-        { "name" => name, "seen" => seen_cell.text.strip, "failed" => failed_cell.text.strip,
+        name_cell, _strip_cell, failed_cell, seen_cell, outcome_cell = row.all("td")
+        { "name" => name_cell.first(".row-open").text.squish,
+          "seen" => seen_cell.text.strip,
+          "failed" => failed_cell.text.squish[/(\d+ of \d+)/, 1],
           "outcome_words" => outcome_cell.all("span span").map { |badge| badge.text.strip } }
       end
     end

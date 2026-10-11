@@ -244,7 +244,8 @@ RSpec.describe "GET /api/v1/repository — layer_run_growth", type: :request do
       get repository_path(repository)
 
       html = Capybara.string(response.body)
-      expect(html).to have_text("Declared layers unit 2", normalize_ws: true)
+      expect(html.find("#layers").all("tbody tr").map { |row| row.all("td").first(2).map { |cell| cell.text.squish } })
+        .to eq([%w[unit 2]])
       expect(html).to have_no_css("#layer-run-growth")
     end
   end
