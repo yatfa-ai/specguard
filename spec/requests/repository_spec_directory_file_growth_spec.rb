@@ -52,6 +52,14 @@ RSpec.describe "Repository spec directory file growth", type: :request do
   # whichever one Capybara reached first.
   def area_panel = page.find("#spec-directory-growth")
 
+  # An area's row in "Areas that grew or shrank": the handle (the button that opens the drawer) and
+  # the drawer's "Which files moved" action, which is the link into this drill-in.
+  def area_row(path) = area_panel.all("tbody tr", visible: :all).find { |tr| tr.first(".row-open").text(:all).squish == path }
+
+  def area_handle(path) = area_row(path).first(".row-open")
+
+  def area_action(path) = area_row(path).find("a", exact_text: "Which files moved", visible: :all)
+
   def new_repository
     @repository_seq = (@repository_seq || 0) + 1
 
@@ -61,10 +69,10 @@ RSpec.describe "Repository spec directory file growth", type: :request do
   # One row as a reader meets it: the file, both operands, and the movement between them.
   def rows
     panel.all("tbody tr").map do |row|
-      path, then_count, now_count, change = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, then_count, now_count, change = row.all("td").first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
       { path: path, then: then_count, now: now_count, change: change,
-        reading: row.all("td").last["aria-label"] }
+        reading: row.all("td")[3]["aria-label"] }
     end
   end
 
@@ -125,10 +133,10 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     it "links each area of 'Areas that grew or shrank' to its per-file drill-in" do
       get repository_path(moved_area)
 
-      href = area_panel.find("a", text: "spec/models", match: :prefer_exact)[:href]
+      href = area_action("spec/models")[:href]
 
       expect(href).to include("spec_directory=#{CGI.escape('spec/models')}")
-      expect(href).to include("#spec-directory-file-growth")
+      expect(href).to end_with("#changes")
     end
 
     # A list of choices with one of them taken, and the panel it opens is a long way down the page.
@@ -138,8 +146,8 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     it "marks the open area and only the open area" do
       get repository_path(moved_area, spec_directory: "spec/models")
 
-      expect(area_panel.find("a", text: "spec/models", match: :prefer_exact)["aria-current"]).to eq("true")
-      expect(area_panel.find("a", text: "spec/requests", match: :prefer_exact)["aria-current"]).to be_nil
+      expect(area_handle("spec/models")["aria-current"]).to eq("true")
+      expect(area_handle("spec/requests")["aria-current"]).to be_nil
     end
   end
 

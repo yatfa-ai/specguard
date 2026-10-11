@@ -1,5 +1,27 @@
-    
-    <% if @spec_directory_files %>
+<%# == One spec directory, opened
+        The rung BELOW the panel above and ABOVE the file drill-down further up — the middle of the
+        three, and the one that was missing. A reader could learn that `spec/models` carries six
+        minutes of the run and, separately, that `spec/models/order_spec.rb` holds three hundred
+        examples; nothing joined them. The by-file rollup could not: it is a capped ten too, and an
+        area is heavy exactly when it holds many ordinary files, so the heaviest area on this page
+        is the one with none of its files in that list. Its rows were reachable from nowhere.
+
+        Each file listed here links into the "Examples in this spec file" panel above, which closes
+        area → file → example. Both parameters live on one URL, so opening a file does not close the
+        area it was opened from.
+
+        Rendered only when an area was ASKED for, and the read is taken only then: a page nobody
+        asked an area of costs exactly what it cost before this existed.
+
+        An EQUALITY predicate on the area expression, at ONE depth — `spec/models/orders` is its own
+        row in the panel above and is not gathered into `spec/models` here. A SUBTREE would be a
+        prefix predicate, wants a `text_pattern_ops` index and therefore a migration, and would
+        re-open the drill-down TREE `SpecObservation.directory_durations_in` says is a different
+        question. It is deliberately not this panel, exactly as it is deliberately not the one above.
+
+        Same visibility rule and same gate as the panels around it: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+<% if @spec_directory_files %>
       <%= render UI::PanelComponent.new(title: "Spec files in this directory", id: "spec-directory-files", class: "rc-drill") do |panel| %>
         <% panel.with_actions do %>
           <%# The way back OUT of THIS ask only (`spec_directory: nil`, explicit): an open file or

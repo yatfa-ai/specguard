@@ -44,7 +44,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
   # second one.
   def push_rows
     Capybara.string(response.body).find("#spec-directory-growth").all("tbody tr").to_h do |row|
-      cells = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      cells = row.all("td").first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
       [cells.first, cells.last]
     end
@@ -52,10 +52,10 @@ RSpec.describe "Repository spec directory window growth", type: :request do
 
   def rows
     panel.all("tbody tr").map do |row|
-      path, baseline, now, change = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, baseline, now, change = row.all("td").first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
       { path: path, baseline: baseline, now: now, change: change,
-        reading: row.all("td").last["aria-label"] }
+        reading: row.all("td")[3]["aria-label"] }
     end
   end
 

@@ -1,5 +1,20 @@
-    
-    <% if @latest_test_run.present? %>
+<%# == Suite growth over time
+        The Overview above answers "+47 since the last run" — one subtraction across two rows. This
+        answers what the suite has done over the last thirty runs, which `test_runs` has been able
+        to say since Phase 2 and nothing has ever asked.
+
+        Built on the BRANCH history (`Repository#suite_size_trajectory`), never on the "Recent runs"
+        panel below, which is one interleaved history across every branch and disclaims being a
+        series in those exact words. A line drawn through that panel's rows would connect a trunk
+        run to a feature branch's and call the gap growth.
+
+        Outside the `manage_keys` gate for the same reason the Overview and Recent runs are: read-
+        only suite telemetry, nothing credential, nothing actionable.
+
+        Not rendered at all when CI has never reported. The Overview's "No CI run has reported yet"
+        is the page's one never-ingested empty state, and a second dashed box saying a quieter
+        version of it would read as a different, milder fact. %>
+<% if @latest_test_run.present? %>
       <%= render UI::PanelComponent.new(title: "Suite growth", id: "suite-trajectory") do %>
         <div class="space-y-3">
           <% if @suite_trajectory.branch.blank? %>

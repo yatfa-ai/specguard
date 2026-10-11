@@ -1,5 +1,51 @@
-    
-    <% if @unannotated_directories %>
+<%# == HOW MUCH OF EACH AREA SPECGUARD CAN ACTUALLY READ
+        The discharge of the one figure on the Overview panel that named a problem and offered no
+        route into it. That panel used to print `total_specs_count - annotated_specs_count` as "Not
+        visible to SpecGuard" and then say, in as many words, *"SpecGuard cannot see the other 12,403
+        tests."* A subtraction was the entire answer it could give: a five-figure count, and not one
+        path a reader could open. This panel is the rows behind it.
+
+        SPGD-711 then corrected the claim on both surfaces. The subtraction counts the examples
+        carrying no AUTHORED `@intent`, which is exact; SpecGuard nonetheless READS most of them,
+        from the `Class#method behavior` description the client has been sending and this platform
+        has been storing all along (see `DerivedIntent`). So each area is split three ways here —
+        authored, derived, unreadable — and only the third is a count of tests the product may
+        describe as ones it cannot see.
+
+        The same rows have had a ranked, scoped worklist on the API since SPGD-591/608/623 and on
+        the MCP bridge since SPGD-599. The dashboard — the surface the owner actually opens — was
+        the rung that was never built, and it is the item SPGD-590 deferred by name.
+
+        NOT the by-duration rollup directly above, which ranks the same population — one run's areas
+        — on a different axis and cannot stand in for this one. That panel ranks by WALL CLOCK and
+        its coverage column is TIMING coverage; an area of four hundred fast unannotated examples
+        heads this list and appears nowhere near the head of that one. Two reads, side by side,
+        each stating its own basis.
+
+        Rendered whenever there is a RUN, and the three states it distinguishes are the whole point
+        of the gating:
+
+        * No run at all — no panel. The Overview's "No CI run has reported yet" is this page's one
+          statement of that, and a second empty state repeating it would invite the reading that a
+          repository CI has never reported for measured zero debt.
+        * A run that wrote no per-example rows — the panel renders and says the DETAIL is missing.
+          That is a fact about what the client sent, and it must not wear the spelling of "nothing
+          is unannotated".
+        * A run whose rows carry no debt — the panel renders and says so out loud. `RejectedIngests`
+          states the rule this follows: a positive finding has to be distinguishable from "SpecGuard
+          does not track that", and a panel that vanished when the news was good would leave the two
+          looking identical.
+
+        Outside the `manage_keys` gate, like the rankings above: read-only suite telemetry, nothing
+        credential and nothing actionable on these rows.
+
+        EACH AREA IS A LINK, and it was not. This panel shipped naming an area for an ask only the
+        JSON API could answer — `UnannotatedDirectories.for` takes no narrowing argument, and there
+        was no per-area rung beneath this one on the page — so a reader handed a ranking of where
+        their debt was had to leave the product to see one test in it. There is a rung now:
+        "Unannotated tests here", opened with `?spec_directory=`, which is the SAME ask the duration
+        drill-downs read rather than a second parameter minted for this one. %>
+<% if @unannotated_directories %>
       <%= render UI::PanelComponent.new(title: "How SpecGuard reads this suite, by area",
                                         id: "unannotated-directories") do %>
         <% if @unannotated_directories.recorded? %>

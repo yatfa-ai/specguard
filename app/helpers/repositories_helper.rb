@@ -1144,8 +1144,12 @@ module RepositoriesHelper
                    aria: { label: parts.map { |layer, count| "#{layer} #{number_with_delimiter(count)}" }.join(", ") }) do
       safe_join(parts.map { |layer, count| tag.i("", data: { r: ranks[layer] }, style: "flex: #{count} 1 0") })
     end
+    # "Undeclared" is ALWAYS named, even at zero: it is the examples that declared no layer, and a
+    # key that omitted it would let a reader take a fully-declared file and a file nobody counted
+    # for the same thing. The bar draws only what has a count; the key states the whole mix.
+    key_parts = layer_counts.select { |layer, count| count.positive? || layer == :undeclared }
     key_list = tag.ul(class: "rc-key") do
-      safe_join(parts.map { |layer, count| tag.li(safe_join([layer.to_s, " ", tag.strong(number_with_delimiter(count))]), data: { r: ranks[layer] }) })
+      safe_join(key_parts.map { |layer, count| tag.li(safe_join([layer.to_s, " ", tag.strong(number_with_delimiter(count))]), data: { r: ranks[layer] }) })
     end
     key ? safe_join([bar, key_list]) : bar
   end

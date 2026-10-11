@@ -1,5 +1,45 @@
-    
-    <% if @unannotated_examples %>
+<%# == The unannotated tests THEMSELVES, for the place the reader picked
+        The last rung of the ladder the Overview panel opens and "How SpecGuard reads this suite, by
+        area" narrows. The Overview used to print "Not visible to SpecGuard" as `total_specs_count -
+        annotated_specs_count` and say *"SpecGuard cannot see the other N tests"*; the ranking above
+        names the AREAS that count is concentrated in. Neither names a TEST, and until this panel the
+        only route to one was `GET /api/v1/repository?unannotated_examples=1&spec_directory=…` with
+        an API key — a route off the product, for the reader the product had just handed a worklist
+        to.
+
+        SPGD-711 then corrected what may be said ABOUT these rows without changing which rows they
+        are. Every example here lacks an authored `@intent` — exact, and the same predicate the
+        Overview subtracts. Most of them SpecGuard nonetheless READS, from the description the client
+        sends and this platform stores; the last column shows exactly what it read, so a reader can
+        check the reading rather than take a badge's word for it. The rows it read nothing from come
+        FIRST, because the list is capped at a hundred and those are the ones that must not fall off
+        the page.
+
+        Rendered only when a narrowing was ASKED for, and the read is taken only then. The model's
+        narrowings are OPTIONAL and whole-run is a complete ask on the JSON endpoint; this surface
+        deliberately does not take it, for the reason the controller states: a hundred rows of debt
+        nobody asked for is the Overview's subtraction again at length.
+
+        NO NEW PARAMETER. It rides `?spec_directory=` and `?spec_file=`, so one ask opens EVERY
+        panel that reads it, each answering in its own grain over the same area. `show.html.erb`
+        states the rule at "Areas that grew or shrank": that is how `drill_down_path` composes asks,
+        and it is not a collision to be fixed by minting a second parameter.
+
+        NO "Close" BUTTON, and its absence is a decision rather than an omission. The three panels
+        that carry one each OWN an ask, and closing it is the gesture that dismisses them. This panel
+        owns neither of the asks it rides: a "Close" here would have to clear `?spec_directory=`,
+        which would close the two panels that ask belongs to as a side effect — the precise inversion
+        of the carry-through rule `RepositoriesHelper#drill_down_path` exists to keep ("closing an
+        area is not a request to close the file", and in every other direction). The reader dismisses
+        this panel with the Close button of the panel that owns the ask, which is where they set it.
+
+        It PRESENTS and does not judge — the rule `UnannotatedExamples` and `UnannotatedDirectories`
+        both state, and it governs this partial too: rows, and never a fraction, a threshold or a
+        colour-coded verdict on one of them.
+
+        Same visibility rule and same gate as the panels around it: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+<% if @unannotated_examples %>
       <% narrowings = [@unannotated_examples.spec_file, @unannotated_examples.spec_directory].compact %>
       <%= render UI::PanelComponent.new(title: "Unannotated tests here", id: "unannotated-examples") do %>
         <% if narrowings.size > 1 %>

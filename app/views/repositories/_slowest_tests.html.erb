@@ -1,5 +1,26 @@
-    
-    <% if @slowest_examples&.recorded? %>
+<%# == The slowest tests of the latest run
+        The first surface SpecGuard renders off `spec_observations`. Every other panel on this page
+        is about runs or about SHARDS: the Overview can say a slice ran long and cannot say which
+        test made it, because until these rows landed there was nothing that knew.
+
+        ONE run — the same run the Overview names — and deliberately not the repository's history.
+        `SpecObservation#example_id` is RSpec's positional id and explicitly not stable across
+        refactors, so a ranking that spanned runs would be comparing rows that are not known to be
+        the same test. The model draws that boundary; this panel stays on the near side of it. It
+        rolls nothing up at all — neither by file nor by directory — because a ranking of
+        individual examples answers a different question from either: outliers, not concentration.
+        Both rollups now exist, in the two panels below this one, and neither is derivable from
+        this list.
+
+        Rendered only when the run WROTE example rows. A run ingested before those rows existed, or
+        one whose client sends no per-example detail, has no per-test grain to disclose — and an
+        empty panel on every such run would read as a finding about the suite when it is a fact
+        about the payload. Where rows exist and none carried a timing, the panel renders and says
+        so: that IS a fact about the run.
+
+        Outside the `manage_keys` gate, like the Overview, Suite growth and Recent runs — read-only
+        suite telemetry, nothing credential and nothing actionable. %>
+<% if @slowest_examples&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Slowest tests", id: "slowest-examples") do %>
         <% if @slowest_examples.any? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "slowest-examples-basis") do %>

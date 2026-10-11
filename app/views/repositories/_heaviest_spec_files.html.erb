@@ -1,5 +1,32 @@
-    
-    <% if @spec_file_durations&.recorded? %>
+<%# == Where this run's wall clock went, by spec file
+        The other half of the question the panel above answers, off the same rows of the same run,
+        and NOT derivable from it. That ranking is by INDIVIDUAL cost and ten rows long: on a
+        20,000-example suite it shows 0.05% of the run, and a file holding four hundred examples at
+        fifty milliseconds each is twenty seconds of wall clock with every one of its rows far
+        below the head. Outliers and concentration are different questions and this panel asks the
+        second one.
+
+        Grouped on the INCLUDING file (`spec_file_path`), so a shared example group's time lands on
+        the file that ran it rather than on a `spec/support/` helper that ran nothing — the rule
+        `SpecObservation`'s class comment states and spec/requests/api/v1/ingest_spec.rb pins
+        end-to-end.
+
+        By FILE, and the panel below this one takes the same rows up to the DIRECTORY. Two rungs,
+        two reads, neither derived from the other: a by-file top ten shows ten files, and a
+        directory holding forty files at two seconds each outweighs every one of them without
+        appearing here at all. Both narrow on `test_run_id` and group on top of that index, so
+        neither needed an index of its own — the `text_pattern_ops` index this comment once said a
+        subtree rollup was waiting on governs a prefix PREDICATE, and a whole-run rollup has none
+        to serve (EXPLAIN-certified in spec/models/spec_observation_spec.rb).
+
+        ONE run, like the panel above, and for the same reason: `example_id` is positional and not
+        stable across refactors, so anything spanning runs would be comparing rows not known to be
+        the same tests.
+
+        Same visibility rule as the panel above — rendered when the run WROTE example rows, and a
+        run with rows but no timings renders and says so. Outside the `manage_keys` gate: read-only
+        suite telemetry, nothing credential and nothing actionable. %>
+<% if @spec_file_durations&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Heaviest spec files", id: "spec-file-durations") do %>
         <% if @spec_file_durations.layer? && @spec_file_durations.rows.empty? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-file-durations-basis") do %>

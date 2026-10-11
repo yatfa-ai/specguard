@@ -1,4 +1,36 @@
+<%# == Which groups of tests READ ALIKE, off the STORED census
+    The suite-wide near-duplicate census (`NearDuplicateCensus`, taken at ingest by
+    `Ingest::NearDuplicateCensusJob` and served to agents by `GET /api/v1/repository?near_duplicates=`)
+    until now rendered on no dashboard page: a signed-in person could not see which tests read alike.
 
+    STORED READ ONLY. `@near_duplicate_census` is `NearDuplicateCensus.stored_block_for` — one
+    indexed row, a string-keyed Hash exactly as stored — and this partial renders from that Hash. It
+    never asks `NearDuplicateClusters.for`, the live minutes-scale computation: an absent row is
+    stated as absent, never computed on the request path.
+
+    Unlike the per-example panels around it this one is NOT anchored on `@latest_test_run`. The
+    census is repository-wide and has its own stamps — `weighed_run_id` (which run its weight figures
+    were measured in) and `computed_at` — so the panel dates itself instead of borrowing the
+    anchored run's date, and a reader can see when it is older than the run beside it.
+
+    Four states, each with its own text, and the order of the checks is the point:
+      (a) no stored row            — nothing was ever computed; NO numerals, because any figure here
+                                     would be a census of nothing wearing the spelling of a result;
+      (b) `recorded_count` is 0    — the weighed run recorded no per-example rows, so the census had
+                                     nothing to read and an empty list means "nobody told us";
+      (c) `clusters` is empty      — the success state: tests were read and nothing reads alike at
+                                     this floor (and the sub-case of no embedded identities, which
+                                     is not that claim and says so);
+      (d) clusters present         — the ranking, in the stored order (multi-file groups first, then costliest, when the
+                                     stored `ranking_basis` says so; costliest-first on a row stored before it).
+
+    Presented for review and not as a finding of duplication — the claim boundary the "Descriptions
+    this run recorded more than once" panel carries, for a stronger reason here: the floor is
+    UNCALIBRATED (see `NearDuplicateClusters::SIMILARITY`), so membership is a measurement of
+    similarity at a threshold nobody has validated, never a verdict that two tests are redundant.
+
+    Outside the `manage_keys` gate, for the reason the panels around it are: read-only suite
+    telemetry, nothing credential and nothing actionable. %>
 <% census = @near_duplicate_census %>
 <%= render UI::PanelComponent.new(title: "Groups of tests that read alike",
                                   id: "near-duplicate-clusters") do %>

@@ -1,5 +1,23 @@
-    
-    <% if @repeated_descriptions&.recorded? %>
+<%# == Which DESCRIPTIONS this run recorded more than once, and what they cost
+        The last of the single-run panels and the only one whose grain is the DESCRIPTION. Every
+        panel above rolls this run's rows up by where the code LIVES — the example, its file, its
+        area — and none of them can see that two of those rows say the same thing. `GROUP BY name`
+        exists twice in the whole application and both are narrowed to failures, so on a green suite
+        — the normal case — nothing here had ever grouped examples by what they claim to test.
+
+        ONE run, like the panels above and for the same reason: `example_id` is positional and not
+        stable across refactors, so anything spanning runs would be comparing rows not known to be
+        the same tests. Whether these groups PERSIST across runs is a different question and
+        deliberately not this one.
+
+        Ranked by summed wall clock rather than by how many examples share the description: an
+        eight-example group costing two seconds matters less than a three-example group costing
+        ninety, and the question is redundancy weighed against what it costs to run.
+
+        Same visibility rule as the panels above — rendered when the run WROTE example rows — and
+        outside the `manage_keys` gate for the same reason they are: read-only suite telemetry,
+        nothing credential and nothing actionable. %>
+<% if @repeated_descriptions&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Descriptions this run recorded more than once",
                                         id: "repeated-descriptions") do %>
         <%# A DECLARED LAYER was asked (`?layer=`): the grouping ran over that layer's examples alone, so

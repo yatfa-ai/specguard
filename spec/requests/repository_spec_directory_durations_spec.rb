@@ -49,10 +49,21 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
   # The "Declared layers" cell of each row, keyed by area. Kept out of `rows` so the existing
   # four-column row assertions keep stating exactly what they stated.
+  # A rollup row's destinations live in its drawer (the console's one overlay): the row's handle
+  # carries the name and `aria-current`, and the drawer's actions carry the links. `area_action` is
+  # "Spec files in this directory"; `file_action` is "Examples in this file".
+  def rollup_row(scope, path) = scope.all("tbody tr", visible: :all).find { |tr| tr.first(".row-open").text(:all).squish == path }
+
+  def area_action(path) = rollup_row(panel, path).find("a", exact_text: "Spec files in this directory", visible: :all)
+
+  def area_handle(path) = rollup_row(panel, path).first(".row-open")
+
+  def rollup_file_action(scope, path) = rollup_row(scope, path).find("a", exact_text: "Examples in this file", visible: :all)
+
   def layer_cells
     panel.all("tbody tr").to_h do |row|
-      cells = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
-      [cells.first, cells.fifth]
+      cells = row.all("td").first(5)
+      [cells.first.text.gsub(/\s+/, " ").strip, layer_cell_text(cells.fifth)]
     end
   end
 
@@ -728,10 +739,10 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       it "links each listed directory to its own spec files" do
         get repository_path(area_run)
 
-        href = panel.find("a", text: "spec/models")[:href]
+        href = area_action("spec/models")[:href]
 
         expect(href).to include("spec_directory=#{CGI.escape('spec/models')}")
-        expect(href).to include("#spec-directory-files")
+        expect(href).to end_with("#slow")
       end
 
       # A list of choices with one of them taken, and the drill-in sits below a long page.
@@ -739,8 +750,8 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       it "marks the open directory in the panel it was opened from" do
         get repository_path(area_run, spec_directory: "spec/models")
 
-        expect(panel.find("a", text: "spec/models")["aria-current"]).to eq("true")
-        expect(panel.find("a", text: "spec/requests")["aria-current"]).to be_nil
+        expect(area_handle("spec/models")["aria-current"]).to eq("true")
+        expect(area_handle("spec/requests")["aria-current"]).to be_nil
       end
 
       # `?branch=` anchors the "Suite growth" panel and nothing else. Opening an area must not
@@ -749,7 +760,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       it "carries a branch ask through the link rather than dropping it" do
         get repository_path(area_run, branch: "main")
 
-        expect(panel.find("a", text: "spec/models")[:href]).to include("branch=main")
+        expect(area_action("spec/models")[:href]).to include("branch=main")
       end
 
       # The reciprocal of "Close directory", which has carried the open FILE the other way since it
@@ -763,7 +774,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       it "carries an open file through the link rather than dropping it" do
         get repository_path(area_run, spec_file: "spec/models/order_spec.rb")
 
-        expect(panel.find("a", text: "spec/models")[:href])
+        expect(area_action("spec/models")[:href])
           .to include("spec_file=#{CGI.escape('spec/models/order_spec.rb')}")
       end
 
@@ -905,8 +916,8 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       def layer_by_file
         files_panel.all("tbody tr").to_h do |row|
-          cells = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
-          [cells.first, cells.last]
+          cells = row.all("td").first(4)
+          [cells.first.text.gsub(/\s+/, " ").strip, layer_cell_text(cells.last)]
         end
       end
 
@@ -946,7 +957,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         href = files_panel.find("a", text: "spec/models/refund_spec.rb")[:href]
 
         expect(href).to include("spec_file=#{CGI.escape('spec/models/refund_spec.rb')}")
-        expect(href).to include("#spec-file-examples")
+        expect(href).to end_with("#slow")
       end
 
       # Both parameters on ONE URL. Opening a file out of this list must not close the area it was
@@ -1036,7 +1047,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       it "keeps the area open, exactly as the drill-in's own file links do" do
         get repository_path(area_run, spec_directory: "spec/models")
 
-        rollup_href = file_rollup.find("a", text: "spec/requests/checkout_spec.rb")[:href]
+        rollup_href = rollup_file_action(file_rollup, "spec/requests/checkout_spec.rb")[:href]
         drill_in_href = files_panel.find("a", text: "spec/models/refund_spec.rb")[:href]
 
         expect(rollup_href).to include("spec_directory=#{CGI.escape('spec/models')}")
@@ -1049,7 +1060,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       it "adds no area ask to a page that has none" do
         get repository_path(area_run)
 
-        expect(file_rollup.find("a", text: "spec/requests/checkout_spec.rb")[:href])
+        expect(rollup_file_action(file_rollup, "spec/requests/checkout_spec.rb")[:href])
           .not_to include("spec_directory")
       end
     end

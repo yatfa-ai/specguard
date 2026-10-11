@@ -1,5 +1,36 @@
-    
-    <% if @slowest_tests %>
+<%# == The slowest tests of the REPOSITORY, across this branch's window
+        The wall-clock question at the grain the page has never had one. "Slowest tests" above ranks
+        ONE run and its own comment says why it stays there: `example_id` is positional and not
+        stable across refactors, so a ranking spanning runs on that key would pair rows not known to
+        be the same test. That is a statement about the KEY. `spec_identity_id` is a different key —
+        semantic, resolved out of band by `Ingest::IdentityResolver`, and stable across a move, a
+        reorder and a reword alike — so the boundary that panel respects is not this one's, and
+        `SlowestTests` is where the crossing is argued.
+
+        The two panels are DELIBERATELY BOTH HERE and answer different questions. "Was that one bad
+        run, or is this test chronically slow" cannot be read off a single run at any cap, and
+        "which test cost the most in the run I just pushed" cannot be read off a window that sums
+        thirty of them. They are separately identifiable on purpose: different id, different title,
+        different file, and a first sentence in each that names its own grain.
+
+        Drawn on the SAME window as "Suite growth", "Areas that grew or shrank over the window" and
+        "Tests whose outcome changed" — same `?branch=` anchor, same `Repository::TRAJECTORY_LIMIT`,
+        and literally the same loaded runs (see `RepositoriesController#show`). Branch-anchored
+        because runtimes compared across branches are runtimes of different code; sharing the window
+        because every panel that fetched "the last thirty runs on this branch" for itself would be
+        its own window, with no structural reason to keep agreeing.
+
+        ⭐ FOUR STATES AND NEVER ONE BLANK PANEL. `SlowestTests#state` decides which, and the
+        wording lives here beside its siblings' so the panels cannot drift into describing the same
+        window differently. The one that must not be got wrong is `:unresolved`: identity resolution
+        runs out of band, so a run that landed seconds ago has rows nothing has matched yet, and an
+        empty list over it reads as "nothing in this suite is slow" when what happened is "nobody
+        has told us which tests these are". That is Vacuous Green verbatim, and it is the ordinary
+        state for the moments after every ingest rather than a rare one.
+
+        Outside the `manage_keys` gate, like every panel around it — read-only suite telemetry,
+        nothing credential and nothing actionable. %>
+<% if @slowest_tests %>
       <%= render UI::PanelComponent.new(title: "Slowest tests across the window",
                                         id: "slowest-tests-window") do %>
         <% case @slowest_tests.state %>

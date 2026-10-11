@@ -1,5 +1,40 @@
-    
-    <% if @spec_directory_file_growth&.comparable? %>
+<%# == WHICH FILES of one area moved — the rung below the panel above
+        The panel above ranks AREAS by how far their example count moved and, until this existed,
+        stopped there: its directory cell was inert text, so the one question a row like
+        `spec/models 412 → 459 (+47)` provokes had no answer on this page or on any other. Nothing
+        in the application read growth at the file grain at all.
+
+        "Heaviest spec files" could not stand in, for the reason `SpecDirectoryDurations` gives
+        about its own rollup: that list is a run-wide top ten ranked by DURATION, so an area that
+        gained forty-seven FAST examples has not one of its rows in it. The panel that sees the
+        movement cannot see the files; the panel that sees files cannot see the movement.
+
+        Its subject is the doubt the caption above discloses and cannot resolve — a MOVED test is
+        the same test, so a relocation reads there as one area growing and another shrinking with
+        nothing added and nothing deleted. This panel does not resolve it either and asserts nothing
+        new: it counts rows per FILE per run, pairs no example with any other example, and puts the
+        operands where a HUMAN can read the difference. `user_spec.rb` at "New file" beside
+        `legacy_user_spec.rb` at "File removed" is a rename at a glance; two files at `+47` and
+        `−47` are not.
+
+        Reached by the SAME `?spec_directory=` ask the durations drill-down reads, so one ask opens
+        EVERY panel that reads it over one area, each answering in its own grain. Intended, and how
+        `drill_down_path` composes asks.
+
+        It renders ONLY where the panel above is comparable, and that is not a nicety: a drill-in
+        that compared two runs the panel it hangs off refuses to compare would assert, in a closer
+        view, a comparison the wider view has just withheld. `SpecDirectoryFileGrowth` inherits that
+        verdict rather than re-deriving it — two of its six states are facts about a RUN and are
+        not derivable from one area's rows at all.
+
+        No "Close directory" of its own. `?spec_directory=` is ONE ask with one exit, and that exit
+        already exists on "Spec files in this directory" above, the panel that owns the gesture. A
+        second button clearing the same ask would be two ways out of one state and a further row in
+        the carry-through matrix that duplicates an existing cell.
+
+        Same visibility rule and same gate as the panels around it: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+<% if @spec_directory_file_growth&.comparable? %>
       <%= render UI::PanelComponent.new(title: "Files that grew or shrank in this directory",
                                         id: "spec-directory-file-growth", class: "rc-drill") do %>
         <% if @spec_directory_file_growth.recorded? && @spec_directory_file_growth.any_movement? %>

@@ -1,5 +1,39 @@
-    
-    <%= render UI::PanelComponent.new(title: "Rejected ingests", id: "rejected-ingests") do %>
+<%# == Deliveries the endpoint REFUSED
+        Every other panel on this page is built out of runs that were ACCEPTED. This one is the
+        per-delivery detail record behind the refusal verdict at the top of this page — and
+        before it existed, that event left no platform-side record at all: `render_bad_request`
+        renders JSON and returns, and nothing was written. That verdict, and these same rows, are
+        served beyond the browser too: API and agent clients read them through
+        `serialized_delivery_health` on `RepositoryOverview`, so this panel is the browser's
+        rendering of them, and the renderings are kept in step.
+
+        The reason that mattered is at the top of the page. `authenticate_api_key!` stamps
+        `api_keys.last_used_at` on the way IN, so a refused delivery still records a use, and the
+        connection indicator in the page header reads exactly that column. A repository whose every
+        run was being refused therefore rendered `Connected`, in success tone, with a fresh "last
+        request" hint — three affirmative healthy signals over a pipeline that was 100% failing.
+        The indicator now consults `@rejected_ingests` too; this panel is the detail behind that
+        verdict.
+
+        Rendered ALWAYS, including when there is nothing to list, and not gated on
+        `@latest_test_run` the way the per-example panels are. Two reasons, and neither is symmetry
+        with the siblings:
+
+        * A repository that has never had a run accepted is not the empty case here — it is the
+          case where every delivery it ever made was refused, which is exactly when the reader
+          needs this list.
+        * "No delivery has been refused" is a POSITIVE finding, and it is the one this page could
+          not previously make. The connection indicator now depends on these rows, so a panel that
+          vanished when the news was good would leave the reader unable to tell "nothing was
+          refused" from "SpecGuard does not track that". No other panel on this page says anything
+          about refusals, so this empty state is not a milder restatement of one that already
+          exists.
+
+        Outside the `manage_keys` gate, like the Overview, Suite growth and Recent runs: this is
+        read-only delivery telemetry. Nothing credential is on these rows — a refusal is recorded
+        only for a request that already AUTHENTICATED, so the key is not what is at fault and the
+        panel names no key. %>
+<%= render UI::PanelComponent.new(title: "Rejected ingests", id: "rejected-ingests") do %>
       <% if @rejected_ingests.any? %>
         <%= render UI::NoteComponent.new(summary: "What is (and is not) listed here", id: "rejected-ingests-basis") do %>
           Ingests that authenticated successfully and were then rejected for their

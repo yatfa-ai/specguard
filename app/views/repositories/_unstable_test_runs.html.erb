@@ -1,5 +1,33 @@
-    
-    <% if @unstable_test_runs %>
+<%# == One unstable test, opened
+        The rung BELOW the panel above, and the end of that ladder. Every ranking here is a
+        capped ten and this one is an AGGREGATE besides — `SpecObservation::UNSTABLE_COMPOSITION` is
+        every column a `COUNT` or an `ARRAY_AGG(DISTINCT …)` under `GROUP BY spec_identity_id`, which is what
+        keeps it constant in the size of the suite and is exactly what discards the run axis. A
+        reader who found their flakiest test up there had found the end of the road.
+
+        WHAT THE PANEL ABOVE CANNOT SAY, and the whole reason this exists. A row up there reads
+        `30 runs, 4 failed, [failed, passed]`, and those three figures are IDENTICAL for two windows
+        that call for opposite work: four failures at runs 27–30 is a REGRESSION — find the commit
+        between run 26 and run 27 — and four failures at runs 3, 11, 19 and 26 is FLAKINESS, where
+        there is no culprit commit and the work is quarantine or shared state. Nor is the sequence
+        derivable from anything else this page serves: the Recent runs panel has no per-test grain
+        at all, and every per-example list above it carries an outcome for ONE run.
+
+        THE SAME WINDOW as the panel above and the chart above that — literally the same loaded runs
+        (see `RepositoriesController#show`), which here is not merely economy. These rows are read
+        for their POSITION against commits the panels above already printed, so a separately fetched
+        window would put an off-by-one between the sequence and the commits it is read against, and
+        naming the wrong culprit commit is worse than naming none.
+
+        Rendered only when a test was ASKED for, and the read is taken only then: a page nobody
+        asked a test of costs exactly what it cost before this existed. NOT gated on the ranking
+        above being comparable — a window that ranking has nothing to say about is precisely where
+        the raw per-run grain is worth having, and gating this on that would withhold the grain
+        exactly when the aggregate went silent.
+
+        Same visibility rule and same gate as the panels above: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+<% if @unstable_test_runs %>
       <%= render UI::PanelComponent.new(title: "This test, run by run", id: "unstable-test-runs", class: "rc-drill") do |panel| %>
         <% panel.with_actions do %>
           <%# The way back OUT of THIS ask only. `unstable_test_from` is cleared in the same breath because

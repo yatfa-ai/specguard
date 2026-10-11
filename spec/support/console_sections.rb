@@ -23,3 +23,16 @@ module ConsoleSections
 end
 
 RSpec.configure { |config| config.include ConsoleSections, type: :request }
+
+# A declared-layers cell in the console is a stacked bar with a key — `unit 1`, `request 1`,
+# `undeclared 1` as list items — where the old table printed one sentence, `unit 1 · request 1 ·
+# undeclared 1`. The key items ARE the sentence's parts (the same counts, in the same order), so a
+# spec reads them back joined the way the sentence was, and a cell with no key (a file that
+# declared nothing at all) reads as its plain text.
+module ConsoleLayerCells
+  def layer_cell_text(cell)
+    parts = cell.all(".rc-key li").map { |item| item.text.gsub(/\s+/, " ").strip }
+    parts.any? ? parts.join(" · ") : cell.text.gsub(/\s+/, " ").strip
+  end
+end
+RSpec.configure { |config| config.include ConsoleLayerCells, type: :request }

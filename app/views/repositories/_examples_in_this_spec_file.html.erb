@@ -1,5 +1,28 @@
-    
-    <% if @spec_file_examples %>
+<%# == One spec file, opened
+        The rung BELOW the panel above, and the first surface here that narrows to a file rather
+        than grouping by one. Every ranking on this page is a capped ten — ten examples, ten files,
+        ten directories, ten moved areas — so a reader on a 20,000-example suite could learn that
+        `spec/models/order_spec.rb` cost six minutes across three hundred examples and had no way
+        whatever to learn WHICH three hundred. This panel is that way, and it opens off the row
+        that stated the total.
+
+        Rendered only when a file was ASKED for, and the read is taken only then: a page nobody
+        asked a file of costs exactly what it cost before this existed.
+
+        An EQUALITY predicate on `(test_run_id, spec_file_path)`, which is the composite index the
+        by-file rollup's own plan certification says exists for this read and nothing else. A
+        SUBTREE — "every example under `spec/models/`" — is a prefix predicate, wants a
+        `text_pattern_ops` index and therefore a migration, and is deliberately not this panel.
+
+        The list carries the file's UNTIMED examples, where every ranking above excludes theirs.
+        They are the file's population: a reader looking at one file is owed its rows, and a list
+        that dropped them would disagree with the count printed above it. That is why the ordering
+        is `NULLS LAST` — see `SpecObservation.in_file`, where plain `DESC` would head a list
+        captioned "slowest first" with the examples that never ran.
+
+        Same visibility rule and same gate as the panels above: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+<% if @spec_file_examples %>
       <%= render UI::PanelComponent.new(title: "Examples in this spec file", id: "spec-file-examples", class: "rc-drill") do |panel| %>
         <% panel.with_actions do %>
           <%# The way back OUT of THIS ask only: `spec_file: nil` is explicit because under carry-by-default an

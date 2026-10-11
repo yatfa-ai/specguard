@@ -1,5 +1,30 @@
-    
-    <% if @spec_directory_durations&.recorded? %>
+<%# == Where this run's wall clock went, by directory
+        The rung directly above the panel above, off the same rows of the same run, and NOT
+        derivable from it. That ranking is by FILE and ten rows long: a directory holding forty
+        files at two seconds each is eighty seconds of the run with not one of its files near the
+        head of it. Concentration re-concentrates at every rung — which is why each rung is summed
+        rather than read off the one below — and this panel asks the question the reader usually
+        arrives with: which AREA of this suite carries the time.
+
+        Grouped on the immediate parent of the INCLUDING file (`spec_file_path`), so a shared
+        example group's time lands on the area that ran it rather than on `spec/support` — the same
+        rule the two panels above obey, one rung up. Every row sits at the same depth as its own
+        file, so the areas partition the run rather than nesting inside one another and the totals
+        sum to it. Depth selection and drill-down trees are a different question and not this one.
+
+        NOT the shard rollup on the Overview panel. `TestRun#shard_durations` splits the same run by
+        CI partition and its own comment is explicit that a shard is not a code area: RSpec/Knapsack
+        partitions are arbitrary with respect to directory structure, so "which partition ran long"
+        and "which area costs" are two questions and this is the second.
+
+        ONE run, like the panels above, and for the same reason: `example_id` is positional and not
+        stable across refactors, so anything spanning runs would be comparing rows not known to be
+        the same tests.
+
+        Same visibility rule as the panels above — rendered when the run WROTE example rows, and a
+        run with rows but no timings renders and says so. Outside the `manage_keys` gate: read-only
+        suite telemetry, nothing credential and nothing actionable. %>
+<% if @spec_directory_durations&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Heaviest spec directories", id: "spec-directory-durations") do %>
         <% if @spec_directory_durations.layer? && @spec_directory_durations.rows.empty? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-durations-basis") do %>

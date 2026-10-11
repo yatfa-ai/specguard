@@ -1,5 +1,34 @@
-    
-    <% if @repeated_description_examples %>
+<%# == One repeated description, opened
+        The rung BELOW the panel above, whose rows dead-ended.
+        That ranking says a description is carried by eight examples costing ninety seconds between
+        them and names the files they ran in; until this panel there was no way whatever to learn
+        WHICH eight, what each cost, where each sits or how each ended — `repeated_descriptions_in`
+        is an aggregate out of which no member row escapes.
+
+        And NOT reachable through the `?spec_file=` panel above, which is the obvious substitute and
+        does not work: that panel lists every example of a file, capped at fifty and ranked by
+        duration, so a reader following a two-file group through it gets two lists of up to fifty
+        unrelated rows — and this group's own members need not be among the fifty either list shows.
+        The narrowing this needs is by DESCRIPTION.
+
+        The claim boundary is INHERITED WHOLE from the panel above and nothing here widens it. A
+        shared description is equally a table-driven loop, a shared example group, or the same test
+        written twice, and nothing on this page decides which — so nothing below uses the word
+        "duplicate", and the rows carry where, when, how long and how it ended, and no verdict. What
+        the rows add is what the reader DECIDES from: three consecutive line numbers in one file read
+        as a loop, one definition site included by four files reads as a shared example group, and
+        the same sentence at three unrelated sites reads as neither.
+
+        Rendered only when a description was ASKED for, and the read is taken only then: a page
+        nobody asked a description of costs exactly what it cost before this existed.
+
+        An EQUALITY predicate on `name`, riding `index_spec_observations_on_test_run_id` — one query
+        bounded by the size of one RUN. See `SpecObservation.with_description`, where a plain `DESC`
+        would head a list captioned "slowest first" with the examples that never ran.
+
+        Same visibility rule and same gate as the panels above: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+<% if @repeated_description_examples %>
       <%= render UI::PanelComponent.new(title: "Examples under this description",
                                         id: "repeated-description-examples", class: "rc-drill") do |panel| %>
         <% panel.with_actions do %>
