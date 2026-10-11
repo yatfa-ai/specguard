@@ -574,11 +574,12 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # The four states decidable from the loaded runs alone cost the page NOTHING, because the gate
     # runs before the query rather than filtering its results.
     #
-    # Measured against a page where the LAST-PUSH panel is comparable and issues its own aggregate,
-    # so this is a claim about this gate rather than about the page going quiet: the window is drawn
-    # on `?branch=`, and the branch asked for holds runs that cannot be compared while the
-    # repository's newest run sits on a branch whose pair can.
-    # @intent: {"entity": "TestRun", "action": "gate before querying", "behavior": "On a branch whose window has no comparable baseline the panel issues no aggregate query at all and says the stale run reported no tests, while the page's other cross-run panel still computes +2 on main.", "layer": "request"}
+    # Measured against a page where ANOTHER branch's pair can be compared, so this is a claim about
+    # this gate rather than about the page going quiet. In the console `?branch=` is the page-wide
+    # filter: the window AND the last-push comparison are both drawn on the branch asked for, so on
+    # `feature` both are the same incomparable pair and neither reads the table — and the very same
+    # repository, read on `main`, DOES compute (+2). The silence is the gate's; the control proves it.
+    # @intent: {"entity": "TestRun", "action": "gate before querying", "behavior": "On a branch whose window has no comparable baseline the panel issues no aggregate query at all and says the stale run reported no tests, while the same repository read on main still computes +2.", "layer": "request"}
     it "asks the observations table nothing where the window has no baseline" do
       repository = new_repository
       stale = unmeasured_run(repository, "stale000000001", minutes_ago: 300, branch: "feature")
@@ -592,7 +593,10 @@ RSpec.describe "Repository spec directory window growth", type: :request do
 
       expect(statements).to be_empty
       expect(empty_state_text).to include("reported no tests")
-      # The page did ask its OTHER cross-run question, so the silence above is this gate's.
+      expect(push_rows).to be_empty
+
+      # The control: asked about `main`, the same repository's pair IS comparable and the table is read.
+      get repository_path(repository, branch: "main")
       expect(push_rows).to eq("spec/models" => "+2")
     end
   end

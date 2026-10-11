@@ -54,13 +54,27 @@
     </div>
 
     <% if readings&.recorded? %>
-      <div class="rc-field">
+      <div class="rc-field" id="rc-layer-field">
         <span class="rc-label" id="rc-layer-label">Declared layer</span>
         <nav class="rc-seg" aria-labelledby="rc-layer-label">
           <% console_layer_items(@repository).each do |item| %>
             <%= link_to item[:label], item[:href], aria: { current: item[:current] ? "true" : nil } %>
           <% end %>
         </nav>
+        <%# Said, not implied: a layer ask narrows the sections whose rows carry a declared layer — the
+            rankings of What is slow, What is unstable and the repeated descriptions. The others
+            (suite size, what changed over the window, annotation debt, near-duplicates) are counts
+            over EVERY layer by their nature, and a filter that quietly did not apply to them would
+            read as if they had been narrowed. The layer is what each example's own @intent declared,
+            never inferred from the path. %>
+        <% if @layer_request %>
+          <span class="rc-hint" id="rc-layer-scope">
+            Narrows <a class="rc-link" href="#slow">What is slow</a>,
+            <a class="rc-link" href="#unstable">What is unstable</a> and the
+            <a class="rc-link" href="#duplicates">repeated descriptions</a>; every other section
+            still counts all layers.
+          </span>
+        <% end %>
       </div>
     <% end %>
 

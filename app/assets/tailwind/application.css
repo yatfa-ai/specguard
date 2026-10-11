@@ -567,7 +567,10 @@
   .dt thead th {
     position: sticky; top: var(--rc-bar-h); z-index: 5; background: var(--app-surface); text-align: left; padding: 0.5rem 0.75rem;
     border-bottom: 1px solid var(--app-border-strong); font-size: var(--text-xs); font-weight: 600; text-transform: uppercase;
-    letter-spacing: 0.05em; color: var(--app-text-secondary); white-space: nowrap;
+    letter-spacing: 0.05em; color: var(--app-text-secondary);
+    /* A header may wrap on a word boundary rather than set the table's minimum width: a column
+       named "Since previous run" must not push a half-width panel's table past its card. */
+    vertical-align: bottom; line-height: 1.25;
   }
   .dt thead th.end, .dt td.end { text-align: right; }
   .dt tbody td { padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--app-border); vertical-align: top; color: var(--app-text); }
@@ -575,7 +578,7 @@
   .dt td.num { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
   .dt td.mute { color: var(--app-text-secondary); }
   .dt-sort {
-    display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.125rem 0.25rem; margin: -0.125rem -0.25rem; border: 0; background: none;
+    display: inline-flex; align-items: flex-end; text-align: inherit; gap: 0.375rem; padding: 0.125rem 0.25rem; margin: -0.125rem -0.25rem; border: 0; background: none;
     font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer; border-radius: var(--app-radius-control);
     transition: color var(--transition-fast) var(--app-ease);
   }

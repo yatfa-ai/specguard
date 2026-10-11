@@ -7,12 +7,23 @@ export default class extends Controller {
   static targets = ["scrim", "panel", "kind", "title", "body", "close"]
 
   connect() {
+    // Back/Forward across a drawer transition is OURS, and Turbo must not see it: the entry the
+    // drawer was opened from is one of Turbo's own, so letting its popstate handler run would treat
+    // closing a drawer as a visit and re-render the whole page — losing the reader's scroll, their
+    // open sections and any sort they chose. Registered in the CAPTURE phase, so it runs before
+    // Turbo's bubble-phase listener on the same target, and it stops the event only when the
+    // transition is a drawer's (going to a `#row-…` entry, or leaving one that is open).
+    this.onPopCapture = (event) => {
+      if (this.server) return
+      if (location.hash.startsWith("#row-") || this.open) event.stopImmediatePropagation()
+      this.#fromHash()
+    }
+    window.addEventListener("popstate", this.onPopCapture, true)
     this.onPop = () => this.#fromHash(false)
     this.onKey = (event) => {
       if (event.key !== "Escape" || !this.open) return
       if (this.server) this.closeTarget.click(); else this.close()
     }
-    window.addEventListener("popstate", this.onPop)
     window.addEventListener("hashchange", this.onPop)
     document.addEventListener("keydown", this.onKey)
     if (this.panelTarget.dataset.server === "true") this.closeTarget.focus({ preventScroll: true })
@@ -20,7 +31,7 @@ export default class extends Controller {
   }
 
   disconnect() {
-    window.removeEventListener("popstate", this.onPop)
+    window.removeEventListener("popstate", this.onPopCapture, true)
     window.removeEventListener("hashchange", this.onPop)
     document.removeEventListener("keydown", this.onKey)
   }
@@ -42,7 +53,13 @@ export default class extends Controller {
     if (!row) return
     event.preventDefault()
     this.#render(row)
-    if (row.id) history.pushState({ drawer: row.id }, "", `#${row.id}`)
+    // One entry per OPEN, never per click: while a drawer is already open from a row, picking
+    // another row replaces that entry rather than stacking a second one on it.
+    if (row.id) {
+      const entry = { drawer: row.id }
+      if (history.state?.drawer) history.replaceState(entry, "", `#${row.id}`)
+      else history.pushState(entry, "", `#${row.id}`)
+    }
   }
 
   // The server-rendered drill-in closes by navigating to the same page without its asks (the
