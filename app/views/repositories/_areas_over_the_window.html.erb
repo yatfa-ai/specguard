@@ -31,8 +31,8 @@
             Counted off the
             <%= number_with_delimiter(window_growth.baseline_recorded_count) %> and
             <%= number_with_delimiter(window_growth.anchor_recorded_count) %> example rows the two
-            ends recorded here, which may legitimately differ from the suite size on the Overview
-            panel above.
+            ends recorded here, which may legitimately differ from the suite size on the Summary
+            at the top of this page.
           <% end %>
           <%= render UI::TableComponent.new(
                 columns: ["Directory", { label: "Examples at baseline", end: true }, { label: "Examples now", end: true }, { label: "Change across window", end: true }],

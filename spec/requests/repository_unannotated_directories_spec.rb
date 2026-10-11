@@ -210,7 +210,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # is re-derived by SUM over shard reports and a client may report totals for more examples than
     # it sends detail for. The caption says so rather than leaving a reader to find it with a
     # calculator.
-    # @intent: {"entity": "GET /repositories/:id", "action": "count own rows", "behavior": "a run reporting total_specs_count 4000 but recording one example renders spec/models 1 unannotated of 1 recorded, never prints 4,000, and the basis says the panel counts a different population from the suite size on the Overview panel above", "layer": "request"}
+    # @intent: {"entity": "GET /repositories/:id", "action": "count own rows", "behavior": "a run reporting total_specs_count 4000 but recording one example renders spec/models 1 unannotated of 1 recorded, never prints 4,000, and the basis says the panel counts a different population from the suite size on the Summary at the top of this page", "layer": "request"}
     it "counts each area's own rows rather than the run's reported suite size" do
       repository = create_repository(user: @user)
       ingest(repository, [unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 1)],
@@ -220,7 +220,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
 
       expect(rows).to eq([{ path: "spec/models", unannotated: "1", recorded: "1" }])
       expect(panel).to have_no_text("4,000")
-      expect(basis_line).to have_text("a different population from the suite size on the Overview panel above",
+      expect(basis_line).to have_text("a different population from the suite size on the Summary at the top of this page",
                                       normalize_ws: true)
     end
 
@@ -321,13 +321,14 @@ RSpec.describe "Repository unannotated directories", type: :request do
     it "coexists with an Overview that declines to report readings and still gives the @intent share" do
       get repository_path(totals_only_run)
 
-      expect(overview).to have_text("Carrying an @intent 300", normalize_ws: true)
+      expect(overview).to have_css("[role='meter'][aria-valuenow='300.0'][aria-valuemax='900.0']")
+      expect(overview).to have_text("Carrying an @intent 33.3%", normalize_ws: true)
       expect(overview).to have_text("33.3% — 300 of 900 tests carry an @intent", normalize_ws: true)
       expect(overview).to have_text("nothing here to say how much of the rest it can make out", normalize_ws: true)
       # And the claim that used to be made about the other 600 is made by neither surface now.
       expect(response.body).not_to include("Not visible to SpecGuard")
       expect(response.body).not_to include("SpecGuard cannot see the other")
-      expect(panel).to have_text("Any count on the Overview above is taken from the run's own totals",
+      expect(panel).to have_text("Any count on the Summary at the top of this page is taken from the run's own totals",
                                  normalize_ws: true)
     end
   end
