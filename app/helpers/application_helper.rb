@@ -32,7 +32,7 @@ module ApplicationHelper
   # nothing in the suite able to see it. The `:error` tone is deliberately NOT here: it is markup,
   # each caller picks its own badge, and both pick error for the reason the indicator gives — work
   # is being destroyed, not merely absent.
-  def refused_deliveries_label = "Rejected ingests"
+  def refused_deliveries_label = "Deliveries refused"
 
   # The sentence under that label: WHEN the last refusal landed, and the one thing a reader who has
   # just seen a green "Connected" needs told — that the credential is fine and the payload was not.
@@ -48,8 +48,19 @@ module ApplicationHelper
   # grid, which reads one grouped `MAX(occurred_at)` for the whole page — can render it without
   # constructing an object it has no other use for.
   def refused_deliveries_note(last_rejection_at)
-    "Last rejected #{time_ago_in_words(last_rejection_at)} ago — " \
+    "Last refused #{time_ago_in_words(last_rejection_at)} ago — " \
       "the key works, the payload did not."
+  end
+
+  # The console's own words for the same two facts. The repositories grid card still says "Deliveries
+  # refused" through the pair above; the repository page says what the product calls the thing — a
+  # REJECTED INGEST — in the delivery status line, the Delivery section and its table, so one concept
+  # carries one name on one screen. Kept as a pair of its own, not an edit of the shared one, because
+  # the card's wording is pinned by its own specs and belongs to the follow-up ticket for that page.
+  def rejected_ingests_label = "Rejected ingests"
+
+  def rejected_ingests_note(last_rejection_at)
+    "Last rejected #{time_ago_in_words(last_rejection_at)} ago — the key works, the payload did not."
   end
 
   # What a repository carrying a rotated-but-unused key is called, in the one place both surfaces

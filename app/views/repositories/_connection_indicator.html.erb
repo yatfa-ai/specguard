@@ -7,9 +7,9 @@
     <%= render UI::BadgeComponent.new(tone: :error) { revoked_key_label } %>
     <span><%= revoked_keys_note(revocations.size, revocations.first, last_refusal) %></span>
   <% elsif @rejected_ingests.refusing? %>
-    <%= render UI::BadgeComponent.new(tone: :error) { refused_deliveries_label } %>
+    <%= render UI::BadgeComponent.new(tone: :error) { rejected_ingests_label } %>
     <span>
-      <%= refused_deliveries_note(@rejected_ingests.last_rejection_at) %>
+      <%= rejected_ingests_note(@rejected_ingests.last_rejection_at) %>
       <a href="#delivery">See Delivery</a>
     </span>
   <% elsif @last_live_api_request_at.present? %>

@@ -76,6 +76,7 @@
     <%= render "repositories/section_runs" %>
   <% else %>
     <%= render "repositories/onboarding", has_api_keys: has_api_keys, manage_keys: manage_keys %>
+    <section class="rc-section" id="repository" aria-label="This repository"><%= render "repositories/repository_facts" -%></section>
   <% end %>
 
   <%= render "repositories/section_delivery", has_api_keys: has_api_keys, manage_keys: manage_keys, has_runs: has_runs %>

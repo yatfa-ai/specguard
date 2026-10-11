@@ -358,7 +358,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # Both are true of this repository, and the branch order decides which is reported. A refusal
       # is a pipeline doing work and having it thrown away; a rotation is work not started yet.
       expect(key.reload).to be_rotated_and_unused
-      expect(connect_text).to include("Deliveries refused")
+      expect(connect_text).to include("Rejected ingests")
       expect(connect_text).not_to include("Key rotated")
     end
 
@@ -466,7 +466,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       get repository_path(repository)
 
       expect(connect_text).to include("Revoked key still presented")
-      expect(connect_text).not_to include("Deliveries refused")
+      expect(connect_text).not_to include("Rejected ingests")
     end
 
     # The plural shape, on the rotation branch's own rule: count the keys, date the OLDEST

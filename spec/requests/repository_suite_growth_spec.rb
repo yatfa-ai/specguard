@@ -27,6 +27,8 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
   def overview_panel = console_overview
 
+  def page_doc = Capybara.string(response.body)
+
   # ELEMENT-scoped, never panel-scoped, and that is load-bearing — the same trap
   # spec/requests/repository_runs_spec.rb:23-30 documents from a verified mutation, one surface
   # over. Five states here produce a no-delta panel and several of them share words ("no earlier
@@ -36,11 +38,15 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
   def basis_line = overview_panel.find("#suite-size-basis")
 
-  # The "Tests in suite" cell itself, so "the delta rendered" can never be satisfied by the figure
-  # having drifted into some other row of the def list.
+  # The "Tests in suite" stat itself, so "the delta rendered" can never be satisfied by the figure
+  # having drifted into some other stat of the verdict card.
   def suite_size_cell
-    overview_panel.find(:xpath, ".//dt[normalize-space()='Tests in suite']/following-sibling::dd[1]")
+    overview_panel.find(".rc-stat", text: "Tests in suite")
   end
+
+  # The figure as a reader reads it: the level and, when one was drawn, the change beside it —
+  # without the stat's label or its "vs the previous run" caption, which are not the figure.
+  def suite_size_text = suite_size_cell.all(".rc-stat-value, .delta").map { |node| node.text.squish }.join(" ")
 
   # One shard of one run, through the producer. Every sharded fixture below is a sequence of these,
   # so a run that has delivered 1 of 4 shards is built the way CI builds it: by having posted once.
@@ -79,7 +85,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
     expect(response).to have_http_status(:ok)
     expect(delta_figure.text).to eq("+47")
     # The level and the change are one statement, not two figures a reader has to relate.
-    expect(suite_size_cell.text).to eq("1,047 +47")
+    expect(suite_size_text).to eq("1,047 +47")
   end
 
   # @intent: {"entity": "TestRun", "action": "state delta basis", "behavior": "The basis line names the comparand a1b2c3d as the previous run on main about 3 hours ago and states that only runs on the same branch are compared.", "layer": "request"}
@@ -112,7 +118,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
     expect(delta_figure.text).to eq("−400")
     expect(delta_figure.text).not_to eq("400")
     expect(delta_figure.text).not_to eq("+400")
-    expect(suite_size_cell.text).to eq("1,000 −400")
+    expect(suite_size_text).to eq("1,000 −400")
   end
 
   # "Compared, and it did not move" is an answer, and a different one from "there was nothing to
@@ -147,7 +153,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
     # No delta at all — not a `−980` taken against a branch that never had those tests.
     expect(overview_panel).to have_no_css("#suite-size-delta")
-    expect(suite_size_cell.text).to eq("20")
+    expect(suite_size_text).to eq("20")
     expect(basis_line).to have_text("No earlier run on feature/x", normalize_ws: true)
     # The run it must NOT have reached for. Asserted on the basis line specifically: "main" appears
     # elsewhere on this page in other repositories' fixtures and in the Recent-runs table below.
@@ -185,7 +191,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
     # Every anonymous run pooled under `branch IS NULL` would have made this a confident `+47`
     # across two runs that may have come from anywhere.
     expect(overview_panel).to have_no_css("#suite-size-delta")
-    expect(suite_size_cell.text).to eq("1,047")
+    expect(suite_size_text).to eq("1,047")
     expect(basis_line).to have_text("reported no branch", normalize_ws: true)
     # The state-2 wording, which shares the "no earlier run" idea and must not stand in for this.
     expect(basis_line).to have_no_text("No earlier run on", normalize_ws: true)
@@ -220,7 +226,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
     get repository_path(repository)
 
-    expect(overview_panel).to have_text("Measured on tiedsec", normalize_ws: true)
+    expect(page_doc.find(".rc-run")).to have_text("Reading run tiedsec", normalize_ws: true)
     # +2 against its same-instant twin. Against the two-hours-ago run it would read +7.
     expect(delta_figure.text).to eq("+2")
     expect(basis_line).to have_text("measured against tiedfir", normalize_ws: true)
@@ -251,7 +257,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
       # −14,990 is what this rendered before the guard: three quarters of the suite deleted by a
       # commit that deleted nothing, wearing a named SHA and an age.
       expect(overview_panel).to have_no_css("#suite-size-delta")
-      expect(suite_size_cell.text).to eq("5,010")
+      expect(suite_size_text).to eq("5,010")
       expect(basis_line).to have_no_text("14,990", normalize_ws: true)
     end
 
@@ -286,7 +292,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
       get repository_path(repository)
 
       expect(overview_panel).to have_no_css("#suite-size-delta")
-      expect(suite_size_cell.text).to eq("20,000")
+      expect(suite_size_text).to eq("20,000")
       expect(basis_line).to have_text("ccccccc was assembled from 2 shard reports", normalize_ws: true)
     end
 
@@ -301,7 +307,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
       get repository_path(repository)
 
       expect(delta_figure.text).to eq("+20")
-      expect(suite_size_cell.text).to eq("20,020 +20")
+      expect(suite_size_text).to eq("20,020 +20")
       # The delta's own coverage, on the surface beside it — the second half of the rule the branch
       # scope is the first half of.
       expect(basis_line).to have_text("only runs assembled from the same 4 shard reports",
@@ -344,9 +350,12 @@ RSpec.describe "Repository suite-size growth", type: :request do
       # fact about this run, not about the suite" — the page computing a change and then
       # disclaiming the figure it computed it from, in adjacent paragraphs.
       expect(overview_panel).to have_no_css("#suite-size-delta")
-      expect(suite_size_cell.text).to eq("0")
+      # A run that reported nothing has a count but not a measurement, so the verdict card prints no
+      # figure for it — a dash with its own caption — rather than a 0 a reader would take for one.
+      expect(suite_size_text).to eq("—")
+      expect(suite_size_cell).to have_text("This run reported no tests at all", normalize_ws: true)
       expect(basis_line).to have_text("This run reported no tests", normalize_ws: true)
-      expect(overview_panel).to have_text("The latest run reported no tests at all", normalize_ws: true)
+      expect(overview_panel).to have_text("reported no tests at all", normalize_ws: true)
     end
 
     # The mirror, which is the same defect with its sign flipped: the whole suite charged to one
@@ -362,7 +371,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
       get repository_path(repository)
 
       expect(overview_panel).to have_no_css("#suite-size-delta")
-      expect(suite_size_cell.text).to eq("1,000")
+      expect(suite_size_text).to eq("1,000")
       expect(basis_line).to have_text("previous run on main (zeropre) reported no tests",
                                       normalize_ws: true)
       # The other side's wording, which must not stand in for this one: this run counted 1,000.

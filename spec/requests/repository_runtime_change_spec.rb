@@ -40,8 +40,34 @@ RSpec.describe "Repository runtime change", type: :request do
   # The cells themselves, so "the delta rendered" can never be satisfied by the figure having
   # drifted into some other row of the def list. Matched on the label's PREFIX because the two
   # sharded labels carry their own coverage in parentheses — "Wall clock (slowest of 4 shards)".
+  #
+  # In the console the wall clock (or, unsharded, the total runtime) is the verdict card's third
+  # stat and the machine time is a fact of the "What the wall clock waited for" panel under What is
+  # slow — so a cost figure is found by its label in whichever of the two holds it, and read as the
+  # level plus the change beside it, without the caption that qualifies it.
   def cost_cell(label)
-    overview_panel.find(:xpath, ".//dt[starts-with(normalize-space(), '#{label}')]/following-sibling::dd[1]")
+    wanted = label.start_with?("Machine") ? "Machine time" : label
+    node = overview_panel.all(".rc-stat, #shard-decomposition .rc-facts > div").find do |candidate|
+      candidate.first(".rc-stat-label, dt")&.text.to_s.squish.start_with?(wanted)
+    end
+    raise Capybara::ElementNotFound, "no cost figure labelled #{label}" unless node
+
+    CostFigure.new(node)
+  end
+
+  # A cost figure as a reader reads it: the level and, when one was drawn, the change beside it.
+  # The verdict card keeps them in `.rc-stat-value` and `.delta`; the shard panel's `dd` holds the
+  # level as its own leading text, then the delta, then a muted coverage sub-line (`.rc-sec`) that
+  # qualifies the figure and is not part of it.
+  CostFigure = Struct.new(:node) do
+    def text
+      return node.all(".rc-stat-value, .delta").map { |part| part.text.squish }.join(" ") if node.has_css?(".rc-stat-value")
+
+      dd = node.find("dd")
+      level = dd.text.squish.sub(/\A(\S+(?: \S+)*?)(?= (?:all|\d+ of|[+−±]).*\z)/, '\1')
+      level = level[/\A(?:at least )?(?:\d+h )?(?:\d+m )?(?:\d+(?:\.\d+)?s)?/].to_s.strip
+      [level, *dd.all(".delta").map { |delta| delta.text.squish }].join(" ")
+    end
   end
 
   def unsharded_run(repository, commit_sha:, total:, duration:, created_at:, branch: "main")
@@ -223,7 +249,8 @@ RSpec.describe "Repository runtime change", type: :request do
       expect(overview_panel).to have_no_css("#runtime-delta")
       # The level is still the muted "not reported" it always was — an absent fact styled as
       # absent, never a runtime of zero with a change hung off it.
-      expect(cost_cell("Total runtime").text).to eq("not reported")
+      expect(cost_cell("Total runtime").text).to eq("—")
+      expect(overview_panel.find(".rc-stat", text: "Total runtime")).to have_text("This run reported no timing at all", normalize_ws: true)
       expect(runtime_basis).to have_text("This run reported no timing at all", normalize_ws: true)
       expect(runtime_basis).to have_no_text("reported no timing, so there is nothing to measure",
                                             normalize_ws: true)

@@ -5,18 +5,5 @@
     <p>Every run CI reported, newest first, across all branches.</p>
   </div>
   <%= render "repositories/recent_runs" -%>
-  <%# The facts the old Overview carried that are about the repository, not the run: who owns it, how
-      many runs it holds, and — for a member — what they may do here, with the way out. %>
-  <% viewer_access = repository_policy.grantable_permissions unless repository_policy.can?(:owner) %>
-  <%= render UI::DefListComponent.new(rows: [["Owner", @repository.user.display_name],
-                                             ["Test runs", number_with_delimiter(@repository.test_runs.count)],
-                                             *(viewer_access ? [["Your access", viewer_access.join(", ")]] : [])]) %>
-  <% if viewer_access %>
-    <div class="flex flex-wrap items-center gap-3">
-      <p class="text-xs text-app-content-secondary"><%= held_access_description(viewer_access) %></p>
-      <%= button_to "Leave", leave_repository_members_path(@repository), method: :delete,
-                    class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                    form: { data: { turbo_confirm: leave_confirmation(@repository, @viewer_keys_minted) } } %>
-    </div>
-  <% end %>
+  <%= render "repositories/repository_facts" -%>
 </section>

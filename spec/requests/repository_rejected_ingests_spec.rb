@@ -135,7 +135,7 @@ RSpec.describe "Repository rejected deliveries", type: :request do
 
       # @intent: {"entity": "IngestRejection", "action": "announce refusals", "behavior": "the connection indicator reads Deliveries refused", "layer": "request"}
       it "reports that deliveries are being refused" do
-        expect(connect_text).to include("Deliveries refused")
+        expect(connect_text).to include("Rejected ingests")
       end
 
       # @intent: {"entity": "IngestRejection", "action": "avoid success styling", "behavior": "the connection indicator renders without the text-app-success class", "layer": "request"}
@@ -158,7 +158,7 @@ RSpec.describe "Repository rejected deliveries", type: :request do
     # @intent: {"entity": "IngestRejection", "action": "recover after acceptance", "behavior": "once an accepted delivery follows the refusal the indicator reads Connected again with no mention of Deliveries refused", "layer": "request"}
     it "reads Connected again" do
       expect(connect_text).to include("Connected")
-      expect(connect_text).not_to include("Deliveries refused")
+      expect(connect_text).not_to include("Rejected ingests")
     end
 
     # The refusal still happened, and the panel is a history rather than a live alarm — so the row
@@ -178,7 +178,7 @@ RSpec.describe "Repository rejected deliveries", type: :request do
 
     # @intent: {"entity": "IngestRejection", "action": "report latest refusal", "behavior": "when the last completed delivery was the refused one the indicator reads Deliveries refused and not Connected", "layer": "request"}
     it "reports the refusal, because the last delivery to complete was thrown away" do
-      expect(connect_text).to include("Deliveries refused")
+      expect(connect_text).to include("Rejected ingests")
       expect(connect_text).not_to include("Connected")
     end
   end
@@ -192,14 +192,14 @@ RSpec.describe "Repository rejected deliveries", type: :request do
 
     # @intent: {"entity": "IngestRejection", "action": "render empty state", "behavior": "with nothing ever refused the panel still renders, reading No rejected deliveries", "layer": "request"}
     it "still renders the panel, with an empty state" do
-      expect(panel_text).to include("No rejected deliveries")
+      expect(panel_text).to include("No rejected ingests")
     end
 
     # Scoped to what the table can actually see. An empty state claiming "everything is fine" would
     # replace the false Connected this slice removed with a quieter false claim of its own.
     # @intent: {"entity": "IngestRejection", "action": "scope empty-state claim", "behavior": "the empty state matches refused for its payload, scoping its good news to the payload family the table can see", "layer": "request"}
     it "scopes the good news to the payload family it can see" do
-      expect(panel_text).to match(/refused for its payload/i)
+      expect(panel_text).to match(/rejected for its payload/i)
     end
 
     # @intent: {"entity": "IngestRejection", "action": "keep connected reading", "behavior": "the connection indicator still reads Connected when nothing was refused", "layer": "request"}
@@ -320,13 +320,13 @@ RSpec.describe "Repository rejected deliveries", type: :request do
 
     # The assertion that fails on a summary computed off the capped list: eleven refusals
     # retained, ten rendered, and the population is eleven — not `rows.size`.
-    # @intent: {"entity": "IngestRejection", "action": "state retained population", "behavior": "eleven retained refusals with only ten rows rendered leaves the summary reading holds 11 refused deliveries", "layer": "request"}
+    # @intent: {"entity": "IngestRejection", "action": "state retained population", "behavior": "eleven retained refusals with only ten rows rendered leaves the summary reading holds 11 rejected ingests", "layer": "request"}
     it "states the retained population, not the capped list's length" do
       (IngestRejection::PANEL_LIMIT + 1).times { refuse_a_delivery }
       visit_repository
 
       expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
-      expect(window_text).to include("holds 11 refused deliveries")
+      expect(window_text).to include("holds 11 rejected ingests")
     end
 
     # Two halves of the same fact. Different populations render different totals — a repository
@@ -338,11 +338,11 @@ RSpec.describe "Repository rejected deliveries", type: :request do
     it "moves with the retained population and holds at the retention cap" do
       IngestRejection::REPOSITORY_RETENTION_ROWS.times { refuse_a_delivery }
       visit_repository
-      expect(window_text).to include("holds 50 refused deliveries")
+      expect(window_text).to include("holds 50 rejected ingests")
 
       (IngestRejection::REPOSITORY_RETENTION_ROWS + 5).times { refuse_a_delivery }
       visit_repository
-      expect(window_text).to include("holds 50 refused deliveries")
+      expect(window_text).to include("holds 50 rejected ingests")
     end
 
     # Success criterion 2's exact shape — the pin on the actual defect. A summary computed off the
@@ -358,7 +358,7 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       # The TABLE names it nowhere — the summary is the only surface that can.
       expect(panel.find("table").text.squish).not_to include("specguard-rspec/0.2.9")
       expect(window_text).to include("3 from specguard-rspec/0.2.9")
-      expect(window_text).to include("holds 13 refused deliveries")
+      expect(window_text).to include("holds 13 rejected ingests")
     end
 
     # The bucket and the sum. "Not reported" is the rows' own wording one panel down, and the
@@ -369,14 +369,14 @@ RSpec.describe "Repository rejected deliveries", type: :request do
     # RUNS and does not remove a space that sits before punctuation: every `include` against the
     # substrings around a separator passes over "…0.3.1 , 2… Not reported ." — only a match on the
     # whole sentence can fail on the join itself.
-    # @intent: {"entity": "IngestRejection", "action": "bucket missing client", "behavior": "two refusals sent without a User-Agent render a stored NULL row and the summary reading exactly: The retained window holds 5 refused deliveries: 3 from specguard-rspec/0.3.1, 2 Not reported.", "layer": "request"}
+    # @intent: {"entity": "IngestRejection", "action": "bucket missing client", "behavior": "two refusals sent without a User-Agent render a stored NULL row and the summary reading exactly: The retained window holds 5 rejected ingests: 3 from specguard-rspec/0.3.1, 2 Not reported.", "layer": "request"}
     it "buckets deliveries with no User-Agent under Not reported, summing to the total" do
       3.times { refuse_a_delivery }
       2.times { refuse_a_delivery(user_agent: nil) }
       visit_repository
 
       expect(IngestRejection.last.user_agent).to be_nil
-      expect(window_text).to eq("The retained window holds 5 refused deliveries: " \
+      expect(window_text).to eq("The retained window holds 5 rejected ingests: " \
                                 "3 from specguard-rspec/0.3.1, 2 Not reported.")
 
       # The ERB-comment leak class: a `<%#` comment whose body contains the closing marker
@@ -441,7 +441,7 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       refuse_a_large_delivery
       visit_repository
 
-      expect(panel_text).to match(/at most #{IngestRejection::RETAINED_REASONS_PER_ROW} are kept per delivery/i)
+      expect(panel_text).to match(/at most #{IngestRejection::RETAINED_REASONS_PER_ROW} are kept per ingest/i)
     end
 
     # The invariance that makes this a bound rather than a smaller number: a suite seven times the
@@ -490,7 +490,7 @@ RSpec.describe "Repository rejected deliveries", type: :request do
   #
   # This is the whole point of the seam rather than a restatement of the examples above. The row is
   # written by a middleware that answers its own 400 and never calls the app, so before it existed
-  # this repository's page rendered "No rejected deliveries" — a positive claim, and a false one —
+  # this repository's page rendered "No rejected ingests" — a positive claim, and a false one —
   # over a pipeline having every delivery thrown away. Both surfaces already read `RejectedIngests`,
   # so nothing here is new rendering: what is new is that there is now a row for them to read.
   describe "when the refusal was decided at the Rack boundary" do
@@ -501,13 +501,13 @@ RSpec.describe "Repository rejected deliveries", type: :request do
 
       # @intent: {"entity": "IngestRejection", "action": "report boundary refusal", "behavior": "a delivery refused at the Rack boundary over a lying gzip header still turns the repository page's connection indicator to Deliveries refused", "layer": "request"}
       it "reports that deliveries are being refused" do
-        expect(connect_text).to include("Deliveries refused")
+        expect(connect_text).to include("Rejected ingests")
       end
 
       # The exact falsehood this ticket removes.
       # @intent: {"entity": "IngestRejection", "action": "withdraw empty-state claim", "behavior": "the boundary-refused repository's page no longer claims No rejected deliveries", "layer": "request"}
       it "no longer claims there are no rejected deliveries" do
-        expect(panel_text).not_to include("No rejected deliveries")
+        expect(panel_text).not_to include("No rejected ingests")
       end
 
       # Stored in the middleware's own words, never re-worded into a verdict — the same rule the
