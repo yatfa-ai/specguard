@@ -84,7 +84,7 @@
                     body: layers_stack(directory.layer_counts),
                     actions: [["Spec files in this directory", drill_down_path(@repository, spec_directory: directory.path, anchor: "slow"), :primary],
                               ["Unannotated here", drill_down_path(@repository, spec_directory: directory.path, anchor: "annotations"), :secondary]]) do %>
-                <td><%= row_open(directory.path, mono: true) %></td>
+                <td><%= row_open(directory.path, mono: true, current: directory.path == @spec_directory_request) %></td>
                 <td class="num mute" data-sort="<%= directory.timed_count %>"><%= directory.coverage_label %></td>
                 <td class="num" data-sort="<%= directory.total_seconds %>"><%= directory.duration_label %></td>
                 <td class="num mute" data-sort="<%= directory.distinct_name_count %>">

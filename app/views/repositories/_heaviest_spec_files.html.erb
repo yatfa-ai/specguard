@@ -67,7 +67,7 @@
                     actions: [["Examples in this file", drill_down_path(@repository, spec_file: file.path, anchor: "slow"), :primary],
                               ["Unannotated here", drill_down_path(@repository, spec_file: file.path, anchor: "annotations"), :secondary],
                               ["Open on GitHub", "#{@repository.github_url}/blob/#{@latest_test_run.commit_sha}/#{file.path}", :ghost]]) do %>
-                <td><%= row_open(file.path, mono: true) %></td>
+                <td><%= row_open(file.path, mono: true, current: file.path == @spec_file_request) %></td>
                 <td class="num mute" data-sort="<%= file.timed_count %>"><%= file.coverage_label %></td>
                 <td class="num" data-sort="<%= file.total_seconds %>"><%= file.duration_label %></td>
                 <td data-sort="<%= file.layer_counts.values.sum %>"><%= layers_stack(file.layer_counts) || tag.span("—", class: "text-app-content-secondary") %></td>

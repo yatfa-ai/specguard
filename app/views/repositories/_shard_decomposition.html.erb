@@ -1,5 +1,12 @@
 <%# SHARD DECOMPOSITION of the run being read: what the wall clock waited for. Every sentence and
-    every guard is the old Summary's own; only the per-shard list became a table. %>
+    every guard is the old Summary's own; only the per-shard list became a table.
+
+    About SHARDS, never about tests: every noun below is a shard, a split, or the suite as a whole,
+    and no wording here may imply otherwise. The rule is unchanged; its old justification is not. This
+    prose used to say that nothing in the schema recorded how long any single test took and that
+    "which tests are slow" was therefore unanswerable — true when it was written, and false since
+    `spec_observations` began retaining one timed row per example per run. The "Slowest tests" panel
+    answers exactly that question off those rows. %>
 <% shard_count = @latest_test_run.shard_count %>
 <% presented_as_sharded = @latest_test_run.multi_shard? %>
     <% if presented_as_sharded %>

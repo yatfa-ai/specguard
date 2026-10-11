@@ -69,7 +69,7 @@
                               *(observation.spec_file_path.present? ? [["Examples in this file", drill_down_path(@repository, spec_file: observation.spec_file_path, anchor: "slow"), :secondary]] : []),
                               ["Open on GitHub", @repository.github_blob_url(observation.file_path, observation.line_number, @latest_test_run.commit_sha), :ghost]]) do %>
                 <td>
-                  <%= row_open(observation.label) %>
+                  <%= row_open(observation.label, current: (observation.name.present? && observation.name == @unstable_test_request) || (observation.spec_file_path.present? && observation.spec_file_path == @spec_file_request)) %>
                   <span class="rc-sec mono"><%= observation.spec_file_path.presence || "not reported" %></span>
                   <%= render "repositories/authored_intent", observation: observation %>
                 </td>

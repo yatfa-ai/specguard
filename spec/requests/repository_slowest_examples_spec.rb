@@ -33,43 +33,49 @@ RSpec.describe "Repository slowest tests", type: :request do
   # what CI reported happened to it. Whitespace-collapsed, because a label and a location assembled
   # across two ERB tags are two readings on the page whatever the source did with indentation.
   #
-  # The two coordinate lines are told apart by POSITION and never by what they say: for an ordinary
-  # example they read nearly the same, and telling them apart by text would pass on a cell that
-  # printed one of them twice. The run-in line is ALWAYS rendered — a path, or "not reported" — so
-  # it is the last span of the cell, and a definition site exists only where there are two.
+  # In the console a ranked row is a HANDLE (the test's label, a button) with one muted line under it
+  # (the file that ran it) and its detail in the ONE drawer: "Defined at", "Spec file that ran it",
+  # the declared intent, and the row's destinations — Run by run, Examples in this file, Open on
+  # GitHub. `spec/support/request_disclosure_content.rb` unwraps a row's <template> into a hidden
+  # cell of the same row, so the drawer's facts and links are read from the document the server sent.
+  #
+  # The drawer facts are told apart by their LABEL ("Defined at" vs "Spec file that ran it") — the
+  # two coordinates of an ordinary example read nearly the same, so a text filter would select
+  # whichever the row happened to carry first.
+  def drawer_cell(row) = row.first("td[data-drawer-body]", visible: :all)
+
+  def fact(row, label)
+    dl = drawer_cell(row).first("dl", visible: :all)
+    dl.all("dt", visible: :all).zip(dl.all("dd", visible: :all))
+      .find { |dt, _| dt.text(:all).squish == label }&.last&.text(:all)&.squish
+  end
+
+  def action(row, label) = drawer_cell(row).first("a", exact_text: label, visible: :all, minimum: 0)
+
   def rows
     panel.all("tbody tr").map do |row|
-      label_cell, layer_cell, duration_cell, outcome_cell = row.all("td")
-      sites = coordinate_spans(label_cell).map { |span| span.text.gsub(/\s+/, " ").strip }
-      ran_in = sites.last
-      location = sites.first if sites.size > 1
-      label = label_cell.text.gsub(/\s+/, " ").strip
-      intent = intent_block(label_cell)
-      label = label.delete_suffix(intent.text.gsub(/\s+/, " ").strip).strip if intent
-      [ran_in, location].compact.each { |site| label = label.delete_suffix(site).strip }
+      label_cell, layer_cell, duration_cell, outcome_cell = row.all("td").first(4)
+      ran_in = fact(row, "Spec file that ran it")
+      defined_at = fact(row, "Defined at")
+      # The old cell printed the definition site only when it differed from the run-in line (it had
+      # none to say for a row whose file did not report one); the drawer states both, always.
+      location = defined_at if ran_in != "not reported" || defined_at.present?
 
-      { label: label, location: location, ran_in: ran_in, layer: layer_cell.text.strip,
-        duration: duration_cell.text.strip,
+      { label: label_cell.first(".row-open").text.squish, location: location, ran_in: ran_in,
+        layer: layer_cell.text.strip, duration: duration_cell.text.strip,
         outcome: outcome_cell.text.strip, outcome_class: outcome_cell.find("span")[:class] }
     end
   end
 
   def row_labels = rows.map { |row| row[:label] }
 
-  # The run-in line's span and the drill-in link inside it, told apart from the definition-site link
-  # that shares the cell by POSITION and never by text: the run-in line is ALWAYS the last span of
-  # the cell, and for an ordinary example the two coordinate lines read nearly the same, so a text
-  # filter would select whichever the row happened to render first. The span is always there — a
-  # path, or "not reported" — and only the path branch carries a link.
-  def ran_in_cell(row) = coordinate_spans(row.all("td").first).last
+  # The run-in file's drill-in link, and the definition site's — the drawer's "Examples in this
+  # file" and "Open on GitHub" actions, told apart by their own text (they are different gestures).
+  def ran_in_cell(row) = drawer_cell(row)
 
-  # The cell's coordinate spans, WITHOUT the declared-intent block (`repositories/_authored_intent`)
-  # that shares the cell and carries spans of its own — the intent is not a coordinate line.
-  def coordinate_spans(cell) = cell.all(:xpath, ".//span[not(ancestor::*[@data-authored-intent])]")
+  def ran_in_link(row) = action(row, "Examples in this file")
 
   def intent_block(cell) = cell.first(:css, "[data-authored-intent]", minimum: 0)
-
-  def ran_in_link(row) = ran_in_cell(row).find("a")
 
   # One ingested run, through the producer. `specs` are the wire hashes a client POSTs; the
   # recorder reads them by string key, which is what `Ingest::Payload` hands it after JSON parsing.
@@ -145,7 +151,9 @@ RSpec.describe "Repository slowest tests", type: :request do
 
       expect(row_labels).to eq(["spec/models/ledger_spec.rb:88"])
       # The fallback already IS the location, so the row is not made to wear it twice.
-      expect(rows.first[:location]).to be_nil
+      # The drawer states "Defined at" always; the name-less row is its own coordinate, so the label
+      # and the location read the same and the row is not made to wear it as a second, different thing.
+      expect(rows.first[:location]).to eq(rows.first[:label])
     end
 
     # @intent: {"entity": "GET /repositories/:id", "action": "state ranking coverage", "behavior": "with both recorded examples timed the basis line reads that every one of the 2 examples this run recorded reported a duration", "layer": "request"}
@@ -195,7 +203,11 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     # The drill-in link, told apart from the definition-site link that now sits in the same cell by
     # POSITION and never by text — the same rule `#rows` tells the two coordinate lines apart by.
-    def links = panel.all("tbody tr").flat_map { |row| ran_in_cell(row).all("a") }
+    # The "file" destinations, one per row that has an including file; the row's own handle carries
+    # `aria-current` when that file is the open one (the drawer's action is a plain destination).
+    def links = panel.all("tbody tr").filter_map { |row| ran_in_link(row) }
+
+    def current_marks = panel.all("tbody tr").map { |row| [fact(row, "Spec file that ran it"), row.first(".row-open")["aria-current"]] }
 
     # The rows of the destination panel, as text. Used to compare the panel reached from HERE against
     # the same panel reached from the by-file rollup, which is the only assertion that can say the
@@ -212,7 +224,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       href = ran_in_link(panel.first("tbody tr"))[:href]
 
       expect(href).to include("spec_file=#{CGI.escape(order_spec)}")
-      expect(href).to include("#spec-file-examples")
+      expect(href).to end_with("#slow")
     end
 
     # The definition site is not replaced by the file that ran the example; the cell states both.
@@ -230,8 +242,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     it "marks the rows whose file is already open, and only those" do
       get repository_path(two_file_run, spec_file: refund_spec)
 
-      expect(links.map { |link| [link.text, link["aria-current"]] })
-        .to eq([[order_spec, nil], [refund_spec, "true"], [refund_spec, "true"]])
+      expect(current_marks).to eq([[order_spec, nil], [refund_spec, "true"], [refund_spec, "true"]])
     end
 
     # THE row this link exists for, and the one the printed coordinate cannot serve. `spec_file_path`
@@ -250,7 +261,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
       expect(rows.first[:location]).to eq("spec/support/shared_examples.rb:7")
       expect(rows.first[:ran_in]).to eq(order_spec)
-      expect(links.first[:href]).to include("spec_file=#{CGI.escape(order_spec)}")
+      expect(ran_in_link(panel.first("tbody tr"))[:href]).to include("spec_file=#{CGI.escape(order_spec)}")
       # And never the two halves of different files printed as one pair, which would point at
       # whatever sits on line 7 of the including file.
       expect(panel).to have_no_text("#{order_spec}:7")
@@ -268,15 +279,16 @@ RSpec.describe "Repository slowest tests", type: :request do
       get repository_path(repository)
 
       expect(rows.first[:ran_in]).to eq("not reported")
-      expect(ran_in_cell(panel.first("tbody tr"))).to have_no_css("a")
+      expect(ran_in_link(panel.first("tbody tr"))).to be_nil
       # The definition site is NOT NULL and is what such a row is read by. It is no longer the only
       # thing on the row worth following — this row is NAMED, and the name carries the per-run
       # history drill-in — so the cell holds those two and the run-in line carries none. Counted
       # here rather than left to the assertion above because the count is what says the missing
       # including file cost this row ONE link and not its whole cell.
       expect(rows.first[:location]).to eq("#{order_spec}:1")
-      expect(panel.first("tbody tr").all("td").first.all("a").size).to eq(2)
-      expect(panel.first("tbody tr").all("td").first.all("a").last[:href]).to eq(
+      expect(drawer_cell(panel.first("tbody tr")).all("a", visible: :all).map { |link| link.text(:all).squish })
+        .to eq(["Run by run", "Open on GitHub"])
+      expect(action(panel.first("tbody tr"), "Open on GitHub")[:href]).to eq(
         "https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/feedfacecafe0001/#{order_spec}#L1"
       )
     end
@@ -313,8 +325,9 @@ RSpec.describe "Repository slowest tests", type: :request do
       get repository_path(two_file_run)
 
       from_slowest = ran_in_link(panel.first("tbody tr"))[:href]
-      from_rollup = Capybara.string(response.body).find("#spec-file-durations")
-                            .find("a", text: order_spec)[:href]
+      from_rollup = Capybara.string(response.body).find("#spec-file-durations").all("tbody tr", visible: :all)
+                            .find { |tr| tr.first("td").text(:all).squish == order_spec }
+                            .find("a", exact_text: "Examples in this file", visible: :all)[:href]
 
       get from_slowest.split("#").first
       via_slowest = spec_file_panel_rows
@@ -356,11 +369,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # counting back a fixed number of anchors: the run-in line carries a link only when the row has
     # an including file, so a positional offset would read a different anchor on the row that has
     # none — which is a real branch this file turns on one describe block up.
-    def definition_link(row)
-      ran_in_paths = ran_in_cell(row).all("a").map(&:path)
-
-      row.all("td").first.all("a").reject { |link| ran_in_paths.include?(link.path) }.last
-    end
+    def definition_link(row) = action(row, "Open on GitHub")
 
     def definition_hrefs = panel.all("tbody tr").map { |row| definition_link(row)[:href] }
 
@@ -378,7 +387,10 @@ RSpec.describe "Repository slowest tests", type: :request do
                                       blob("feedfacecafe0001", invoice_spec, 12)])
       # The link text is the coordinate the panel already printed — the same string the reader was
       # reading, not a second control bolted onto the row.
-      expect(definition_link(panel.first("tbody tr")).text.strip).to eq("#{order_spec}:30")
+      # The link text is the action's own ("Open on GitHub"); the coordinate it opens is the row's
+      # printed "Defined at" fact, asserted beside it.
+      expect(definition_link(panel.first("tbody tr")).text(:all).squish).to eq("Open on GitHub")
+      expect(rows.first[:location]).to eq("#{order_spec}:30")
     end
 
     # THE BRANCH THAT IS EASY TO MISS. `#label` is `name.presence || location_label`, so a row from
@@ -398,8 +410,8 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(definition_hrefs).to eq([blob("feedfacecafe0001", "spec/models/ledger_spec.rb", 88)])
       # And NOT TWICE: the fallback already IS the coordinate, so there is no second location line
       # to link, and the cell holds this link plus the drill-in and nothing else.
-      expect(rows.first[:location]).to be_nil
-      expect(panel.first("tbody tr").all("td").first.all("a").size).to eq(2)
+      expect(rows.first[:location]).to eq(rows.first[:label])
+      expect(drawer_cell(panel.first("tbody tr")).all("a", visible: :all).size).to eq(2)
     end
 
     # THE DEFINITION SITE, never the including file. `#location_label` pairs `file_path` with
@@ -531,9 +543,13 @@ RSpec.describe "Repository slowest tests", type: :request do
     # by text — the rule this whole file reads this cell by. On a NAMED row it is the cell's first
     # anchor; this helper is used only on named rows, because on a nameless one the first anchor is
     # the definition site and there is deliberately no name link to find.
-    def name_link(row) = row.all("td").first.all("a").first
+    # The drawer's "Run by run" action is the link into the history; the row's handle carries the
+    # printed label and `aria-current` (one per open test).
+    def name_link(row) = action(row, "Run by run")
 
-    def name_links = panel.all("tbody tr").map { |row| name_link(row) }
+    def name_links = panel.all("tbody tr").filter_map { |row| name_link(row) }
+
+    def name_handles = panel.all("tbody tr").map { |row| row.first(".row-open") }
 
     def history_panel? = Capybara.string(response.body).has_css?("#unstable-test-runs")
 
@@ -567,7 +583,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       href = name_link(panel.first("tbody tr"))[:href]
 
       expect(href).to include("unstable_test=#{CGI.escape(slow_test)}")
-      expect(href).to include("#unstable-test-runs")
+      expect(href).to end_with("#unstable")
     end
 
     # The link TEXT is what the reader was already looking at, so following it is not a jump to
@@ -576,7 +592,8 @@ RSpec.describe "Repository slowest tests", type: :request do
     it "links the label the panel already printed" do
       get repository_path(two_run_repository)
 
-      expect(name_links.map(&:text).map(&:strip)).to eq([slow_test, other_test])
+      expect(name_handles.map { |handle| handle.text.strip }).to eq([slow_test, other_test])
+      expect(name_links.size).to eq(2)
     end
 
     # ⭐ CRITERION 1, followed rather than asserted at the href: the reader arrives at a panel that
@@ -628,7 +645,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     it "marks the row whose test is currently open" do
       get repository_path(two_run_repository, unstable_test: slow_test)
 
-      expect(name_links.map { |link| [link.text.strip, link["aria-current"]] })
+      expect(name_handles.map { |handle| [handle.text.strip, handle["aria-current"]] })
         .to eq([[slow_test, "true"], [other_test, nil]])
     end
 
@@ -645,14 +662,16 @@ RSpec.describe "Repository slowest tests", type: :request do
       get repository_path(repository)
 
       row = panel.first("tbody tr")
-      links = row.all("td").first.all("a")
+      links = drawer_cell(row).all("a", visible: :all)
 
       expect(row_labels).to eq(["spec/models/ledger_spec.rb:88"])
-      # The definition site and the run-in drill-in, and no third link: no history ask was added.
-      expect(links.size).to eq(2)
-      expect(links.first[:href])
+      # The definition site and the run-in drill-in, and no third link: a nameless row has no
+      # "Run by run" action, because it has no name to ask a history of.
+      expect(links.map { |link| link.text(:all).squish }).to eq(["Examples in this file", "Open on GitHub"])
+      github = links.last
+      expect(github[:href])
         .to eq("https://github.com/#{Builders::DEFAULT_GITHUB_FULL_NAME}/blob/feedfacecafe0001/spec/models/ledger_spec.rb#L88")
-      expect(links.first[:target]).to eq("_blank")
+      expect(github[:target]).to eq("_blank")
       expect(links.map { |link| link[:href] }).to all(satisfy { |href| !href.include?("unstable_test=") })
     end
 
@@ -731,7 +750,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
       ranking = Capybara.string(response.body).find("#unstable-tests")
       expect(ranking).to have_css("#unstable-tests-none")
-      expect(ranking).to have_no_link(slow_test)
+      expect(ranking).to have_no_css(".row-open", text: slow_test)
 
       open_here = name_link(panel.first("tbody tr"))[:href]
       get open_here.split("#").first
@@ -743,7 +762,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       # The landing panel LISTS the test the reader was reading, which is the property that makes
       # the return useful rather than merely somewhere to go.
       expect(close.split("#").last).to eq("slowest-examples")
-      expect(panel).to have_link(slow_test)
+      expect(panel).to have_css(".row-open", text: slow_test)
     end
 
     # THE OTHER ENTRY POINT IS UNMOVED. The flakiness ranking stamps its own origin, so a reader who
@@ -760,8 +779,9 @@ RSpec.describe "Repository slowest tests", type: :request do
              commit_sha: "cccc3333dddd4444")
 
       get repository_path(repository)
-      open_there = Capybara.string(response.body).find("#unstable-tests")
-                           .find("a", exact_text: flaky)[:href]
+      open_there = Capybara.string(response.body).find("#unstable-tests").all("tbody tr", visible: :all)
+                           .find { |tr| tr.first(".row-open").text(:all).squish == flaky }
+                           .find("a", exact_text: "Run by run", visible: :all)[:href]
       get open_there.split("#").first
 
       close = Capybara.string(response.body).find("#unstable-test-runs")
@@ -1306,7 +1326,7 @@ RSpec.describe "Repository slowest tests", type: :request do
   describe "the shard prose the panel sits below" do
     # @intent: {"entity": "GET /repositories/:id", "action": "retire stale claim", "behavior": "the show template no longer contains the stays-unanswerable claim or the no-schema-records sentence while still stating About SHARDS, never about tests", "layer": "request"}
     it "no longer tells its authors the schema cannot answer which tests are slow" do
-      source = Rails.root.join("app/views/repositories/show.html.erb").read
+      source = Rails.root.join("app/views/repositories/_shard_decomposition.html.erb").read
 
       expect(source).not_to include("stays unanswerable")
       expect(source).not_to include("Nothing in the schema records how long any single")
