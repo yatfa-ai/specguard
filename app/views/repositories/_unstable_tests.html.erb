@@ -27,7 +27,7 @@
                               ["Recorded under", (test.files_seen.to_sentence if test.multi_file?)],
                               ["Recorded as", (test.descriptions.to_sentence if test.renamed?)]],
                       body: tag.div(outcome_strip(window_runs, outcomes), class: "py-1"),
-                      actions: [["Run by run", drill_down_path(@repository, unstable_test: test.name, unstable_test_from: "unstable", anchor: "unstable"), :primary]]) do %>
+                      actions: [["Run by run", drill_down_path(@repository, unstable_test: test.name, unstable_test_from: "unstable-tests", anchor: "unstable"), :primary]]) do %>
                   <td>
                     <%= row_open(test.name) %>
                     <% if test.multi_file? %><span class="rc-sec mono">recorded under <%= test.files_seen.to_sentence %></span><% end %>

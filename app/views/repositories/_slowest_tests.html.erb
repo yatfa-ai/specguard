@@ -65,7 +65,7 @@
                             ["Declared behavior", observation.intent_behavior],
                             ["Duration", observation.duration_label],
                             ["Outcome", observation.outcome_label]],
-                    actions: [*(observation.name.present? ? [["Run by run", drill_down_path(@repository, unstable_test: observation.name, unstable_test_from: "slow", anchor: "unstable"), :primary]] : []),
+                    actions: [*(observation.name.present? ? [["Run by run", drill_down_path(@repository, unstable_test: observation.name, unstable_test_from: "slowest-examples", anchor: "unstable"), :primary]] : []),
                               *(observation.spec_file_path.present? ? [["Examples in this file", drill_down_path(@repository, spec_file: observation.spec_file_path, anchor: "slow"), :secondary]] : []),
                               ["Open on GitHub", @repository.github_blob_url(observation.file_path, observation.line_number, @latest_test_run.commit_sha), :ghost]]) do %>
                 <td>

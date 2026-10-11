@@ -1,6 +1,14 @@
     
     <% if @spec_directory_files %>
-      <%= render UI::PanelComponent.new(title: "Spec files in this directory", id: "spec-directory-files", class: "rc-drill") do %>
+      <%= render UI::PanelComponent.new(title: "Spec files in this directory", id: "spec-directory-files", class: "rc-drill") do |panel| %>
+        <% panel.with_actions do %>
+          <%# The way back OUT of THIS ask only (`spec_directory: nil`, explicit): an open file or
+              description rides through, because closing an area is not a request to close them. %>
+          <%= render UI::ButtonComponent.new(
+                variant: :ghost, size: :sm,
+                href: drill_down_path(@repository, spec_directory: nil, anchor: "spec-directory-durations")
+              ) { "Close directory" } %>
+        <% end %>
         <% if @spec_directory_files.recorded? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-files-basis") do %>
             <span class="font-mono text-app-content-secondary"><%= @spec_directory_files.path %></span>

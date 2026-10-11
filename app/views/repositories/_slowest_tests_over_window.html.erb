@@ -34,7 +34,7 @@
                             ["Recorded under", test.files_seen.any? ? test.files_seen.join(", ") : "not reported"],
                             ["Also recorded as", (test.descriptions.drop(1).to_sentence if test.renamed?)],
                             ["Ran more than once in a run", (number_with_delimiter(test.recorded_count) + " rows" if test.repeated_within_run?)]],
-                    actions: [*(test.descriptions.any? ? [["Run by run", drill_down_path(@repository, unstable_test: test.descriptions.first, unstable_test_from: "slow", anchor: "unstable"), :primary]] : []),
+                    actions: [*(test.descriptions.any? ? [["Run by run", drill_down_path(@repository, unstable_test: test.descriptions.first, unstable_test_from: "slowest-examples", anchor: "unstable"), :primary]] : []),
                               *test.files_seen.first(2).map { |path| ["Examples in #{path.split('/').last}", drill_down_path(@repository, spec_file: path, anchor: "slow"), :secondary] }]) do %>
                 <td>
                   <%= test.descriptions.any? ? row_open(test.descriptions.first) : tag.span("no description reported", class: "text-app-content-secondary") %>

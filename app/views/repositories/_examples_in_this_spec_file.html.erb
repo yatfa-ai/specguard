@@ -1,6 +1,17 @@
     
     <% if @spec_file_examples %>
-      <%= render UI::PanelComponent.new(title: "Examples in this spec file", id: "spec-file-examples", class: "rc-drill") do %>
+      <%= render UI::PanelComponent.new(title: "Examples in this spec file", id: "spec-file-examples", class: "rc-drill") do |panel| %>
+        <% panel.with_actions do %>
+          <%# The way back OUT of THIS ask only: `spec_file: nil` is explicit because under carry-by-default an
+              omission would mean "keep the file open". Every other ask — an open area, an open description,
+              the branch, the window, the layer — rides through, so closing a file is not a request to
+              close the area it was opened from. The anchor follows the area for the same reason. %>
+          <%= render UI::ButtonComponent.new(
+                variant: :ghost, size: :sm,
+                href: drill_down_path(@repository, spec_file: nil,
+                                      anchor: @spec_directory_request ? "spec-directory-files" : "spec-file-durations")
+              ) { "Close file" } %>
+        <% end %>
         <% if @spec_file_examples.recorded? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-file-examples-basis") do %>
             <span class="font-mono text-app-content-secondary"><%= @spec_file_examples.path %></span>
@@ -52,7 +63,7 @@
                             ["Declared entity", observation.intent_entity], ["Declared action", observation.intent_action],
                             ["Declared behavior", observation.intent_behavior], ["Duration", observation.duration_label],
                             ["Outcome", observation.outcome_label]],
-                    actions: [*(observation.name.present? ? [["Run by run", drill_down_path(@repository, unstable_test: observation.name, unstable_test_from: "slow", anchor: "unstable"), :primary]] : []),
+                    actions: [*(observation.name.present? ? [["Run by run", drill_down_path(@repository, unstable_test: observation.name, unstable_test_from: "slowest-examples", anchor: "unstable"), :primary]] : []),
                               ["Open on GitHub", @repository.github_blob_url(observation.file_path, observation.line_number, @latest_test_run.commit_sha), :ghost]]) do %>
                 <td>
                   <%= row_open(observation.label) %>

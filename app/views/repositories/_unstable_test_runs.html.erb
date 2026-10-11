@@ -1,6 +1,18 @@
     
     <% if @unstable_test_runs %>
-      <%= render UI::PanelComponent.new(title: "This test, run by run", id: "unstable-test-runs", class: "rc-drill") do %>
+      <%= render UI::PanelComponent.new(title: "This test, run by run", id: "unstable-test-runs", class: "rc-drill") do |panel| %>
+        <% panel.with_actions do %>
+          <%# The way back OUT of THIS ask only. `unstable_test_from` is cleared in the same breath because
+              the origin QUALIFIES the test: leaving it behind would carry a pointer to a panel nothing is
+              open in through every later link. The anchor FOLLOWS the reader — it is where the test was
+              opened from (the flakiness ranking, or the slowest-tests ranking), so closing returns them
+              there. Every other ask rides through. %>
+          <%= render UI::ButtonComponent.new(
+                variant: :ghost, size: :sm,
+                href: drill_down_path(@repository, unstable_test: nil, unstable_test_from: nil,
+                                      anchor: @unstable_test_origin_request || "unstable-tests")
+              ) { "Close test" } %>
+        <% end %>
         <% if @unstable_test_runs.rows.any? %>
           <% if unstable_test_runs_capped?(@unstable_test_runs) %>
             <%= render UI::AlertComponent.new(tone: :warning, class: "mb-3",

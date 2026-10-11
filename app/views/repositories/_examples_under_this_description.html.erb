@@ -1,7 +1,15 @@
     
     <% if @repeated_description_examples %>
       <%= render UI::PanelComponent.new(title: "Examples under this description",
-                                        id: "repeated-description-examples", class: "rc-drill") do %>
+                                        id: "repeated-description-examples", class: "rc-drill") do |panel| %>
+        <% panel.with_actions do %>
+          <%# The way back OUT of THIS ask only (`repeated_description: nil`, explicit); every other ask
+              rides through, so closing a description closes no file or area. %>
+          <%= render UI::ButtonComponent.new(
+                variant: :ghost, size: :sm,
+                href: drill_down_path(@repository, repeated_description: nil, anchor: "repeated-descriptions")
+              ) { "Close description" } %>
+        <% end %>
         <% if @repeated_description_examples.recorded? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "repeated-description-examples-basis") do %>
             <span class="text-app-content-secondary"><%= @repeated_description_examples.name %></span>
