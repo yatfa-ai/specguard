@@ -13,10 +13,13 @@
   <% if f.sharded %>
     <%= render UI::PanelComponent.new(title: "What the wall clock waited for", id: "shard-decomposition") do %>
       <div class="space-y-3">
+        <%# The wall clock itself is the verdict card's figure and is NOT printed again here — the same
+            number twice on one screen is the defect "no figure twice" refuses. What this panel adds is
+            the one cost the card has no room for: the machine time (and, when it moved, the change),
+            with the coverage that qualifies it. %>
         <% if f.sharded && @latest_test_run.machine_seconds_reported? %>
-          <dl class="rc-facts" style="grid-template-columns: repeat(2, minmax(0, 1fr))">
-            <div><dt>Wall clock</dt><dd><%= test_run_duration(@latest_test_run) %> <span class="rc-sec" style="display:inline"><%= @latest_test_run.wall_clock_coverage %></span></dd></div>
-            <div><dt>Machine time</dt><dd><%= test_run_machine_time(@latest_test_run) %>
+          <dl class="rc-facts" style="grid-template-columns: repeat(1, minmax(0, 1fr))">
+            <div><dt>Machine time</dt><dd><span><%= test_run_machine_time(@latest_test_run) %></span>
               <% if f.machine_delta %><%= delta_tag(runtime_change(f.machine_delta), tone: delta_tone_for(TestRun.seconds_unchanged?(f.machine_delta) ? 0 : f.machine_delta, bigger_is_worse: true), label: machine_time_change_reading(f.machine_delta), id: "machine-time-delta") %><% end %>
               <span class="rc-sec"><%= @latest_test_run.machine_seconds_coverage %></span></dd></div>
           </dl>

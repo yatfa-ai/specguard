@@ -2,8 +2,10 @@
 <% readings = f.readings %>
 <% measured_tests = f.measured %>
     <% if measured_tests %>
-      <p class="text-xs text-app-muted">
-        <%= test_run_annotated_share(@latest_test_run) %>
+      <%# The share itself — "N% — X of Y tests carry an @intent." — is stated ONCE, as the verdict card's
+          meter (its visible figure and its accessible name). It is deliberately not repeated at the head
+          of this note: the same figure twice on one screen is the defect "no figure twice" refuses. %>
+      <p class="text-xs text-app-muted" id="intent-reading-basis">
         <% if !readings.recorded? %>
           This run reported suite totals without the per-example rows SpecGuard reads test
           descriptions from, so there is nothing here to say how much of the rest it can

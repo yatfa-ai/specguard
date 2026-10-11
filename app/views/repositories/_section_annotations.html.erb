@@ -6,6 +6,14 @@
     <p>Which tests carry an <code>@intent</code>, which SpecGuard can still read, and which it cannot.</p>
   </div>
 
+  <% if f.measured && !f.readings.recorded? %>
+    <%# A run that reported suite totals without per-example rows: there is nothing to count by reading
+        kind, and the note says so rather than leaving the section silent — "nothing to say" is not
+        "nothing readable". %>
+    <%= render UI::PanelComponent.new(title: "How SpecGuard reads this run", id: "intent-readings") do %>
+      <%= render "repositories/reading_basis", f: f -%>
+    <% end %>
+  <% end %>
   <% if f.measured && f.readings.recorded? %>
     <%= render UI::PanelComponent.new(title: "How SpecGuard reads this run", id: "intent-readings") do %>
       <div class="space-y-3">

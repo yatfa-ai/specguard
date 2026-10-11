@@ -350,9 +350,10 @@ RSpec.describe "Repository suite-size growth", type: :request do
       # fact about this run, not about the suite" — the page computing a change and then
       # disclaiming the figure it computed it from, in adjacent paragraphs.
       expect(overview_panel).to have_no_css("#suite-size-delta")
-      # A run that reported nothing has a count but not a measurement, so the verdict card prints no
-      # figure for it — a dash with its own caption — rather than a 0 a reader would take for one.
-      expect(suite_size_text).to eq("—")
+      # A run that reported nothing has a count but not a measurement, so the verdict card prints the 0
+      # muted and captioned rather than as a figure a reader would take for one.
+      expect(suite_size_text).to eq("0")
+      expect(suite_size_cell).to have_css(".rc-stat-value.text-app-content-secondary", text: "0")
       expect(suite_size_cell).to have_text("This run reported no tests at all", normalize_ws: true)
       expect(basis_line).to have_text("This run reported no tests", normalize_ws: true)
       expect(overview_panel).to have_text("reported no tests at all", normalize_ws: true)

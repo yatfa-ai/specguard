@@ -104,24 +104,30 @@
             which partition of the run was expensive and not which code.
           </p>
         <% end %>
-        <% max_seconds = @latest_test_run.test_run_shards.maximum(:duration_seconds).to_f %>
+        <%# One read of the shards for the whole table: `shard_distribution_labels` ranks the same
+            `shard_durations` tuples this needs (shard_id, duration, size), so the bar width and the
+            sort key come off that list rather than off a `MAX` and a second ordered `SELECT *` —
+            the page's shard queries stay constant in the number of shards. %>
+        <% shard_rows = @latest_test_run.shard_durations %>
+        <% max_seconds = shard_rows.filter_map { |_, seconds, _| seconds }.max.to_f %>
+        <div id="shard-distribution-wrap">
         <%= render UI::TableComponent.new(
               columns: ["Shard", { label: "Duration", end: true }, "Against the slowest", { label: "Tests", end: true }, { label: "Cost per test", end: true }],
               describedby: "wall-clock-decomposition", sortable: true, table_id: "shard-distribution") do %>
-          <% shard_rows = @latest_test_run.test_run_shards.order(duration_seconds: :desc, id: :asc).to_a %>
           <% @latest_test_run.shard_distribution_labels.each_with_index do |(name, duration, size, per_spec), index| %>
-            <% shard = shard_rows[index] %>
+            <% _shard_id, seconds, spec_count = shard_rows[index] %>
             <tr>
               <td class="font-semibold"><%= name %></td>
-              <td class="num" data-sort="<%= shard&.duration_seconds %>"><%= duration %></td>
-              <td data-sort="<%= shard&.duration_seconds %>">
-                <span class="rc-meter" style="width: 9rem; margin: 0"><i style="width: <%= max_seconds.positive? && shard&.duration_seconds ? (shard.duration_seconds / max_seconds * 100).round : 0 %>%"></i></span>
+              <td class="num" data-sort="<%= seconds %>"><%= duration %></td>
+              <td data-sort="<%= seconds %>">
+                <span class="rc-meter" style="width: 9rem; margin: 0"><i style="width: <%= max_seconds.positive? && seconds ? (seconds / max_seconds * 100).round : 0 %>%"></i></span>
               </td>
-              <td class="num mute" data-sort="<%= shard&.total_specs_count %>"><%= size %></td>
+              <td class="num mute" data-sort="<%= spec_count %>"><%= size %></td>
               <td class="num mute"><%= per_spec || "—" %></td>
             </tr>
           <% end %>
         <% end %>
+        </div>
       <% elsif @latest_test_run.wall_clock_decomposition_pending? %>
         <p id="wall-clock-decomposition-pending" class="text-xs text-app-content-secondary">
           A shard report arrived in the last

@@ -2,10 +2,22 @@
     for a member — what they may do here, with the way out. Rendered with the Runs section once runs
     exist, and on its own on a repository CI has never reached: a member of an empty repository holds
     the same access and the same right to leave, and an absence here would read as "never granted". %>
+<div id="repository-facts" class="space-y-3">
 <% viewer_access = repository_policy.grantable_permissions unless repository_policy.can?(:owner) %>
+<%# "Searchable intents" is NOT a test count, and never sits unlabelled beside the suite figures: it
+    counts the intent rows SpecGuard has stored and can search, and is structurally 0 until the
+    embedding pipeline ships (ingestion writes no spec_intents row yet). It belongs here, with the
+    repository-level counts, rather than beside the verdict card's run figures — where, unlabelled
+    above a non-zero "Carrying an @intent", it read as a second, contradictory description of the
+    same suite. %>
 <%= render UI::DefListComponent.new(rows: [["Owner", @repository.user.display_name],
                                            ["Test runs", number_with_delimiter(@repository.test_runs.count)],
+                                           ["Searchable intents", number_with_delimiter(@repository.spec_intents.count)],
                                            *(viewer_access ? [["Your access", viewer_access.join(", ")]] : [])]) %>
+<p class="text-xs text-app-content-secondary">
+  Annotated tests SpecGuard has stored for search — not a count of tests in the suite, and
+  not the denominator of anything above. Ingestion does not write these yet.
+</p>
 <% if viewer_access %>
   <div class="flex flex-wrap items-center gap-3">
     <p class="text-xs text-app-content-secondary"><%= held_access_description(viewer_access) %></p>
@@ -14,3 +26,4 @@
                   form: { data: { turbo_confirm: leave_confirmation(@repository, @viewer_keys_minted) } } %>
   </div>
 <% end %>
+</div>

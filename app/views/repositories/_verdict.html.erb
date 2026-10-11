@@ -61,7 +61,10 @@
         <% end %>
         <span class="rc-stat-sub"><%= f.size_delta ? "vs the previous run" : "no earlier run to compare" %></span>
       <% else %>
-        <span class="rc-stat-value text-app-content-secondary">—</span>
+        <%# The count still renders — "the run measured nothing" is a fact worth stating, and it is not
+            the same as "no run has reported" — but muted, and captioned, because a zero here describes
+            the REPORT and not the suite (`suite_size_measured?` is false). %>
+        <span class="rc-stat-value text-app-content-secondary"><%= number_with_delimiter(f.total) %></span>
         <span class="rc-stat-sub">This run reported no tests at all.</span>
       <% end %>
     </div>
@@ -70,15 +73,13 @@
       <span class="rc-stat-label">Carrying an @intent</span>
       <% if f.measured %>
         <span class="rc-stat-value"><%= run.annotated_ratio %>%</span>
-        <%# The share sentence and the fold's "how it reads" prose are the same claim in two places
-            ("no figure twice"), so the meter carries both in one element: the sentence is the
-            meter's accessible label — what a screen reader announces — and the fold beneath the
-            card holds the basis prose in the old panel's own words. %>
         <span class="rc-meter" role="meter" aria-valuenow="<%= f.annotated.to_f %>" aria-valuemin="0.0" aria-valuemax="<%= f.total.to_f %>"
-              aria-label="<%= test_run_annotated_share(run) %>">
+              aria-label="<%= number_with_delimiter(f.annotated) %> of <%= number_with_delimiter(f.total) %> tests carry an @intent">
           <i style="width: <%= run.annotated_ratio %>%"></i>
         </span>
-        <span class="rc-stat-sub">of the tests in this run</span>
+        <%# The share sentence, once — the index card's own seam, so the two surfaces cannot word the
+            same figure two ways. %>
+        <span class="rc-stat-sub"><%= test_run_annotated_share(run) %></span>
       <% else %>
         <span class="rc-stat-value text-app-content-secondary">—</span>
         <span class="rc-stat-sub">Nothing to take a share of.</span>
