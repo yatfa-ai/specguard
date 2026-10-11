@@ -25,13 +25,19 @@
                   actions: [*(current ? [] : [["Read this run", drill_down_path(@repository, commit_sha: test_run.commit_sha, anchor: "summary"), :primary]]),
                             ["Open commit on GitHub", @repository.github_commit_url(test_run.commit_sha), :ghost]]) do %>
               <td>
-                <%= row_open(test_run.commit_sha.first(7), mono: true) %>
-                <% if current %><span class="rc-sec">the run being read</span><% end %>
+                <%= row_open(test_run.commit_sha.first(7), mono: true, current: current) %>
+                <% if current %><span class="rc-sec" data-current-run>the run being read</span><% end %>
               </td>
               <td class="mute"><%= test_run.branch.presence || tag.span("not reported", class: "text-app-content-secondary") %></td>
               <td class="num" data-sort="<%= test_run.total_specs_count.to_i %>">
+                <%# Every row states how it was assembled, and a row that arrived in parts says what its
+                    figure therefore covers: a run's count is the sum of the shard reports recorded so
+                    far, so a half-delivered build reads at a fraction of its own suite. Through
+                    `test_run_delivery_note` (never a hand-rolled count of parts, which would print
+                    "0 shards" for the most common run there is); no row queries — each was primed with
+                    its shard count for the whole panel. %>
                 <%= number_with_delimiter(test_run.total_specs_count.to_i) %>
-                <% if test_run.shard_count.positive? %><span class="rc-sec"><%= pluralize(test_run.shard_count, "shard") %></span><% end %>
+                <span class="rc-sec"><%= test_run_delivery_note(test_run) %></span>
               </td>
               <td class="num mute" data-sort="<%= test_run.duration_seconds %>">
                 <%= test_run_duration(test_run) %>

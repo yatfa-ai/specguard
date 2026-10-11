@@ -14,9 +14,12 @@
   <% if @latest_test_run && !@latest_test_run.observations_retained? %>
     <span class="rc-sep" aria-hidden="true"></span>
     <span id="observations-aged-out">
-      This run is older than the last <%= number_with_delimiter(SpecObservation::BRANCH_RETENTION_RUNS) %> runs
-      of its branch, so its per-example observations have aged out of retention: the counts stand, but the
-      per-test sections below may have little or nothing left to show.
+      This run is older than the
+      <%= number_with_delimiter(SpecObservation::BRANCH_RETENTION_RUNS) %> most recent runs
+      of its branch, so its per-example observations have aged out of the retention window.
+      The counts on this page are read off the run's own record and stand; the per-test sections
+      below may have little or nothing left to show, which is a fact about retention and
+      not about what this run found.
     </span>
   <% end %>
 </div>

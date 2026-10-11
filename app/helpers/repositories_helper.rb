@@ -1125,8 +1125,11 @@ module RepositoriesHelper
 
   # The cell that is the row's keyboard handle: a real button, so Enter/Space open the drawer and
   # the row does not need an underlined link to be discoverable.
-  def row_open(label, mono: false)
-    tag.button(label, type: "button", class: "row-open#{' mono' if mono}")
+  #
+  # `current:` marks the row the reader is on (the run being read) with `aria-current`, matched on the
+  # ROW and never on a value: two runs of one commit print the same seven characters.
+  def row_open(label, mono: false, current: false)
+    tag.button(label, type: "button", class: "row-open#{' mono' if mono}", aria: { current: current ? "true" : nil })
   end
 
   def layers_stack(layer_counts, key: true)
