@@ -61,10 +61,11 @@ RSpec.describe "Repository spec directory growth", type: :request do
   # One row as a reader meets it: the area, both operands, and the movement between them.
   def rows
     panel.all("tbody tr").map do |row|
-      path, then_count, now_count, change = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      # Four columns; a row's drawer detail is a trailing hidden cell in the document, not a column.
+      path, then_count, now_count, change = row.all("td").first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
       { path: path, then: then_count, now: now_count, change: change,
-        reading: row.all("td").last["aria-label"] }
+        reading: row.all("td")[3]["aria-label"] }
     end
   end
 

@@ -47,17 +47,22 @@ RSpec.describe "Repository unstable tests", type: :request do
   # indentation.
   def rows
     panel.all("tbody tr").map do |row|
-      name_cell, seen_cell, failed_cell, outcome_cell = row.all("td")
+      # Five cells in the console: the test, its 30-run pass/fail strip, the failure rate, the runs it
+      # was seen in, and the words the runs used. The strip is a picture (it carries no text of its
+      # own), so a row reads the same four facts it always did.
+      name_cell, _strip_cell, failed_cell, seen_cell, outcome_cell = row.all("td")
       # The declared-layers line (marked `data-declared-layers`, and its nested `undeclared` word)
       # is its own key, never the files note and never part of the name.
       files = name_cell.all(:xpath, ".//span[not(ancestor-or-self::*[@data-declared-layers])]")
                        .map { |span| span.text.gsub(/\s+/, " ").strip }.first
       layers = name_cell.first("[data-declared-layers]")&.text&.gsub(/\s+/, " ")&.strip
-      name = name_cell.text.gsub(/\s+/, " ").strip
-      name = name.delete_suffix(layers).strip if layers
-      name = name.delete_suffix(files).strip if files
+      name = name_cell.first(".row-open").text.gsub(/\s+/, " ").strip
 
-      { name: name, files: files, layers: layers, seen: seen_cell.text.strip, failed: failed_cell.text.strip,
+      # The failure cell is the rate with its fraction under it ("40% 2 of 5 runs"); the fraction is
+      # the fact this file has always asserted, the rate is derived from it and asserted below.
+      fraction = failed_cell.text.squish[/(\d+ of \d+)/, 1]
+      { name: name, files: files, layers: layers, seen: seen_cell.text.strip, failed: fraction,
+        rate: failed_cell.text.squish[/\A(\d+)%/, 1]&.to_i,
         outcomes: outcome_cell.all("span span").map { |badge| badge.text.strip } }
     end
   end
@@ -925,7 +930,14 @@ RSpec.describe "Repository unstable tests", type: :request do
       #
       # RECOUNTED AT 22 by SPGD-1744: `LayerWindowGrowth` reads the layer mix of the window's two
       # endpoint runs (two single-row aggregates, constant in window and suite size).
-      expect(large_queries.size).to eq(22)
+      #
+      # RECOUNTED AT 23 by SPGD-1768: the console draws a 30-cell pass/fail STRIP per unstable test,
+      # and every strip comes off ONE grouped read — `(identity, run) -> outcome` for all the rows
+      # the panel lists, over the window's run ids. One statement however many tests are listed and
+      # however long the window is (this example's equality between a 3-run/3-example page and a
+      # 30-run/200-example page is exactly what proves it), and none at all when the panel lists
+      # nothing: the all-red example below stays at the same count only because its rows are capped.
+      expect(large_queries.size).to eq(23)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -941,7 +953,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(22)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(23)
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -1004,11 +1016,11 @@ RSpec.describe "Repository unstable tests", type: :request do
   # be one more thing to keep in step and would say nothing about THIS panel. What that guard cannot
   # see is markup that avoids every banned pattern while still hand-rolling something the component
   # library already renders, so what is asserted here is that the badges came from the component.
-  # @intent: {"entity": "SpecObservation", "action": "use badge component", "behavior": "the failed word renders inside the rounded-full text-xs badge span carrying the bg-app-error-surface class", "layer": "request"}
+  # @intent: {"entity": "SpecObservation", "action": "use badge component", "behavior": "the failed word renders inside the text-xs badge span carrying the bg-app-error-surface class", "layer": "request"}
   it "renders its outcome words through the badge component rather than by hand" do
     get repository_path(repository_with(%w[passed failed]))
 
-    expect(panel).to have_css("span.rounded-full.text-xs.font-semibold", text: "failed")
+    expect(panel).to have_css("span.text-xs.font-semibold", text: "failed")
     expect(panel).to have_css("span.bg-app-error-surface", text: "failed")
   end
 
@@ -1061,7 +1073,8 @@ RSpec.describe "Repository unstable tests", type: :request do
     it "carries the layer through the row's drill-in link" do
       get repository_path(layered_repository), params: { layer: "request" }
 
-      href = panel.find("tbody a", text: "Checkout charges the card")[:href]
+      row = panel.all("tbody tr", visible: :all).find { |tr| tr.first("td").text(:all).squish.include?("Checkout charges the card") }
+      href = row.find("a", exact_text: "Run by run", visible: :all)[:href]
       expect(Rack::Utils.parse_query(URI(href).query)).to include("layer" => "request")
     end
 

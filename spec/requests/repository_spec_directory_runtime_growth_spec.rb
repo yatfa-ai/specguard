@@ -65,7 +65,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
   # total was summed over.
   def rows
     panel.all("tbody tr").map do |row|
-      path, then_time, now_time, change, timed = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, then_time, now_time, change, timed = row.all("td").first(5).map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
       { path: path, then: then_time, now: now_time, change: change, timed: timed,
         reading: row.all("td")[3]["aria-label"] }
@@ -446,7 +446,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
 
       get repository_path(repository)
 
-      expect(Capybara.string(response.body).find("#overview")).to have_no_css("#runtime-delta")
+      expect(Capybara.string(response.body).find("#summary")).to have_no_css("#runtime-delta")
       expect(row_for("spec/models")).to include(then: "2.00s", now: "8.00s", change: "+6.00s")
       expect(row_for("spec/system")).to include(change: "±0")
     end

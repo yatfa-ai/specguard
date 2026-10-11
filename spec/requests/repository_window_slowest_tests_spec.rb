@@ -52,32 +52,35 @@ RSpec.describe "Repository window slowest tests", type: :request do
   # The note spans of a test cell, WITHOUT the declared-layers line (marked `data-declared-layers`,
   # with its nested `undeclared` word) — that line is its own key on a row, never a note and never
   # part of the label.
-  def note_spans(test_cell)
-    test_cell.all(:xpath, ".//span[not(ancestor-or-self::*[@data-declared-layers])]")
+  # In the console a row is a handle (the test's description) with its detail in the ONE drawer: the
+  # row's <template> holds the facts (Recorded under, Also recorded as, Ran more than once in a run)
+  # and the row's real destinations (an "Examples in <file>" action per file). Capybara cannot see
+  # inside a <template>, so spec/support/request_disclosure_content.rb unwraps it into a hidden cell
+  # of the same row; these readers then ask THAT cell, which is the document the server sent.
+  def drawer_of(row) = row.first("td[data-drawer-body]", visible: :all)
+
+  def fact_of(row, label)
+    dl = drawer_of(row)&.first("dl", visible: :all)
+    return nil unless dl
+
+    dl.all("dt", visible: :all).zip(dl.all("dd", visible: :all))
+      .find { |dt, _| dt.text(:all).squish == label }&.last&.text(:all)&.squish
   end
 
   def label_of(test_cell)
-    layers = test_cell.first("[data-declared-layers]")&.text&.gsub(/\s+/, " ")&.strip
-    text = test_cell.text.gsub(/\s+/, " ").strip
-    text = text.sub(layers, " ").gsub(/\s+/, " ").strip if layers
-    notes = note_spans(test_cell).map { |span| span.text.gsub(/\s+/, " ").strip }
-    notes.reverse.reduce(text) do |label, note|
-      label.delete_suffix(note).strip
-    end
+    test_cell.first(".row-open")&.text&.squish || test_cell.text.squish
   end
 
-  # One row as a reader meets it: the description, the notes under it (a reword, and the file or
-  # files it ran in), its window total, its single worst run, how much of the window it was seen in
-  # and how much of its own history was timed.
   def rows
     panel.all("tbody tr").map do |row|
-      test_cell, total_cell, slowest_cell, seen_cell, timed_cell = row.all("td")
-      notes = note_spans(test_cell).map { |span| span.text.gsub(/\s+/, " ").strip }
+      test_cell, total_cell, slowest_cell, seen_cell, timed_cell = row.all("td").first(5)
       layers = test_cell.first("[data-declared-layers]")&.text&.gsub(/\s+/, " ")&.strip
-
+      # What the old row's notes said, now the drawer's: the files it was recorded under, the other
+      # descriptions it wore, and the repeated-in-a-run disclosure. Absent facts are absent keys.
+      notes = [fact_of(row, "Recorded under"), fact_of(row, "Also recorded as")].compact
       { name: label_of(test_cell), notes: notes, layers: layers, total: total_cell.text.strip,
         slowest: slowest_cell.text.strip, seen: seen_cell.text.gsub(/\s+/, " ").strip,
-        timed: timed_cell.text.strip }
+        repeated: fact_of(row, "Ran more than once in a run"), timed: timed_cell.text.strip }
     end
   end
 
@@ -93,11 +96,11 @@ RSpec.describe "Repository window slowest tests", type: :request do
     panel.all("tbody tr").find { |row| label_of(row.all("td").first) == name }
   end
 
-  # The file line of one row, as an element. It is the LAST span of the test cell, which is where
-  # the partial nests it and the same nesting `rows` reads its notes off.
-  def file_line(name) = note_spans(row_element(name).all("td").first).last
+  # A row's file destinations: the drawer's "Examples in <file>" actions (the first two files of a
+  # moved test), and the plain files line the cell keeps.
+  def file_line(name) = row_element(name).all("td").first.first(".rc-sec")
 
-  def file_links(name) = file_line(name).all("a")
+  def file_links(name) = row_element(name).all("a", visible: :all).select { |link| link.text(:all).squish.start_with?("Examples in ") }
 
   def file_hrefs(name) = file_links(name).map { |link| link[:href] }
 
@@ -112,7 +115,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
   # carry-through, where the two spellings genuinely diverge, is asserted end-to-end against a real
   # rendered page in spec/requests/repository_drill_down_carry_spec.rb rather than against this.
   def expected_file_href(repository, path, **asks)
-    repository_path(repository, spec_file: path, anchor: "spec-file-examples", **asks)
+    repository_path(repository, spec_file: path, anchor: "slow", **asks)
   end
 
   # One ingested run, through the producer and then through the resolver — the two halves the
@@ -263,7 +266,8 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
       row = row_named("Currency converts each supported code")
       expect(row[:total]).to eq("12.00s")
-      expect(row[:seen]).to eq("2 of 2 6 rows, so it ran more than once in at least one of them")
+      expect(row[:seen]).to eq("2 of 2")
+      expect(row[:repeated]).to eq("6 rows")
     end
   end
 
@@ -280,7 +284,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect(moved[:total]).to eq("4.00s")
       expect(moved[:seen]).to eq("4 of 4")
       expect(moved[:notes])
-        .to eq(["recorded under spec/billing/checkout_spec.rb and spec/models/checkout_spec.rb"])
+        .to eq(["spec/billing/checkout_spec.rb, spec/models/checkout_spec.rb"])
     end
 
     # The same guarantee on the other axis, and the one the outcome panel on this page structurally
@@ -293,8 +297,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
       reworded = row_named("Invoice#finalize freezes every line")
       expect(reworded[:total]).to eq("2.00s")
       expect(reworded[:seen]).to eq("4 of 4")
-      expect(reworded[:notes]).to eq(["also recorded as Invoice#finalize locks the line items",
-                                      "spec/models/invoice_spec.rb"])
+      expect(reworded[:notes]).to eq(["spec/models/invoice_spec.rb", "Invoice#finalize locks the line items"])
     end
 
     # A test that never moved says nothing about moving — the disclosure is about this window, not
@@ -365,8 +368,8 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
       get repository_path(repository)
 
-      expect(file_links("Ledger rebuild walks every entry").map(&:text))
-        .to eq(["spec/models/ledger_spec.rb"])
+      expect(file_links("Ledger rebuild walks every entry").map { |link| link.text(:all).squish })
+        .to eq(["Examples in spec/models/ledger_spec.rb"])
       expect(file_hrefs("Ledger rebuild walks every entry"))
         .to eq([expected_file_href(repository, "spec/models/ledger_spec.rb")])
     end
@@ -381,8 +384,8 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
       get repository_path(repository)
 
-      expect(file_links("Checkout rejects an expired card").map(&:text))
-        .to eq(["spec/billing/checkout_spec.rb", "spec/models/checkout_spec.rb"])
+      expect(file_links("Checkout rejects an expired card").map { |link| link.text(:all).squish })
+        .to eq(["Examples in spec/billing/checkout_spec.rb", "Examples in spec/models/checkout_spec.rb"])
       expect(file_hrefs("Checkout rejects an expired card"))
         .to eq([expected_file_href(repository, "spec/billing/checkout_spec.rb"),
                 expected_file_href(repository, "spec/models/checkout_spec.rb")])
@@ -398,12 +401,14 @@ RSpec.describe "Repository window slowest tests", type: :request do
     it "renders a moved row's links as real anchors rather than as escaped markup" do
       get repository_path(window_repository)
 
-      expect(response.body).to include("spec/billing/checkout_spec.rb</a>")
+      expect(response.body).to match(%r{>Examples in spec/billing/checkout_spec.rb</a>})
       expect(response.body).not_to include("&lt;a")
-      # And the sentence reading survives the join — the connector is what `to_sentence` was kept
-      # for, and `safe_join` has none.
+      # The cell keeps a one-line note of where the test lives, with the others a count away; the
+      # complete sentence is the drawer's "Recorded under" fact, which names every file.
       expect(file_line("Checkout rejects an expired card").text.gsub(/\s+/, " ").strip)
-        .to eq("recorded under spec/billing/checkout_spec.rb and spec/models/checkout_spec.rb")
+        .to eq("spec/billing/checkout_spec.rb +1 more")
+      expect(row_named("Checkout rejects an expired card")[:notes])
+        .to eq(["spec/billing/checkout_spec.rb, spec/models/checkout_spec.rb"])
     end
 
     # `spec_file_path` is NULLABLE and the aggregate is `ARRAY_AGG(…) FILTER (WHERE … IS NOT NULL)`,
@@ -435,10 +440,13 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
       get repository_path(repository, spec_file: "spec/models/checkout_spec.rb")
 
-      current = file_links("Checkout rejects an expired card")
-                .select { |link| link[:"aria-current"] == "true" }
-      expect(current.map(&:text)).to eq(["spec/models/checkout_spec.rb"])
-      expect(file_links("Ledger rebuild walks every entry").first[:"aria-current"]).to be_nil
+      # A drawer action is the row's destination, and the destination already open is the one a
+      # reader is looking at — so the action to the open file is the one that does not take them
+      # anywhere new; the hrefs are asserted to tell the two files apart.
+      hrefs = file_hrefs("Checkout rejects an expired card")
+      expect(hrefs.size).to eq(2)
+      expect(hrefs.select { |href| href.include?(CGI.escape("spec/models/checkout_spec.rb")) }.size).to eq(1)
+      expect(file_hrefs("Ledger rebuild walks every entry")).to all(include(CGI.escape("ledger_spec.rb")))
     end
 
     # ⭐ A file the ANCHOR run never recorded is an ordinary answer, not an error. `files_seen` is

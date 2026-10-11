@@ -52,6 +52,17 @@ module ApplicationHelper
       "the key works, the payload did not."
   end
 
+  # The console's own words for the same two facts. The repositories grid card still says "Deliveries
+  # refused" through the pair above; the repository page says what the product calls the thing — a
+  # REJECTED INGEST — in the delivery status line, the Delivery section and its table, so one concept
+  # carries one name on one screen. Kept as a pair of its own, not an edit of the shared one, because
+  # the card's wording is pinned by its own specs and belongs to the follow-up ticket for that page.
+  def rejected_ingests_label = "Rejected ingests"
+
+  def rejected_ingests_note(last_rejection_at)
+    "Last rejected #{time_ago_in_words(last_rejection_at)} ago — the key works, the payload did not."
+  end
+
   # What a repository carrying a rotated-but-unused key is called, in the one place both surfaces
   # that say it read from.
   #

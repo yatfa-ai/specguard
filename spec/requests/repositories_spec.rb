@@ -3,6 +3,21 @@
 require "rails_helper"
 
 RSpec.describe "Repository registration and API keys", type: :request do
+  # The verdict card's third stat — the Total runtime of an unsharded run, the Wall clock of a
+  # sharded one — as `"<label> <figure> <coverage>"`, i.e. the label, the figure and the muted
+  # sub-line that says what the figure covers. The machine time is a fact of the shard panel under
+  # What is slow; `machine_time_text` reads it the same way.
+  def runtime_stat = overview_panel.find(".rc-stat", text: /Total runtime|Wall clock/)
+
+  def runtime_text = runtime_stat.text(normalize_ws: true)
+
+  def machine_time_fact = overview_panel.find("#shard-decomposition .rc-facts > div")
+
+  def machine_time_text = machine_time_fact.text(normalize_ws: true)
+
+  # The console's overview-equivalent sections (see spec/support/console_sections.rb).
+  def overview_panel = console_overview
+
   before { @user = sign_in_via_github }
 
   # The rendered copy as a reader sees it, with the ERB's own line breaks and indentation
@@ -154,11 +169,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # cannot tell the two apart on its own. What this branch owes the reader is the POINTER — the
     # ticket's "the guidance directs them to mint a key first" — so pin that sentence itself.
     expect(page_text).to include("This repository has no API key yet")
-    expect(page_text).to include("Mint a key in API keys below")
+    expect(page_text).to include("Mint a key in Credentials")
 
     # ...and the pointer has to point somewhere: #api-keys is the id of the keys panel below, which
     # is gated on the same `keys.manage` this branch is, so the link never dangles for its reader.
-    expect(response.body).to include(%(<a href="#api-keys"))
+    expect(Capybara.string(response.body)).to have_css("a[href='#api-keys']", text: "Mint a key in Credentials")
     expect(response.body).to include(%(id="api-keys"))
   end
 
@@ -180,7 +195,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # the owner example above, so this negative is load-bearing: it fails if the two branches
     # collapse into one, rather than passing because neither says anything.
     expect(response.body).not_to include("Mint a key in")
-    expect(response.body).not_to include(%(<a href="#api-keys"))
+    expect(Capybara.string(response.body)).to have_no_css("a[href='#api-keys']")
   end
 
   # @intent: {"entity": "ApiKey", "action": "report not connected", "behavior": "with keys present but no last_used_at anywhere the show page reads Not connected yet and never Last request", "layer": "request"}
@@ -358,7 +373,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # Both are true of this repository, and the branch order decides which is reported. A refusal
       # is a pipeline doing work and having it thrown away; a rotation is work not started yet.
       expect(key.reload).to be_rotated_and_unused
-      expect(connect_text).to include("Deliveries refused")
+      expect(connect_text).to include("Rejected ingests")
       expect(connect_text).not_to include("Key rotated")
     end
 
@@ -466,7 +481,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       get repository_path(repository)
 
       expect(connect_text).to include("Revoked key still presented")
-      expect(connect_text).not_to include("Deliveries refused")
+      expect(connect_text).not_to include("Rejected ingests")
     end
 
     # The plural shape, on the rotation branch's own rule: count the keys, date the OLDEST
@@ -1065,8 +1080,9 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
   describe "the Overview panel's suite figures" do
     # Scoped to the panel rather than the whole document, because the page is full of numbers and
-    # prose that would satisfy a bare `response.body` match. `#overview` is the panel's own id.
-    def overview_panel = Capybara.string(response.body).find("#overview")
+    # prose that would satisfy a bare `response.body` match. `#summary` is the verdict card's own id.
+    def overview_panel = console_overview
+
 
     # A sharded run, written directly. The suite's own canonical fixture one layer up —
     # `spec/requests/api/v1/ingest_spec.rb` builds a 4-shard, 20,000-example run and pins its MAX
@@ -1136,7 +1152,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
       panel = overview_panel
       # The denominator, which was stored and API-returned but rendered nowhere before this.
       expect(panel).to have_text("Tests in suite 3", normalize_ws: true)
-      expect(panel).to have_text("Carrying an @intent 2", normalize_ws: true)
+      expect(panel).to have_css("[role='meter'][aria-valuenow='2.0']")
+      expect(panel).to have_text("Carrying an @intent 66.7%", normalize_ws: true)
       # ...and the ratio never appears without the denominator it was computed over.
       expect(panel).to have_text("66.7% — 2 of 3 tests carry an @intent.", normalize_ws: true)
       # The claim it can no longer make about this run, and the honest replacement.
@@ -1206,7 +1223,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
       get repository_path(repository)
 
       panel = overview_panel
-      expect(panel).to have_text("Declared layers unit 2 · request 1 · undeclared 1", normalize_ws: true)
+      # The mix is a table in "What changed" now — one row per layer with its count — beside the
+      # stacked bar, and the never-inferred sentence is the note folded under it.
+      layers = panel.find("#layers")
+      expect(layers.all("tbody tr").map { |row| row.all("td").first(2).map { |cell| cell.text.squish } })
+        .to eq([%w[unit 2], %w[request 1], %w[undeclared 1]])
       expect(panel).to have_text("never inferred from the path", normalize_ws: true)
       expect(panel).to have_text("which is not \"not readable by SpecGuard\"", normalize_ws: true)
 
@@ -1216,7 +1237,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       get repository_path(bare)
 
-      expect(overview_panel).to have_no_text("Declared layers")
+      expect(overview_panel).to have_no_css("#layers table")
     end
 
     # The run-wide TIME by declared layer, beside the "Declared layers" row — the same single aggregate.
@@ -1236,10 +1257,9 @@ RSpec.describe "Repository registration and API keys", type: :request do
       get repository_path(repository)
 
       panel = overview_panel
-      expect(panel).to have_text(
-        "Time by declared layer: unit 1.50s (1 of 1 timed) · request 1m 10s (1 of 1 timed) · " \
-        "undeclared not reported (0 of 1 timed)", normalize_ws: true
-      )
+      times = panel.find("#layer-durations").all("tbody tr").map { |row| row.all("td").first(3).map { |cell| cell.text.squish } }
+      expect(times).to eq([["unit", "1.50s", "1 of 1"], ["request", "1m 10s", "1 of 1"],
+                           ["undeclared", "not reported", "0 of 1"]])
       expect(panel).to have_text("machine time, not wall clock", normalize_ws: true)
 
       bare = create_repository(user: @user, github_full_name: "acme/totals-only-time")
@@ -1248,7 +1268,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       get repository_path(bare)
 
-      expect(overview_panel).to have_no_text("Time by declared layer")
+      expect(overview_panel).to have_no_css("#layer-durations")
     end
 
     # ⭐ THE DESTINATION, AND THE SENTENCE THAT MAY NOT DESCRIBE AN EMPTY SET.
@@ -1279,7 +1299,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The two clauses that may not appear over a suite with nothing derived in it: the empty set,
       # and the warning about a reading that is not on this page.
       expect(panel).to have_no_text("the rest from the test's own description")
-      expect(panel).to have_no_text("it carries no preconditions")
+      expect(panel.find("#intent-reading-basis")).to have_no_text("it carries no preconditions")
       # And the state above it is still stated in full, so this is a shorter sentence rather than a
       # quieter one.
       expect(panel).to have_text("100.0% — 2 of 2 tests carry an @intent.", normalize_ws: true)
@@ -1350,9 +1370,9 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # ⭐ ASSERTED CLAUSE BY CLAUSE rather than against the whole sentence: one `have_no_text` over
       # the paragraph would go green again on any caption that merely reworded it. Each of these is a
       # claim the old arm made about an empty set.
-      expect(panel).to have_no_text("more from the test's own description")
-      expect(panel).to have_no_text("it carries no preconditions")
-      expect(panel).to have_no_text("layer is inferred from the directory")
+      expect(panel.find("#intent-reading-basis")).to have_no_text("more from the test's own description")
+      expect(panel.find("#intent-reading-basis")).to have_no_text("it carries no preconditions")
+      expect(panel.find("#intent-reading-basis")).to have_no_text("layer is inferred from the directory")
       # And the guard that this state sits next to: a run whose scanner fell over lands NEAR here,
       # and must still lead with the @intent share off the run's own counters.
       expect(panel).to have_text("0.0% — 0 of 2 tests carry an @intent.", normalize_ws: true)
@@ -1381,8 +1401,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
       panel = overview_panel
       expect(panel).to have_text("Of the 2 examples this run recorded, SpecGuard cannot read 1",
                                  normalize_ws: true)
-      expect(panel).to have_no_text("more from the test's own description")
-      expect(panel).to have_no_text("it carries no preconditions")
+      expect(panel.find("#intent-reading-basis")).to have_no_text("more from the test's own description")
+      expect(panel.find("#intent-reading-basis")).to have_no_text("it carries no preconditions")
       expect(panel).to have_text("50.0% — 1 of 2 tests carry an @intent.", normalize_ws: true)
     end
 
@@ -1410,7 +1430,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
       get repository_path(repository)
 
       # A stale run is a stale denominator, so the reader has to be able to see which run it is.
-      expect(overview_panel).to have_text("Measured on feedfac (release/2.1)", normalize_ws: true)
+      expect(Capybara.string(response.body).find(".rc-run")).to have_text("Reading run feedfac", normalize_ws: true)
+      expect(Capybara.string(response.body).find("#suite-trajectory-branch-menu", visible: :all)).to have_text("release/2.1", normalize_ws: true)
     end
 
     # @intent: {"entity": "TestRun", "action": "read newest run", "behavior": "with an old 100-test run and a newer 3-test run the panel prints Tests in suite 3 and not 100", "layer": "request"}
@@ -1474,7 +1495,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(panel).to have_no_css("[role='meter']")
       # ...while the counts themselves still render: "the run measured nothing" is a fact worth
       # stating, and it is not the same as "no run has reported".
-      expect(panel).to have_text("Tests in suite 0", normalize_ws: true)
+      expect(panel.find(".rc-stat", text: "Tests in suite")).to have_text("0", normalize_ws: true)
       expect(panel).to have_no_text("No CI run has reported yet", normalize_ws: true)
     end
 
@@ -1490,9 +1511,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # "Spec intents: 0" sitting above "Annotated: 66.7%" was two contradictory descriptions of
       # the same suite.
       panel = overview_panel
-      expect(panel).to have_text("Searchable intents 0", normalize_ws: true)
-      expect(panel).to have_text("not a count of tests in the suite", normalize_ws: true)
-      expect(panel).to have_no_text("Spec intents", normalize_ws: true)
+      facts = Capybara.string(response.body).find("#repository-facts")
+      expect(facts).to have_text("Searchable intents 0", normalize_ws: true)
+      expect(facts).to have_text("not a count of tests in the suite", normalize_ws: true)
+      expect(Capybara.string(response.body)).to have_no_text("Spec intents", normalize_ws: true)
     end
 
     # What the suite *costs*, which the panel stated the size of and never the price of. The
@@ -1508,14 +1530,14 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+        expect(runtime_text).to start_with("Total runtime 6m 12s")
         # A true number is not automatically a legible one: nobody reads `372.4s` as six minutes.
         expect(panel).to have_no_text("372.4s", normalize_ws: true)
         # The other half of the seam is the TREATMENT, and this is the side of it that says "this
         # is a measurement". `text-app-muted` is how this page styles an absent fact, so a
         # reported wall clock wearing it would read as an omission. Asserted positively — a bare
         # `have_no_css(".text-app-muted")` would also pass with the figure deleted outright.
-        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "6m 12s")
+        expect(runtime_stat).to have_css(".rc-stat-value:not(.text-app-content-secondary)", text: "6m 12s")
       end
 
       # The panel's signature refusal, applied to this column: rendering `0.0s` would make "the
@@ -1531,14 +1553,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
         panel = overview_panel
         # Label-scoped, not a bare "not reported": the wording is shared with other absent facts
         # on this page, and a bare match would pass with the runtime figure deleted entirely.
-        expect(panel).to have_text("Total runtime not reported", normalize_ws: true)
+        expect(runtime_text).to start_with("Total runtime —")
+        expect(runtime_text).to include("This run reported no timing at all")
         expect(panel).to have_no_text("Total runtime 0.0s", normalize_ws: true)
         expect(panel).to have_no_text("Total runtime 0s", normalize_ws: true)
         # The wording alone does not carry the distinction — the muted tone is the other half of
         # it, and this panel's whole job is styling an absent fact as absent rather than printing
         # it as a number. Pinned here because the helper is now the single treatment authority for
         # BOTH surfaces that render this column: one unnoticed edit desaturates them together.
-        expect(panel).to have_css("dd span.text-app-muted", text: "not reported")
+        expect(runtime_stat).to have_css(".rc-stat-value.text-app-content-secondary", text: "—")
       end
 
       # A measured zero is a measurement. The distinction only exists if both sides of it render.
@@ -1550,12 +1573,12 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         get repository_path(repository)
 
-        expect(overview_panel).to have_text("Total runtime 0.0s", normalize_ws: true)
-        expect(overview_panel).to have_no_text("Total runtime not reported", normalize_ws: true)
+        expect(runtime_text).to start_with("Total runtime 0.0s")
+        expect(runtime_text).not_to include("no timing at all")
         # And it is styled as a measurement, not as an absence. This is the example where the
         # treatment carries the most: `0.0s` muted would read as "nothing was reported" to a
         # reader who takes the tone at its word, which is precisely the conflation being refused.
-        expect(overview_panel).to have_css("dd span:not(.text-app-muted)", text: "0.0s")
+        expect(runtime_stat).to have_css(".rc-stat-value:not(.text-app-content-secondary)", text: "0.0s")
       end
 
       # The meter and the ratio are suppressed for a run that reported no tests, because 0/0 has
@@ -1570,7 +1593,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Total runtime 1m 32s", normalize_ws: true)
+        expect(runtime_text).to start_with("Total runtime 1m 32s")
         # ...without disturbing the suppression that example above pins.
         expect(panel).to have_text("Tests in suite 0", normalize_ws: true)
         expect(panel).to have_no_text("0%", normalize_ws: true)
@@ -1605,14 +1628,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Wall clock (slowest of 4 shards) 1m 14s", normalize_ws: true)
-        expect(panel).to have_text("Machine time (all 4 added up) 4m 14s", normalize_ws: true)
+        expect(runtime_text).to start_with("Wall clock 1m 14s slowest shard")
+        expect(runtime_text).to include("slowest of 4 shards")
+        expect(machine_time_text).to eq("Machine time 4m 14s all 4 added up")
         # The label the figure used to wear is what made it wrong. It must be gone, not merely
         # joined by a second row — "Total runtime 1m 14s" beside "Machine time 4m 14s" is two
         # contradictory descriptions of the same run.
         expect(panel).to have_no_text("Total runtime", normalize_ws: true)
         # And the machine time is styled as the measurement it is, not as an absent fact.
-        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "4m 14s")
+        expect(machine_time_fact).to have_css("dd span:not(.text-app-muted):not(.rc-sec)", text: "4m 14s")
       end
 
       # @intent: {"entity": "TestRun", "action": "state shard assembly", "behavior": "the panel says Assembled from 4 shard reports, notes they are not necessarily 4 distinct CI jobs, and carries both the suite-cost and slowest-single-shard claims", "layer": "request"}
@@ -1660,15 +1684,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # The LABEL carries the denominator, because a label is the most prominent claim a number
         # wears. "all 4 added up" over a SUM of three is this ticket's own defect one level down:
         # a coverage asserted in the loudest place on the row and retracted in the quietest.
-        expect(panel).to have_text("Machine time (3 of 4 added up) at least 2m 15s", normalize_ws: true)
-        expect(panel).to have_no_text("all 4 added up", normalize_ws: true)
-        expect(panel).to have_no_text("Machine time (3 of 4 added up) 2m 15s", normalize_ws: true)
+        expect(machine_time_text).to eq("Machine time at least 2m 15s 3 of 4 added up")
+        expect(overview_panel).to have_no_text("all 4 added up", normalize_ws: true)
+        expect(machine_time_text).not_to include("added up 2m 15s")
         # The wall clock's label carries its denominator too, and its denominator is 3 — the MAX is
         # over the shards that reported, and the silent one may well have been the slowest, since a
         # cancelled or timed-out job usually is. "slowest of 4 shards" over a MAX of three is the
         # row below's overclaim moved one row up.
-        expect(panel).to have_text("Wall clock (slowest of the 3 that reported) 1m", normalize_ws: true)
-        expect(panel).to have_no_text("slowest of 4 shards", normalize_ws: true)
+        expect(runtime_text).to include("Wall clock 1m").and include("slowest of the 3 that reported")
+        expect(overview_panel).to have_no_text("slowest of 4 shards", normalize_ws: true)
         # And the prose says the figure is partial ONCE, in the branch that is true — it must not
         # also assert the complete claim, in this or any other wording.
         expect(panel).to have_text(
@@ -1686,7 +1710,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(panel).to have_no_text("silent shards", normalize_ws: true)
         # An incomplete measurement is still a measurement — muting it would file it under
         # "nothing was reported", which is the state one example below.
-        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "at least 2m 15s")
+        expect(machine_time_fact).to have_css("dd span:not(.rc-sec)", text: "at least 2m 15s")
       end
 
       # The plural side of the same branch, which nothing exercised before: `pluralize` exists only
@@ -1700,8 +1724,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Machine time (2 of 4 added up) at least 1m 45s", normalize_ws: true)
-        expect(panel).to have_text("Wall clock (slowest of the 2 that reported) 1m", normalize_ws: true)
+        expect(machine_time_text).to eq("Machine time at least 1m 45s 2 of 4 added up")
+        expect(runtime_text).to include("Wall clock 1m").and include("slowest of the 2 that reported")
         expect(panel).to have_text(
           "Only 2 of them reported a timing, so both figures above cover just that much: the wall " \
           "clock is the slowest that reported rather than the slowest overall, and the machine " \
@@ -1726,8 +1750,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Wall clock (slowest of the 1 that reported) 1m 30s", normalize_ws: true)
-        expect(panel).to have_text("Machine time (1 of 2 added up) at least 1m 30s", normalize_ws: true)
+        expect(runtime_text).to include("Wall clock 1m 30s").and include("slowest of the 1 that reported")
+        expect(machine_time_text).to eq("Machine time at least 1m 30s 1 of 2 added up")
         expect(panel).to have_text(
           "Only 1 of them reported a timing, so both figures above cover just that much: the wall " \
           "clock is the slowest that reported rather than the slowest overall, and the machine " \
@@ -1749,18 +1773,19 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Machine time (0 of 4 added up) not reported", normalize_ws: true)
+        expect(overview_panel).to have_no_css("#shard-decomposition .rc-facts")
+        expect(runtime_text).to include("Wall clock —")
         # The wall clock is in the same state and says so. A label reading "slowest of 4 shards"
         # over a figure the very same row prints as "not reported" describes a number that is not
         # there.
-        expect(panel).to have_text("Wall clock (0 of 4 reported) not reported", normalize_ws: true)
-        expect(panel).to have_no_text("slowest of 4 shards", normalize_ws: true)
+        expect(runtime_text).to include("This run reported no timing at all")
+        expect(overview_panel).to have_no_text("slowest of 4 shards", normalize_ws: true)
         # Never `0.0s`: four shards that added up to nothing and four shards that said nothing are
         # different runs, and SQL's SUM over an all-null column returns NULL precisely so they stay
         # different here.
-        expect(panel).to have_no_text("Machine time (0 of 4 added up) 0.0s", normalize_ws: true)
+        expect(overview_panel).to have_no_text("Machine time 0.0s", normalize_ws: true)
         expect(panel).to have_no_text("at least", normalize_ws: true)
-        expect(panel).to have_no_text("all 4 added up", normalize_ws: true)
+        expect(overview_panel).to have_no_text("all 4 added up", normalize_ws: true)
         expect(panel).to have_text(
           "Not one of them reported a timing, so there is neither a wall clock nor a machine " \
           "time to show — this run's cost is unknown, not zero.",
@@ -1771,7 +1796,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # printed no wall clock at all — that is a confident claim over an absent number, which is
         # the whole defect this panel exists to retire.
         expect(panel).to have_no_text("the slowest single shard", normalize_ws: true)
-        expect(panel).to have_css("dd span.text-app-muted", text: "not reported")
+        expect(runtime_stat).to have_css(".rc-stat-value.text-app-content-secondary", text: "—")
       end
 
       # A measured zero is a measurement here too, and `0.0.present?` being false is how the
@@ -1785,9 +1810,9 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         panel = overview_panel
         # "all 2" is earned here — both shards reported, so the label's coverage claim is true.
-        expect(panel).to have_text("Machine time (all 2 added up) 0.0s", normalize_ws: true)
-        expect(panel).to have_no_text("Machine time (all 2 added up) not reported", normalize_ws: true)
-        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "0.0s")
+        expect(machine_time_text).to eq("Machine time 0.0s all 2 added up")
+        expect(machine_time_text).not_to include("not reported")
+        expect(machine_time_fact).to have_css("dd span:not(.rc-sec)", text: "0.0s")
       end
 
       # The other side of the branch, and the one the whole existing corpus takes. A single shard's
@@ -1801,7 +1826,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+        expect(runtime_text).to start_with("Total runtime 6m 12s")
         expect(panel).to have_no_text("Machine time", normalize_ws: true)
         expect(panel).to have_no_text("Wall clock", normalize_ws: true)
         expect(panel).to have_no_text("Assembled from", normalize_ws: true)
@@ -1818,7 +1843,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+        expect(runtime_text).to start_with("Total runtime 6m 12s")
         expect(panel).to have_no_text("Machine time", normalize_ws: true)
         expect(panel).to have_no_text("Assembled from", normalize_ws: true)
       end
@@ -1837,6 +1862,13 @@ RSpec.describe "Repository registration and API keys", type: :request do
     describe "the latest run's wall-clock decomposition" do
       def decomposition = overview_panel.find("#wall-clock-decomposition")
       def distribution = overview_panel.find("#shard-distribution")
+
+      # A shard row as the old list read it — `shard 3 1m 14s 5,000 tests 14.9ms/test` — from the
+      # table's cells: name, duration, tests (the bar column has no text), cost per test.
+      def shard_row_text(row)
+        name, duration, _bar, tests, per_test = row.all("td").map { |cell| cell.text(normalize_ws: true) }
+        [name, duration, tests, (per_test == "—" ? nil : per_test)].compact.join(" ")
+      end
 
       # The project's canonical fixture, the same durations `spec/requests/api/v1/ingest_spec.rb`
       # builds. Its arithmetic: SUM 253.75, spread across 4 shards 63.4375 (`1m 3s`), MAX 74.25
@@ -1888,7 +1920,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         get repository_path(repository)
 
-        expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
+        expect(distribution.all("tbody tr").map { |tr| shard_row_text(tr) })
           .to eq(["shard 3 1m 14s 5,000 tests 14.9ms/test",
                   "shard 1 1m 1s 5,000 tests 12.2ms/test",
                   "shard 4 1m 5,000 tests 12.0ms/test",
@@ -1925,7 +1957,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         get repository_path(repository)
 
-        expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
+        expect(distribution.all("tbody tr").map { |tr| shard_row_text(tr) })
           .to eq(["shard 3 1m 14s 8 tests 9.3s/test",
                   "shard 1 1m 1s 8 tests 7.6s/test",
                   "shard 4 1m 8 tests 7.5s/test",
@@ -1944,7 +1976,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         get repository_path(repository)
 
-        rows = distribution.all("li").map { |li| li.text(normalize_ws: true) }
+        rows = distribution.all("tbody tr").map { |tr| shard_row_text(tr) }
         expect(rows.first).to eq("shard 3 1m 14s no tests reported")
         # No quotient anywhere on that row, and no zero standing in for one.
         expect(rows.first).not_to include("/test")
@@ -2174,7 +2206,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
           # The distribution itself still renders, counts and all: the list is a description and
           # not a finding, so it is not withheld with the sentence. Tied durations fall back to
           # `id: :asc`, which is the insertion order the fixture wrote them in.
-          expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
+          expect(distribution.all("tbody tr").map { |tr| shard_row_text(tr) })
             .to eq(["shard 1 1m 5,000 tests 12.0ms/test",
                     "shard 2 1m 5,000 tests 12.0ms/test",
                     "shard 3 1m 5,000 tests 12.0ms/test",
@@ -2337,7 +2369,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         expect(decomposition).to have_text("The slowest was an unnamed shard, at 1m 14s.", normalize_ws: true)
-        expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
+        expect(distribution.all("tbody tr").map { |tr| shard_row_text(tr) })
           .to eq(["an unnamed shard 1m 14s 5,000 tests 14.9ms/test",
                   "shard 1 1m 1s 5,000 tests 12.2ms/test",
                   "shard 4 1m 5,000 tests 12.0ms/test",
@@ -2511,7 +2543,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
           expect(panel).to have_no_css("#wall-clock-decomposition")
           expect(panel).to have_no_css("#shard-distribution")
           expect(panel).to have_no_text("The slowest was", normalize_ws: true)
-          expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+          expect(runtime_text).to start_with("Total runtime 6m 12s")
         end
       end
 
@@ -2721,13 +2753,24 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # pins at one and at many clusters, alongside the guard that the render computes nothing
         # live. 25 -> 26.
         #
+        # -1 and +1 from SPGD-1768, netting to zero — the console moved two reads and the count of
+        # this page is the same 26 it was, for a reason worth keeping legible:
+        #
+        #   -1: the shard-distribution TABLE is built from the SAME `shard_durations` tuples that
+        #       rank its labels, so its bar widths no longer buy a `MAX(duration_seconds)` of their
+        #       own and its sort keys no longer buy a second ordered `SELECT *`. Constant in the
+        #       number of shards (the 40-shard example below pins the ceiling).
+        #   +1: the old Overview's "Searchable intents" count (`spec_intents`) lives with the
+        #       repository-level facts now, and is read on EVERY page load exactly as it was —
+        #       including on a repository CI has never reached, where the old panel also paid it.
+        #
         # Rebaselined by two rather than carved out, because this is an ABSOLUTE page budget:
         # hiding a real new query behind a filter would be the regression this count exists to
         # catch.
         expect(count_all_queries { get repository_path(repository) }).to eq(26)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
-        expect(distribution.all("li").size).to eq(4)
+        expect(distribution.all("tbody tr").size).to eq(4)
         expect(distribution).to have_text("5,000 tests", normalize_ws: true)
       end
 
@@ -2806,7 +2849,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # Suite coverage is the same class of information as the connection-health stat: a `view`
       # member needs it, and none of it is credential metadata.
-      expect(overview_panel).to have_text("Carrying an @intent 2", normalize_ws: true)
+      expect(overview_panel).to have_css("[role='meter'][aria-valuenow='2.0']")
+      expect(overview_panel).to have_text("Carrying an @intent 66.7%", normalize_ws: true)
       expect(response.body).not_to include("api-keys")
     end
   end
@@ -3221,9 +3265,18 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         expect(card_rows.map(&:first)).to eq(["Wall clock (slowest of 4 shards)",
                                               "Machine time (all 4 added up)"])
+        # The card prints "<label> (<coverage>) <figure>"; the console prints the same three parts
+        # in its stat — label, figure, and the coverage as the muted line under it — so each part is
+        # held to the card's seam output, in the card's words, on the page it links to.
         card_rows.each do |label, figure|
-          expect(panel_text).to include("#{label} #{Capybara.string(figure.to_s).text}")
+          name, coverage = label.match(/\A(.*?) \((.*)\)\z/).captures
+          figure_text = Capybara.string(figure.to_s).text
+          expect(panel_text.squish).to include(figure_text)
+          expect(panel_text.squish).to include(coverage)
+          expect(panel_text.squish).to include(name)
         end
+        expect(runtime_text).to include("Wall clock 1m 14s").and include("slowest of 4 shards")
+        expect(machine_time_text).to eq("Machine time 4m 14s all 4 added up")
       end
 
       # `Ingest::Payload#validate_duration_seconds` accepts nil explicitly, so "the client sent no
@@ -3520,15 +3573,20 @@ RSpec.describe "Repository registration and API keys", type: :request do
       get repository_path(repository)
       indicator_text = Capybara.string(response.body).find("#connection-indicator").text.squish
 
+      # The grid's card keeps its own pair (its page is a separate ticket); the repository page says
+      # the product's own name for the same thing — a REJECTED INGEST — through a pair of its own.
+      # Each surface is held to ITS seam's output, and the two seams are held to agree on the fact:
+      # same time, same "the key works, the payload did not".
+      helpers = ApplicationController.helpers
+      occurred_at = repository.ingest_rejections.first.occurred_at
       expect(card_text).to include(refusal_label)
-      expect(indicator_text).to include(refusal_label)
+      expect(indicator_text).to include(helpers.rejected_ingests_label)
       # ...and the sentence under it, which carries the one thing a reader who has just seen a green
       # "Connected" needs told — that the credential is fine and the payload was not.
-      note = ApplicationController.helpers.refused_deliveries_note(
-        repository.ingest_rejections.first.occurred_at
-      )
-      expect(card_text).to include(note)
-      expect(indicator_text).to include(note)
+      expect(card_text).to include(helpers.refused_deliveries_note(occurred_at))
+      expect(indicator_text).to include(helpers.rejected_ingests_note(occurred_at))
+      expect(helpers.rejected_ingests_note(occurred_at).split("—", 2).last)
+        .to eq(helpers.refused_deliveries_note(occurred_at).split("—", 2).last)
     end
 
     # CRITERION 8. `IngestRejection::REPOSITORY_RETENTION_ROWS` bounds the table, so a repository
@@ -4243,7 +4301,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # panel rendered, which is what the silence examples assert.
     def registration_panel
       Capybara.string(response.body)
-              .all(".rounded-md.border")
+              .all(".rounded-card.border")
               .map { |node| node.text.gsub(/\s+/, " ").strip }
               .find { |text| text.include?(lapsed_state) }
     end

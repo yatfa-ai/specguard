@@ -21,6 +21,13 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
   def files_panel = Capybara.string(response.body).find("#spec-file-durations")
   def directories_panel = Capybara.string(response.body).find("#spec-directory-durations")
 
+  # A row's destinations live in its drawer detail (the console's one overlay), so the link a row
+  # offers is found by the row's first cell and the action's own text.
+  def file_row_action(path, label)
+    row = files_panel.all("tbody tr", visible: :all).find { |tr| tr.first("td").text(:all).squish == path }
+    row.find("a", exact_text: label, visible: :all)
+  end
+
   def file_row_paths = files_panel.all("tbody tr").map { it.first("td").text.strip }
   def directory_row_paths = directories_panel.all("tbody tr").map { it.first("td").text.strip }
 
@@ -131,7 +138,7 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
       # A row link on the widened page keeps BOTH the file it opens and the widening in the URL.
       # `d04` is the LAST row of the widened window, the position most likely to lose a carried
       # ask to an off-by-one, and `d01` is opened as the page's own drill-in.
-      row_link = files_panel.find("tbody a", text: "spec/d04/a04_spec.rb")
+      row_link = file_row_action("spec/d04/a04_spec.rb", "Examples in this file")
       expect(row_link[:href]).to include("limit=12")
       expect(row_link[:href]).to include("spec_file=spec%2Fd04%2Fa04_spec.rb")
 

@@ -205,13 +205,13 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   # scope, no global surface.
   gestures = [
     { name: "open a file from Heaviest spec files",
-      panel: "#spec-file-durations", link: "spec/requests/checkout_spec.rb",
+      panel: "#spec-file-durations", row: "spec/requests/checkout_spec.rb", link: "Examples in this file",
       sets: { spec_file: "spec/requests/checkout_spec.rb" } },
     { name: "Close file",
       panel: "#spec-file-examples", link: "Close file",
       clears: :spec_file },
     { name: "open an area from Heaviest spec directories",
-      panel: "#spec-directory-durations", link: "spec/requests",
+      panel: "#spec-directory-durations", row: "spec/requests", link: "Spec files in this directory",
       sets: { spec_directory: "spec/requests" } },
     { name: "Close directory",
       panel: "#spec-directory-files", link: "Close directory",
@@ -220,7 +220,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       panel: "#spec-directory-files", link: "spec/models/refund_spec.rb",
       sets: { spec_file: "spec/models/refund_spec.rb" } },
     { name: "open a description from Descriptions this run recorded more than once",
-      panel: "#repeated-descriptions", link: "refuses a negative quantity",
+      panel: "#repeated-descriptions", row: "refuses a negative quantity", link: "Every example under it",
       sets: { repeated_description: "refuses a negative quantity" } },
     { name: "Close description",
       panel: "#repeated-description-examples", link: "Close description",
@@ -229,16 +229,16 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       panel: "#repeated-description-examples", link: "spec/models/refund_spec.rb",
       sets: { spec_file: "spec/models/refund_spec.rb" } },
     { name: "open an area from Areas that grew or shrank",
-      panel: "#spec-directory-growth", link: "spec/requests",
+      panel: "#spec-directory-growth", row: "spec/requests", link: "Which files moved",
       sets: { spec_directory: "spec/requests" } },
     { name: "open an area from How SpecGuard reads this suite, by area",
-      panel: "#unannotated-directories", link: "spec/requests",
+      panel: "#unannotated-directories", row: "spec/requests", link: "The unannotated tests here",
       sets: { spec_directory: "spec/requests" } },
     { name: "open a file from Files that grew or shrank in this directory",
       panel: "#spec-directory-file-growth", link: "spec/models/refund_spec.rb",
       sets: { spec_file: "spec/models/refund_spec.rb" } },
     { name: "open a file from Slowest tests",
-      panel: "#slowest-examples", link: "spec/requests/checkout_spec.rb",
+      panel: "#slowest-examples", row: "spec/requests/checkout_spec.rb", link: "Examples in this file",
       sets: { spec_file: "spec/requests/checkout_spec.rb" } },
     # The WINDOW panel's file link, which is a different gesture from the row above it even though
     # both open a file: that one is one run's ranking and this one is the window's, they are keyed
@@ -246,7 +246,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # exact text of exactly one anchor on this panel and is not the open file, so the cell it proves
     # is a real choice rather than a link that happened to carry an ask it also sets.
     { name: "open a file from Slowest tests across the window",
-      panel: "#slowest-tests-window", link: "spec/models/refund_spec.rb",
+      panel: "#slowest-tests-window", row: "settles the balance", link: "Examples in spec/models/refund_spec.rb",
       sets: { spec_file: "spec/models/refund_spec.rb" } },
     # Each of the two entry points STAMPS its own panel id as the test's origin, so the "Close test"
     # control can return the reader to the ranking they actually picked the test from rather than to
@@ -255,7 +255,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # carrying — the row BELOW is the discriminating one, and it is the reason the open value is the
     # other panel.
     { name: "open a test from Tests whose outcome changed",
-      panel: "#unstable-tests", link: "expires the session",
+      panel: "#unstable-tests", row: "expires the session", link: "Run by run",
       sets: { unstable_test: "expires the session", unstable_test_from: "unstable-tests" } },
     # THE SECOND ENTRY POINT, and the gesture this matrix gained with it. It opens a test from the
     # wall-clock ranking, where the ordinary row is a test the flakiness ranking does not list at
@@ -266,7 +266,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # the OPEN test, so this row deliberately opens the other one: a gesture whose target was its
     # own subject would pass while setting nothing.
     { name: "open a test from Slowest tests",
-      panel: "#slowest-examples", link: "expires the session",
+      panel: "#slowest-examples", row: "expires the session", link: "Run by run",
       sets: { unstable_test: "expires the session", unstable_test_from: "slowest-examples" } },
     # Clears the origin ALONGSIDE the test, which is why `clears` is a list here and a lone symbol
     # everywhere else. The origin qualifies the test: a close that dropped the subject and kept the
@@ -282,7 +282,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # run anchor that dropped the open drill-downs would land the reader back at the top of a page
     # they had already navigated three rungs into.
     { name: "anchor a run from Recent runs",
-      panel: "#recent-runs", link: "0ldde11",
+      panel: "#recent-runs", row: "0ldde11", link: "Read this run",
       sets: { commit_sha: "0ldde11vercafe00" } },
     # The way back OUT of the ask the row above enters, and it is here for the same reason its
     # counterpart is: un-anchoring is not a request to close an open area, file or description, nor
@@ -290,7 +290,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # run's sha, so the ask resolves, `@run_anchor_run` is present and the gesture is on the page
     # every other row is asserted against.
     { name: "Show the newest run",
-      panel: "#overview", link: "Show the newest run",
+      panel: ".rc-run", link: "Show the newest run",
       clears: :commit_sha }
   ]
 
@@ -315,8 +315,25 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   # `find` raises `Ambiguous` if a second exact match ever appears and `ElementNotFound` if the text
   # drifts, where falling through to first-substring-match would route straight back into the bug
   # above.
+  #
+  # The console moved every row's destinations out of the table and into the ONE detail drawer: a row
+  # carries them as `<a>` links in its detail (unwrapped into a hidden cell of the same row by
+  # spec/support/request_disclosure_content.rb, since a real browser clones that detail into the
+  # drawer on click). So a gesture that was "the link in the row" is "the action in THAT row's
+  # detail", and a gesture names its `row:` — the row whose first cell holds that text. The matrix's
+  # rule is unchanged and so is its rigor: exactly ONE row and exactly ONE exact-text link may match,
+  # or the matrix is asserting about a link it was not aiming at.
   def href_for(gesture)
-    page.find(gesture[:panel]).find("a", exact_text: gesture[:link])[:href]
+    scope = page.find(gesture[:panel])
+    if gesture[:row]
+      rows = scope.all("tr[data-drawer-title]", visible: :all).select do |tr|
+        tr.first("td", visible: :all).text(:all).squish.include?(gesture[:row])
+      end
+      raise "expected exactly one #{gesture[:panel]} row for #{gesture[:row].inspect}, got #{rows.size}" unless rows.one?
+
+      scope = rows.first
+    end
+    scope.find("a", exact_text: gesture[:link], visible: :all)[:href]
   end
 
   # A query value as it appears in a URL, so an assertion cannot pass on a substring of a longer
@@ -394,7 +411,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       "Close directory" => [:spec_directory, "#spec-directory-files"],
       "Close description" => [:repeated_description, "#repeated-description-examples"],
       "Close test" => [[:unstable_test, :unstable_test_from], "#unstable-test-runs"],
-      "Show the newest run" => [:commit_sha, "#overview"]
+      "Show the newest run" => [:commit_sha, ".rc-run"]
     }.each do |label, (ask, panel_id)|
       # @intent: {"entity": "GET /repositories/:id", "action": "drop own ask", "behavior": "each closing control — Close file, Close directory, Close description, Close test and Show the newest run — emits an href whose own ask key is absent while every other ask rides through, at each value", "layer": "request"}
       it "#{label} still drops its own ask" do
@@ -416,7 +433,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     it "writes no parameter for an ask that was not made" do
       get repository_path(drill_down_run)
 
-      href = page.find("#spec-directory-durations").find("a", text: "spec/models")[:href]
+      href = href_for({ panel: "#spec-directory-durations", row: "spec/models", link: "Spec files in this directory" })
 
       expect(mentions?(href, :branch)).to be(false)
       expect(mentions?(href, :commit_sha)).to be(false)

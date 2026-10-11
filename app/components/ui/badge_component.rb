@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 class UI::BadgeComponent < ApplicationComponent
-  BASE = "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold"
+  BASE = "inline-flex items-center gap-1 rounded-[var(--app-radius-pill)] px-2 py-0.5 text-xs font-semibold"
 
   TONES = {
     neutral: "bg-app-neutral-surface text-app-content-secondary",

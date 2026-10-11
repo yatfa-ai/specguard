@@ -103,7 +103,7 @@ RSpec.describe "Deleting a test run", type: :request do
       follow_redirect!
 
       expect(repository.reload.latest_test_run).to be_nil
-      expect(response.body).to include("No runs yet")
+      expect(response.body).to include("Nothing has been reported yet")
     end
   end
 

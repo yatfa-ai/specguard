@@ -37,6 +37,14 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
   def directories_panel = Capybara.string(response.body).find("#unannotated-directories")
 
+  # An area's row in the ranking above: its handle (the button that opens the drawer) and the
+  # drawer's "The unannotated tests here" action, which is the link into this panel.
+  def directories_row(path) = directories_panel.all("tbody tr", visible: :all).find { |tr| tr.first(".row-open").text(:all).squish == path }
+
+  def directories_action(path) = directories_row(path).find("a", exact_text: "The unannotated tests here", visible: :all)
+
+  def directories_handle(path) = directories_row(path).first(".row-open")
+
   # ELEMENT-scoped, never panel-scoped: the caption's two cap branches share most of their words, so
   # a panel-level `have_text` would pass for the wrong branch with the deciding `if` deleted.
   def basis_line = panel.find("#unannotated-examples-basis")
@@ -59,7 +67,8 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # What SpecGuard reads of each listed example, in order — the derived entity, action and behavior
   # run together, or the sentence that says it read nothing.
   def row_readings
-    panel.all("tbody tr").map { |row| row.all("td").last.text.gsub(/\s+/, " ").strip }
+    # The third column; the row's drawer detail is a trailing hidden cell in the document, not a column.
+    panel.all("tbody tr").map { |row| row.all("td")[2].text.gsub(/\s+/, " ").strip }
   end
 
   def row_names = rows.map { |row| row[:test] }
@@ -80,7 +89,9 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # location line under the name, and a nameless row wears the coordinate AS the name, so a
   # cell-wide `find("a")` finds the same element either way and an example does not have to know
   # which branch built the row.
-  def row_links = panel.all("tbody tr").map { |row| row.all("td").first.find("a") }
+  # The definition site is the drawer's "Open on GitHub" action; the cell keeps the coordinate as the
+  # printed line under the test's name.
+  def row_links = panel.all("tbody tr").map { |row| row.find("a", exact_text: "Open on GitHub", visible: :all) }
 
   def row_hrefs = row_links.map { |link| link[:href] }
 
@@ -259,7 +270,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
       expect(basis_line).to have_text("All 1 example this run recorded here without an @intent",
                                       normalize_ws: true)
       expect(panel).to have_no_text("4,000")
-      expect(basis_line).to have_text("a different population from the suite size on the Overview panel above",
+      expect(basis_line).to have_text("a different population from the suite size on the Summary at the top of this page",
                                       normalize_ws: true)
     end
   end
@@ -439,11 +450,11 @@ RSpec.describe "Repository unannotated examples", type: :request do
     it "links each area to this panel, carrying an ask the reader already had open" do
       get repository_path(debt_run, spec_file: refund_spec)
 
-      href = directories_panel.find("a", text: area, match: :prefer_exact)[:href]
+      href = directories_action(area)[:href]
 
       expect(href).to include("spec_directory=#{CGI.escape(area)}")
       expect(href).to include("spec_file=#{CGI.escape(refund_spec)}")
-      expect(href).to end_with("#unannotated-examples")
+      expect(href).to end_with("#annotations")
     end
 
     # AC3. NO NEW PARAMETER: the href writes only asks this page already had, and following it opens
@@ -451,7 +462,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # @intent: {"entity": "GET /repositories/:id", "action": "open panel without new param", "behavior": "following the ranking link opens the panel with spec_directory its only query key and Order settles the balance listed", "layer": "request"}
     it "opens the panel by following that link, with no parameter of its own" do
       get repository_path(debt_run)
-      href = directories_panel.find("a", text: area, match: :prefer_exact)[:href]
+      href = directories_action(area)[:href]
 
       keys = href.split("#").first.split("?", 2).last.split("&").map { |pair| pair.split("=").first }
       get href
@@ -466,10 +477,8 @@ RSpec.describe "Repository unannotated examples", type: :request do
     it "marks the open area as current" do
       get repository_path(debt_run, spec_directory: area)
 
-      link = directories_panel.find("a", text: area, match: :prefer_exact)
-
-      expect(link["aria-current"]).to eq("true")
-      expect(directories_panel.find("a", text: "spec/requests", match: :prefer_exact)["aria-current"]).to be_nil
+      expect(directories_handle(area)["aria-current"]).to eq("true")
+      expect(directories_handle("spec/requests")["aria-current"]).to be_nil
     end
   end
 
@@ -492,9 +501,11 @@ RSpec.describe "Repository unannotated examples", type: :request do
     it "links the coordinate itself rather than adding a second control to the row" do
       get repository_path(debt_run, spec_directory: area)
 
-      expect(row_links.map { |link| link.text.strip })
+      # The coordinate is the printed line under each test's name, and the link to it is the one
+      # control in the row's drawer — nothing beside it, so the worklist adds no second control.
+      expect(panel.all("tbody tr").map { |row| row.first("td").first(".rc-sec").text.strip })
         .to eq(["#{shared_group_file}:7", "#{order_spec}:30", "#{refund_spec}:9"])
-      expect(panel.all("tbody tr a").size).to eq(3)
+      expect(panel.all("tbody tr a", visible: :all).size).to eq(3)
     end
 
     # BOTH LABEL BRANCHES, and this is the one that is easy to miss: `#label` is
@@ -534,7 +545,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
       expect(shared).not_to include(order_spec)
       # And the "Spec file" column, which is the one that legitimately shows the including file,
       # stays the plain text it was.
-      expect(panel.all("tbody tr").first.all("td").last).to have_no_css("a")
+      expect(panel.all("tbody tr").first.all("td")[1]).to have_no_css("a")
     end
 
     # THE ANCHORED RUN'S SHA, not `main` and not the newest run. `file_path`/`line_number` are a

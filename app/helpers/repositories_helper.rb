@@ -1,21 +1,6 @@
 # frozen_string_literal: true
 
 module RepositoriesHelper
-  # How many branches the "Suite growth" selector lists.
-  #
-  # `Repository#branch_histories` walks up to `Repository::BRANCH_HISTORY_LIMIT`; this is how many
-  # of them a reader is shown, and the two are deliberately different numbers by two orders of
-  # magnitude. The walk's bound is about where a repository's branch cardinality stops being
-  # human-scale; this one is about what a row of links can carry before it stops being a way to
-  # find a branch. Keeping them apart is not tidiness — the walk is ALPHABETICAL, so a walk bounded
-  # near this number would hand the history sort an alphabetical prefix and drop the trunk out of
-  # the list ordering by history exists to keep in it.
-  #
-  # The ones shown are the ones with the most history — `trajectory_hidden_branches_sentence` says
-  # so rather than leaving a truncated list to look complete, and says it only as far as the walk
-  # can support it.
-  TRAJECTORY_BRANCH_CHOICES = 8
-
   # ONE statement of the carry-through rule this page's drill-downs all obey, for every link that
   # opens or closes one of them.
   #
@@ -95,6 +80,7 @@ module RepositoriesHelper
     # the hash rather than inside it, so an explicit `limit: nil` override ("Back to the 10
     # heaviest") still beats a carried widening through the ordinary `merge` below.
     asks[:limit] = @limit_request if @limit_request
+    asks[:window] = @window_request if @window_request
     # `?layer=` rides the same conditional carry for the same reason: it narrows the "Slowest tests"
     # panel only, and opening a file or an area must not silently drop the layer the reader chose —
     # while a default page's links stay byte-identical because no `layer:` is emitted without an ask.
@@ -293,108 +279,6 @@ module RepositoriesHelper
     reasons.to_sentence
   end
 
-  # The branches the "Suite growth" panel offers, as `UI::PageNavComponent` items.
-  #
-  # Ordered by `Repository#branch_histories` — most history first — and cut to
-  # `TRAJECTORY_BRANCH_CHOICES`. `trajectory_hidden_branches_sentence` states what the cut left out;
-  # a truncated list with nothing said about it reads as the complete set of branches.
-  def trajectory_branch_choices(repository, histories, current_branch)
-    trajectory_shown_branches(histories, current_branch).map do |history|
-      trajectory_branch_item(repository, history, current_branch)
-    end
-  end
-
-  # Every branch the panel loaded, as one menu — or `nil` when the row above already names them all.
-  #
-  # The row is cut to `TRAJECTORY_BRANCH_CHOICES` because that is what a row of links can carry.
-  # `@trajectory_branches` is not: `RepositoriesController#show` already holds up to
-  # `Repository::BRANCH_HISTORY_LIMIT` of them, each with the name, the run count and the capped
-  # flag this menu needs, out of the SAME one query the row is built from. Nothing here re-asks the
-  # database for anything — the rows are in memory and already in the order they are wanted in.
-  #
-  # Deliberately the FULL list and not the cut's remainder. This is the page's index of branches,
-  # and an index that omits the eight entries you can see elsewhere is one a reader has to hold two
-  # lists in their head to use. It also keeps the menu's own label honest: "All 11 branches" over a
-  # menu of three would be the same untrue-by-omission claim the hidden-branches sentence exists to
-  # prevent.
-  #
-  # Ordered by `Repository#branch_histories` — most history first — and NOT pulled to front the way
-  # `trajectory_shown_branches` is. The row bends its order to guarantee the drawn branch appears at
-  # all; the menu never has to, because it omits nothing, and an index whose order moved as the
-  # reader clicked would make them re-find their place on every visit.
-  def trajectory_branch_menu_choices(repository, histories, current_branch)
-    return nil unless trajectory_branches_overflow?(histories)
-
-    histories.map { |history| trajectory_branch_item(repository, history, current_branch) }
-  end
-
-  # What that menu may call itself, or `nil` when there is no menu.
-  #
-  # "All" is a claim about the repository, and it is only available while the walk FINISHED. Past
-  # `Repository::BRANCH_HISTORY_LIMIT` the menu holds every branch SpecGuard walked to and an
-  # unknown number of others exist, so the label drops to the bare count it can support — the same
-  # distinction `trajectory_hidden_branches_sentence` draws with "At least", made where a reader
-  # about to open the menu will read it.
-  def trajectory_branch_menu_label(histories)
-    return nil unless trajectory_branches_overflow?(histories)
-
-    trajectory_walk_cut?(histories) ? "#{histories.size} branches" : "All #{histories.size} branches"
-  end
-
-  # What the selector left out, or `nil` when it left out nothing.
-  #
-  # Three claims, and they are separated because they can fail separately.
-  #
-  # The COUNT is "at least" when the walk itself stopped at its own bound: past that point SpecGuard
-  # has not counted the branches either, and a bare number would be a figure nothing measured.
-  #
-  # The REACH claim is what the sentence gained when the branches stopped being merely counted at a
-  # reader and became something they can open. It says where the ones missing from the row are, and
-  # it stops short of "here they all are" whenever the walk was cut: a repository past the walk's
-  # bound still has branches this page has never seen, and the menu cannot offer one it never
-  # reached. That is the same bound "At least" reports, said about reachability instead of arithmetic.
-  #
-  # The cut wording says "these #{n}" and NOT "the #{n} SpecGuard walked to". The count is a count of
-  # this list, and this list is not the walk's output: `Repository#branch_histories` UNIONs the
-  # bounded walk with the PINNED branch outside `:branch_limit` (the `candidate` CTE of
-  # `BRANCH_HISTORY_SQL`, whose `SELECT pin FROM unnest(ARRAY[:pinned_branches]…)` arm sits outside
-  # the subquery carrying the `LIMIT :branch_limit`), which is the same fact `trajectory_walk_cut?`
-  # uses `>=` for. On a cut repository the branch being drawn is routinely in this list *because the
-  # walk never reached it* — pin `main` on a repository of `feature/*` and it arrives behind every
-  # one of them — so naming the size as the walked figure is off by the pins, in the one branch of
-  # this method written to not overclaim. A bare count claims nothing about provenance and is true
-  # however a row got here; the bound the reader actually needs is carried by the clause after it,
-  # which is unconditionally true.
-  #
-  # The ORDERING claim is the one that has to be earned. "The branches with the most history are
-  # listed first" is true of the branches the WALK REACHED, and the walk is alphabetical — so on a
-  # repository with more branches than it walks, the head of this list is the busiest of an
-  # alphabetical prefix and not of the repository. Saying so is the whole point: a sentence
-  # promising an ordering the query cannot deliver is worse than no sentence, because it tells a
-  # reader who cannot find `main` that `main` must not have any history.
-  #
-  # It is also not the plain ordering when the branch being drawn had to be pulled to the front to
-  # be shown at all (see `trajectory_shown_branches`) — the reader is then looking at one branch out
-  # of order on purpose, and the sentence names that rather than describing a list they can see is
-  # not sorted that way.
-  def trajectory_hidden_branches_sentence(histories, current_branch)
-    hidden = histories.size - TRAJECTORY_BRANCH_CHOICES
-    return nil unless hidden.positive?
-
-    cut = trajectory_walk_cut?(histories)
-    counted = cut ? "At least #{hidden}" : hidden.to_s
-    reach = if cut
-              "The branch menu names these #{histories.size}, and cannot offer one the walk " \
-                "never reached."
-            else
-              "The branch menu names all #{histories.size}."
-            end
-
-    "#{counted} further #{"branch".pluralize(hidden)} #{hidden == 1 ? "has" : "have"} runs and " \
-      "#{hidden == 1 ? "is" : "are"} not in the row above. #{reach} " \
-      "#{trajectory_listing_basis(histories, current_branch)}"
-  end
-
   # Said when the reader asked for a branch SpecGuard has no runs on, and the panel drew another
   # one instead.
   #
@@ -421,7 +305,7 @@ module RepositoriesHelper
              "still no history to draw."
     end
 
-    "SpecGuard has no runs on #{asked}, so this panel is drawn on #{trajectory.branch} — the " \
+    "SpecGuard has no runs on #{asked}, so this page is read on #{trajectory.branch} — the " \
       "branch of the repository's latest run — instead."
   end
 
@@ -988,35 +872,6 @@ module RepositoriesHelper
     " The other #{number_with_delimiter(unreported)} reported none."
   end
 
-  # One branch as one item, for BOTH the row and the menu.
-  #
-  # The two controls differ in WHICH branches they carry — the row is cut and pulls the drawn branch
-  # to the front, the menu is the untouched full list — and that difference is the point of having
-  # two of them. They must not differ in what an item IS. Both mean "go to this branch", so for a
-  # given branch they have to produce the same href and the same idea of `current`; while the two
-  # `map` bodies were written out separately, nothing but convention held that. Adding an anchor
-  # fragment to one, or changing how `current` is decided, would have left the row and the menu
-  # quietly disagreeing about the same branch on the same page.
-  #
-  # With this extracted, the ordering IS the only difference in the code, which is what the comments
-  # on both callers already say the intent is.
-  def trajectory_branch_item(repository, history, current_branch)
-    { label: trajectory_branch_label(history),
-      href: drill_down_path(repository, branch: history.name, anchor: "suite-trajectory"),
-      current: history.name == current_branch }
-  end
-
-  # Whether the row had to leave anything out — the one condition the menu and the hidden-branches
-  # sentence both hang off.
-  #
-  # They are the two halves of one disclosure (what the row omitted, and where to find it), so they
-  # appear and disappear together by construction rather than by two conditions kept in step by
-  # hand. A page that counted three hidden branches with no menu under it, or offered a menu that
-  # said nothing was hidden, would be a contradiction read in sequence.
-  def trajectory_branches_overflow?(histories)
-    histories.size > TRAJECTORY_BRANCH_CHOICES
-  end
-
   # Whether the walk stopped rather than finished — the fact that turns every claim about this
   # list from one about the repository into one about a prefix of it.
   #
@@ -1025,65 +880,6 @@ module RepositoriesHelper
   # and a complete walk that lands exactly on the bound is the ambiguity "At least" already covers.
   def trajectory_walk_cut?(histories)
     histories.size >= Repository::BRANCH_HISTORY_LIMIT
-  end
-
-  # How the shown list is ordered, said in the terms that are actually true of it.
-  def trajectory_listing_basis(histories, current_branch)
-    order = if trajectory_pulled_to_front?(histories, current_branch)
-              "The branch being drawn is listed first, then the branches with the most history."
-            else
-              "The branches with the most history are listed first."
-            end
-
-    return order unless trajectory_walk_cut?(histories)
-
-    "#{order} SpecGuard stops after walking #{number_with_delimiter(Repository::BRANCH_HISTORY_LIMIT)} " \
-      "branches, so that is an ordering over the ones it walked and not over every branch here."
-  end
-
-  # Whether the branch being drawn is only in the list because it was pulled there.
-  def trajectory_pulled_to_front?(histories, current_branch)
-    return false if current_branch.blank? || histories.first&.name == current_branch
-
-    trajectory_shown_branches(histories, current_branch).first&.name == current_branch
-  end
-
-  # The branches that fit, in `Repository#branch_histories`' order — most history first, which is
-  # the order a cut is worth making in.
-  #
-  # The order does NOT move as the reader clicks between branches. A list that reshuffled under the
-  # pointer — the selected branch jumping to the front on every click — would make the reader
-  # re-find their place each time, and the branch they just clicked is already marked `current`.
-  #
-  # The one exception is a selected branch that would otherwise not be shown AT ALL: it is pulled
-  # to the front, displacing the thinnest history that would have been. That is a real case rather
-  # than a defensive one — a reader can arrive by URL on a branch holding a single run while a dozen
-  # busier branches sit ahead of it, and a selector that cannot show you what you are looking at is
-  # worse than one that lists a branch out of order.
-  def trajectory_shown_branches(histories, current_branch)
-    shown = histories.first(TRAJECTORY_BRANCH_CHOICES)
-    return shown if shown.any? { |history| history.name == current_branch }
-
-    current = histories.find { |history| history.name == current_branch }
-    return shown if current.nil?
-
-    [current, *shown.first(TRAJECTORY_BRANCH_CHOICES - 1)]
-  end
-
-  # A branch and how much history it holds, as one link label.
-  #
-  # A capped count is worded `30+` and never as the exact figure the query stopped at, because it
-  # stopped rather than finished — see `Repository::BranchHistory`. Below the cap the count is
-  # exact, and inflected, because "1 runs" on the branch a reader is deciding about is the kind of
-  # sentence that makes them doubt the figure next to it.
-  def trajectory_branch_label(history)
-    runs = if history.capped?
-             "#{history.run_count}+ runs"
-           else
-             pluralize(history.run_count, "run")
-           end
-
-    "#{history.name} (#{runs})"
   end
 
   # `0` gets its own wording rather than riding the count. "only 0 of them are comparable" is a
@@ -1201,5 +997,180 @@ module RepositoriesHelper
     "#{number_with_delimiter(count)} #{"example".pluralize(count)} in the weighed run reached no " \
       "resolvable text and #{count == 1 ? "was" : "were"} not compared; that matching runs just " \
       "after a run lands rather than during it."
+  end
+
+  # --- the console (`repositories/show`) -----------------------------------------------------
+
+  # Every ask that opens a drill-in, as the set a "close" link has to clear. The global asks
+  # (branch, window, layer, commit_sha) are left alone: closing a drawer must not change the page.
+  DRILL_IN_ASKS = %i[spec_file spec_directory repeated_description unstable_test unstable_test_from].freeze
+
+  def drill_in_open?
+    [@spec_file_examples, @spec_directory_files, @spec_directory_file_growth, @unannotated_examples,
+     @repeated_description_examples, @unstable_test_runs].any?
+  end
+
+  def close_drill_in_path(repository)
+    drill_down_path(repository, anchor: nil, **DRILL_IN_ASKS.index_with { nil })
+  end
+
+  # An outcome strip cell per run of the window, oldest first. `outcomes` is {run_id => outcome}.
+  # Absent = the test did not appear in that run (a gap, not a pass).
+  def outcome_strip(runs, outcomes)
+    cells = runs.map do |run|
+      outcome = outcomes[run.id]
+      state = if !outcomes.key?(run.id) then "absent"
+              elsif outcome.nil? then "unreported"
+              else outcome
+              end
+      title = "#{run.commit_sha.first(7)} · #{state == 'absent' ? 'not run' : (state == 'unreported' ? 'outcome not reported' : state)}"
+      content_tag(:i, "", data: { o: state }, title: title)
+    end
+    content_tag(:span, safe_join(cells), class: "rc-strip", role: "img",
+                aria: { label: "Outcome in each of the last #{runs.size} runs, oldest first" })
+  end
+
+  # A comparison delta that can never wrap inside its cell. Tone is a reading, not a verdict:
+  # `good` when the thing a reader wants smaller got smaller, `bad` when it grew, `info` for size.
+  def delta_tag(text, tone: :flat, label: nil, id: nil)
+    content_tag(:span, text, class: "delta delta-#{tone}", id: id, aria: { label: label })
+  end
+
+  def delta_tone_for(change, bigger_is_worse:)
+    return :flat if change.nil? || change.zero?
+
+    (change.positive? == bigger_is_worse) ? :bad : :good
+  end
+
+  # The global filter bar's branch menu: the branches with the most history, the one being read
+  # pulled to the front, and an honest line about what is not listed.
+  # Every branch the page loaded, one item each, in `Repository#branch_histories`' order — most
+  # history first. NOT cut: the filter bar's menu is the page's only index of branches, and a branch
+  # that is not named in it cannot be asked for. (The old Suite growth panel cut a row to eight and
+  # backed it with a second, complete menu; with one filter bar there is only the complete one.)
+  def console_branch_items(repository, histories, current_branch)
+    histories.map do |history|
+      { name: history.name,
+        runs: history.capped? ? "#{history.run_count}+ runs" : pluralize(history.run_count, "run"),
+        href: drill_down_path(repository, branch: history.name, commit_sha: nil, anchor: nil,
+                              **DRILL_IN_ASKS.index_with { nil }),
+        current: history.name == current_branch }
+    end
+  end
+
+  def console_window_items(repository)
+    @window_choices.map do |size|
+      { label: "#{size} runs", current: size == @window_size,
+        href: drill_down_path(repository, window: (size == Repository::TRAJECTORY_LIMIT ? nil : size),
+                              anchor: nil, **DRILL_IN_ASKS.index_with { nil }) }
+    end
+  end
+
+  def console_layer_items(repository)
+    [["All layers", nil], *SpecObservation::DECLARED_LAYER_KEYS.map { |layer| [layer.to_s, layer.to_s] }].map do |label, value|
+      { label: label, current: value == @layer_request,
+        href: drill_down_path(repository, layer: value, anchor: nil) }
+    end
+  end
+
+  # The figures the old Overview panel computed inline, computed once. Every rule is the panel's own
+  # (a delta is withheld unless both runs were measured and assembled the same way); only the place
+  # moved, so the verdict, the cost panel and the notes read one answer.
+  RunFigures = Struct.new(:run, :previous, :total, :annotated, :readings, :measured, :comparable,
+                          :size_delta, :runtime_comparable, :wall_delta, :machine_delta, :sharded,
+                          :shards, keyword_init: true)
+
+  def run_figures(run, previous)
+    return nil if run.nil?
+
+    like = previous && run.assembled_like?(previous)
+    comparable = run.suite_size_measured? && previous&.suite_size_measured? && like
+    runtime_comparable = like && run.duration_reported? && previous.duration_reported? &&
+                         run.timed_shard_count == previous.timed_shard_count
+    wall = run.duration_seconds - previous.duration_seconds if runtime_comparable
+    sharded = run.multi_shard?
+    machine = if sharded && wall && run.machine_seconds_reported? && previous.machine_seconds_reported?
+                run.machine_seconds - previous.machine_seconds
+              end
+    RunFigures.new(run: run, previous: previous, total: run.total_specs_count.to_i,
+                   annotated: run.annotated_specs_count.to_i, readings: run.intent_readings,
+                   measured: run.suite_size_measured?, comparable: comparable,
+                   size_delta: (run.total_specs_count.to_i - previous.total_specs_count.to_i if comparable),
+                   runtime_comparable: runtime_comparable, wall_delta: wall, machine_delta: machine,
+                   sharded: sharded, shards: run.shard_count)
+  end
+
+  # --- the detail drawer -----------------------------------------------------------------------
+  # A table row that opens the drawer. `facts` are [label, value] pairs; `actions` are
+  # [label, href, variant] links (a row's real destinations — the server drill-in, GitHub);
+  # `body` is optional extra markup. Nothing is fetched: the detail is a <template> in the row.
+  def drawer_row(seed, kind:, title:, facts: [], actions: [], body: nil, row_data: {}, &cells)
+    id = "row-#{kind.parameterize}-#{Digest::SHA1.hexdigest(seed.to_s).first(8)}"
+    detail = tag.template(data: { drawer_body: "" }) do
+      safe_join([
+        (tag.dl(class: "rc-facts") do
+          safe_join(facts.reject { |_, value| value.blank? }.flat_map { |label, value| [tag.dt(label), tag.dd(value)] })
+        end if facts.any?),
+        body,
+        (tag.div(class: "rc-drawer-actions") do
+          safe_join(actions.map do |label, href, variant|
+            link_to(label, href, class: UI::ButtonComponent.classes(variant: variant || :secondary, size: :sm),
+                    target: (href.to_s.start_with?("http") ? "_blank" : nil), rel: "noopener noreferrer")
+          end)
+        end if actions.any?)
+      ].compact)
+    end
+    tag.tr(safe_join([capture(&cells), detail]), id: id, data: { drawer_title: title, drawer_kind: kind, **row_data })
+  end
+
+  # The cell that is the row's keyboard handle: a real button, so Enter/Space open the drawer and
+  # the row does not need an underlined link to be discoverable.
+  #
+  # `current:` marks the row the reader is on (the run being read) with `aria-current`, matched on the
+  # ROW and never on a value: two runs of one commit print the same seven characters.
+  def row_open(label, mono: false, current: false)
+    tag.button(label, type: "button", class: "row-open#{' mono' if mono}", aria: { current: current ? "true" : nil })
+  end
+
+  def layers_stack(layer_counts, key: true)
+    return nil if layer_counts.nil?
+
+    total = layer_counts.values.sum
+    return nil if total.zero?
+
+    ranks = { unit: "1", integration: "2", request: "3", system: "4", undeclared: "x" }
+    parts = layer_counts.select { |_, count| count.positive? }
+    bar = tag.span(class: "rc-stack", role: "img",
+                   aria: { label: parts.map { |layer, count| "#{layer} #{number_with_delimiter(count)}" }.join(", ") }) do
+      safe_join(parts.map { |layer, count| tag.i("", data: { r: ranks[layer] }, style: "flex: #{count} 1 0") })
+    end
+    # "Undeclared" is ALWAYS named, even at zero: it is the examples that declared no layer, and a
+    # key that omitted it would let a reader take a fully-declared file and a file nobody counted
+    # for the same thing. The bar draws only what has a count; the key states the whole mix.
+    key_parts = layer_counts.select { |layer, count| count.positive? || layer == :undeclared }
+    key_list = tag.ul(class: "rc-key") do
+      safe_join(key_parts.map { |layer, count| tag.li(safe_join([layer.to_s, " ", tag.strong(number_with_delimiter(count))]), data: { r: ranks[layer] }) })
+    end
+    key ? safe_join([bar, key_list]) : bar
+  end
+
+  # The runs the pass/fail strips are drawn across, oldest first — the same window every other
+  # trajectory panel reads, so a strip's cell N is the run the suite-growth chart's point N is.
+  def trajectory_runs_for_strips = @suite_trajectory.runs
+
+  # What the server-rendered drawer is about, named from whichever drill-in the URL opened. The
+  # newest ask (the narrowest) names it; the others ride inside it.
+  def drill_in_kind
+    if @unstable_test_runs then "Test, run by run"
+    elsif @repeated_description_examples then "Repeated description"
+    elsif @unannotated_examples && !@spec_file_examples then "Unannotated tests"
+    elsif @spec_file_examples then "Spec file"
+    elsif @spec_directory_files || @spec_directory_file_growth then "Spec directory"
+    end
+  end
+
+  def drill_in_title
+    @unstable_test_runs&.name || @repeated_description_examples&.name || @spec_file_examples&.path ||
+      @spec_directory_files&.path || @spec_directory_file_growth&.path
   end
 end

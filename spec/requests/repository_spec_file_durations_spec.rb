@@ -34,7 +34,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   # One row as a reader meets it: the file, what its total was summed over, and the total.
   def rows
     panel.all("tbody tr").map do |row|
-      path, coverage, duration = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, coverage, duration = row.all("td").first(3).map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
       { path: path, coverage: coverage, duration: duration }
     end
@@ -46,8 +46,8 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   # three-column row assertions keep stating exactly what they stated.
   def layer_cells
     panel.all("tbody tr").to_h do |row|
-      cells = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
-      [cells.first, cells.fourth]
+      cells = row.all("td").first(4)
+      [cells.first.text.gsub(/\s+/, " ").strip, layer_cell_text(cells.fourth)]
     end
   end
 
@@ -444,7 +444,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       # and was repointed rather than weakened. The preamble and the body travelled together into
       # `_heaviest_spec_files.html.erb`, so this stays a BODY-reaching assertion — it must keep
       # naming the partial that carries the panel body, never a preamble-only read.
-      expect(heaviest_spec_files).to include(%(id="spec-file-durations-basis"))
+      expect(heaviest_spec_files).to include('id: "spec-file-durations-basis"')
     end
   end
 end

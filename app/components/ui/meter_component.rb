@@ -8,7 +8,7 @@
 # the repository dashboard's suite-coverage block (app/views/repositories/show.html.erb).
 class UI::MeterComponent < ApplicationComponent
   TONES = {
-    cta: "bg-app-cta",
+    cta: "bg-app-accent-solid",
     success: "bg-app-success",
     warning: "bg-app-warning",
     error: "bg-app-error",

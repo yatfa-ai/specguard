@@ -1,14 +1,24 @@
-<div class="<%= wrapper_class %>">
+<div class="<%= wrapper_class %>" <%= tag.attributes(wrapper_attributes) %>>
   <table <%= tag.attributes(table_attributes) %>>
     <% if columns.any? %>
       <thead>
-        <tr class="border-b border-app-border">
+        <tr class="<%= "border-b border-app-border" unless sortable? %>">
           <% columns.each do |column| %>
-            <th scope="col" class="px-3 py-2 text-left section-label text-app-content-secondary"><%= column %></th>
+            <% if sortable? %>
+              <th scope="col" class="<%= "end" if column_end?(column) %>" data-datatable-target="head">
+                <% if column_sortable?(column) %>
+                  <button type="button" class="dt-sort" data-action="datatable#sort"><%= column_label(column) %></button>
+                <% else %>
+                  <%= column_label(column) %>
+                <% end %>
+              </th>
+            <% else %>
+              <th scope="col" class="px-3 py-2 text-left section-label text-app-content-secondary"><%= column_label(column) %></th>
+            <% end %>
           <% end %>
         </tr>
       </thead>
     <% end %>
-    <tbody class="divide-y divide-app-border text-app-content"><%= content %></tbody>
+    <tbody class="<%= "divide-y divide-app-border text-app-content" unless sortable? %>" <%= tag.attributes(sortable? ? { data: { datatable_target: "body" } } : {}) %>><%= content %></tbody>
   </table>
 </div>

@@ -1,0 +1,111 @@
+<%# VERDICT FIRST: what state is the suite in, and does anything need a person? The left half answers
+    the second question with links to the section that holds each thing; the right half is the
+    three figures a reader takes away. No figure here is repeated in a section below. %>
+<% f = run_figures(@latest_test_run, @previous_test_run) %>
+<% run = f.run %>
+<% attention = [] %>
+<% if @presented_revoked_api_keys.any? %>
+  <% attention << { tone: :err, text: "revoked key still presented", count: @presented_revoked_api_keys.size, to: "#delivery" } %>
+<% end %>
+<% if @rejected_ingests.refusing? %>
+  <% attention << { tone: :err, text: "rejected ingests since the last accepted run", count: @rejected_ingests.retained_window.total, to: "#delivery" } %>
+<% end %>
+<% if @slowest_examples&.outcomes_reported? && @slowest_examples.failed_count.positive? %>
+  <% attention << { tone: :err, text: "failed in this run", count: @slowest_examples.failed_count, to: "#slow" } %>
+<% end %>
+<% if @unstable_tests&.comparable? && @unstable_tests.rows.any? %>
+  <% attention << { tone: :warn, text: "tests changed outcome in this window", count: @unstable_tests.rows.size, to: "#unstable" } %>
+<% end %>
+<% if f.readings.recorded? && f.readings.unreadable? %>
+  <% attention << { tone: :warn, text: "tests SpecGuard cannot read", count: f.readings.unreadable, to: "#annotations" } %>
+<% end %>
+<% if f.sharded && run.wall_clock_decomposable? && run.wall_clock_excess_material? %>
+  <% attention << { tone: :warn, text: "of the wait comes from how shards were split", count: "#{run.wall_clock_excess_percent}%", to: "#slow" } %>
+<% end %>
+<% attention_tone = attention.any? { |a| a[:tone] == :err } ? "err" : (attention.any? ? "warn" : "ok") %>
+
+<section class="rc-verdict" id="summary" aria-labelledby="verdict-title">
+  <div class="rc-verdict-lead">
+    <div>
+      <h2 class="rc-verdict-title" id="verdict-title">
+        <span class="rc-dot rc-dot-<%= attention_tone %>" aria-hidden="true"></span>
+        <%= attention.empty? ? "Nothing needs you" : "#{pluralize(attention.size, 'thing')} #{attention.size == 1 ? 'needs' : 'need'} you" %>
+      </h2>
+      <p class="mt-1 text-sm text-app-content-secondary">
+        Measured <%= time_ago_in_words(run.created_at) %> ago<%= f.sharded ? ", assembled from #{f.shards} shard reports" : "" %>.
+      </p>
+    </div>
+    <% if attention.any? %>
+      <ul class="rc-attn">
+        <% attention.each do |item| %>
+          <li>
+            <a href="<%= item[:to] %>">
+              <span class="rc-dot rc-dot-<%= item[:tone] %>" aria-hidden="true"></span>
+              <span><strong><%= item[:count].is_a?(Integer) ? number_with_delimiter(item[:count]) : item[:count] %></strong> <%= item[:text] %></span>
+              <span class="rc-go">Open →</span>
+            </a>
+          </li>
+        <% end %>
+      </ul>
+    <% end %>
+  </div>
+
+  <div class="rc-verdict-stats">
+    <div class="rc-stat">
+      <span class="rc-stat-label">Tests in suite</span>
+      <% if f.measured %>
+        <span class="rc-stat-value"><%= number_with_delimiter(f.total) %></span>
+        <% if f.size_delta %>
+          <span><%= delta_tag(suite_size_change(f.size_delta), tone: f.size_delta.zero? ? :flat : :info,
+                              label: suite_size_change_reading(f.size_delta), id: "suite-size-delta") %></span>
+        <% end %>
+        <span class="rc-stat-sub"><%= f.size_delta ? "vs the previous run" : "no earlier run to compare" %></span>
+      <% else %>
+        <%# The count still renders — "the run measured nothing" is a fact worth stating, and it is not
+            the same as "no run has reported" — but muted, and captioned, because a zero here describes
+            the REPORT and not the suite (`suite_size_measured?` is false). %>
+        <span class="rc-stat-value text-app-content-secondary"><%= number_with_delimiter(f.total) %></span>
+        <span class="rc-stat-sub">This run reported no tests at all.</span>
+      <% end %>
+    </div>
+
+    <div class="rc-stat">
+      <span class="rc-stat-label">Carrying an @intent</span>
+      <% if f.measured %>
+        <span class="rc-stat-value"><%= run.annotated_ratio %>%</span>
+        <span class="rc-meter" role="meter" aria-valuenow="<%= f.annotated.to_f %>" aria-valuemin="0.0" aria-valuemax="<%= f.total.to_f %>"
+              aria-label="<%= number_with_delimiter(f.annotated) %> of <%= number_with_delimiter(f.total) %> tests carry an @intent">
+          <i style="width: <%= run.annotated_ratio %>%"></i>
+        </span>
+        <%# The share sentence, once — the index card's own seam, so the two surfaces cannot word the
+            same figure two ways. %>
+        <span class="rc-stat-sub"><%= test_run_annotated_share(run) %></span>
+      <% else %>
+        <span class="rc-stat-value text-app-content-secondary">—</span>
+        <span class="rc-stat-sub">Nothing to take a share of.</span>
+      <% end %>
+    </div>
+
+    <div class="rc-stat">
+      <span class="rc-stat-label"><%= f.sharded ? "Wall clock" : "Total runtime" %></span>
+      <% if run.duration_reported? %>
+        <span class="rc-stat-value"><%= run.duration_label %></span>
+        <% if f.wall_delta %>
+          <span><%= delta_tag(runtime_change(f.wall_delta),
+                              tone: delta_tone_for(TestRun.seconds_unchanged?(f.wall_delta) ? 0 : f.wall_delta, bigger_is_worse: true),
+                              label: wall_clock_change_reading(f.wall_delta), id: "runtime-delta") %></span>
+        <% end %>
+        <span class="rc-stat-sub"><%= f.sharded ? "slowest shard · #{run.wall_clock_coverage}" : (f.wall_delta ? "vs the previous run" : "no earlier run to compare") %></span>
+      <% else %>
+        <span class="rc-stat-value text-app-content-secondary">—</span>
+        <span class="rc-stat-sub">This run reported no timing at all.</span>
+      <% end %>
+    </div>
+  </div>
+</section>
+
+<%# Why the three deltas above are (or are not) shown — the old Overview's own notes. One line each,
+    a click away, directly under the figures they qualify. %>
+<div class="rc-notes" style="margin-top: -0.5rem">
+  <%= render "repositories/comparison_basis", f: f -%>
+</div>

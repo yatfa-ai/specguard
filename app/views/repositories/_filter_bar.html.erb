@@ -1,0 +1,100 @@
+<%# THE ONE FILTER BAR — branch, window and declared layer govern the whole page, so no panel carries
+    its own. Sticky together with the section index below it. Every choice is a plain link: the
+    state is the URL, so it is shareable and the back button undoes it. %>
+<% branch_items = console_branch_items(@repository, @trajectory_branches, @suite_trajectory.branch) %>
+<% readings = @latest_test_run&.intent_readings %>
+<div class="rc-bar" data-scrollspy-target="bar">
+  <div class="rc-filters">
+    <div class="rc-field" id="suite-trajectory-branches">
+      <span class="rc-label" id="rc-branch-label">Branch</span>
+      <% if @suite_trajectory.branch.blank? && branch_items.empty? %>
+        <span class="rc-ctl" aria-labelledby="rc-branch-label">no branch reported</span>
+      <% else %>
+        <%# EVERY branch SpecGuard loaded, in `Repository#branch_histories`' order (most history first):
+            a branch you cannot name is a branch you cannot ask for, so the menu is never cut to a
+            handful. The branch being read is marked `aria-current="page"`. It is a native
+            details/summary — keyboard-reachable and Escape-closable — and an overlay, not a region of
+            the page, so the page itself still has no nested scroll area. %>
+        <details class="rc-menu" id="suite-trajectory-branch-menu" data-controller="menu">
+          <summary class="rc-ctl" aria-labelledby="rc-branch-label rc-branch-value">
+            <span id="rc-branch-value" class="text-left [overflow-wrap:anywhere]"><%= @suite_trajectory.branch.presence || "no branch reported" %></span>
+            <span class="rc-chev" aria-hidden="true"></span>
+          </summary>
+          <div class="rc-menu-list" role="list">
+            <% branch_items.each do |item| %>
+              <%= link_to item[:href], class: "rc-menu-item", aria: { current: item[:current] ? "page" : nil } do %>
+                <span><%= item[:name] %></span> <small>(<%= item[:runs] %>)</small>
+              <% end %>
+            <% end %>
+            <p class="px-2.5 py-1.5 text-xs text-app-content-secondary" id="suite-trajectory-branches-basis">
+              The page reads the newest run on the branch you pick and the last
+              <%= @window_size %> runs behind it, most history first.
+              <% if @trajectory_branches.any?(&:capped?) %>
+                A run count stops at <%= Repository::TRAJECTORY_LIMIT %>, so
+                “<%= Repository::TRAJECTORY_LIMIT %>+” means the branch holds more history than the
+                window reaches.
+              <% end %>
+              <% if trajectory_walk_cut?(@trajectory_branches) %>
+                SpecGuard stops after walking <%= number_with_delimiter(Repository::BRANCH_HISTORY_LIMIT) %>
+                branches, so this is an ordering over the ones it walked and not over every branch here.
+              <% end %>
+            </p>
+          </div>
+        </details>
+      <% end %>
+    </div>
+
+    <div class="rc-field">
+      <span class="rc-label" id="rc-window-label">Window</span>
+      <nav class="rc-seg" aria-labelledby="rc-window-label">
+        <% console_window_items(@repository).each do |item| %>
+          <%= link_to item[:label], item[:href], aria: { current: item[:current] ? "true" : nil } %>
+        <% end %>
+      </nav>
+    </div>
+
+    <% if readings&.recorded? %>
+      <div class="rc-field" id="rc-layer-field">
+        <span class="rc-label" id="rc-layer-label">Declared layer</span>
+        <nav class="rc-seg" aria-labelledby="rc-layer-label">
+          <% console_layer_items(@repository).each do |item| %>
+            <%= link_to item[:label], item[:href], aria: { current: item[:current] ? "true" : nil } %>
+          <% end %>
+        </nav>
+        <%# Said, not implied: a layer ask narrows the sections whose rows carry a declared layer — the
+            rankings of What is slow, What is unstable and the repeated descriptions. The others
+            (suite size, what changed over the window, annotation debt, near-duplicates) are counts
+            over EVERY layer by their nature, and a filter that quietly did not apply to them would
+            read as if they had been narrowed. The layer is what each example's own @intent declared,
+            never inferred from the path. %>
+        <% if @layer_request %>
+          <span class="rc-hint" id="rc-layer-scope">
+            Narrows <a class="rc-link" href="#slow">What is slow</a>,
+            <a class="rc-link" href="#unstable">What is unstable</a> and the
+            <a class="rc-link" href="#duplicates">repeated descriptions</a>; every other section
+            still counts all layers.
+          </span>
+        <% end %>
+      </div>
+    <% end %>
+
+    <% if @latest_test_run %>
+      <div class="rc-run">
+        <span>Reading run <code><%= @latest_test_run.commit_sha.first(7) %></code></span>
+        <% if @run_anchor_run %>
+          <%= render UI::ButtonComponent.new(variant: :ghost, size: :xs,
+                href: drill_down_path(@repository, commit_sha: nil, anchor: "summary")) { "Show the newest run" } %>
+        <% end %>
+      </div>
+    <% end %>
+  </div>
+
+  <nav class="rc-nav" aria-label="Sections">
+    <% sections.each do |anchor, label, extra| %>
+      <a href="#<%= anchor %>" data-scrollspy-target="link" data-action="scrollspy#pick">
+        <%= label %>
+        <% if extra %><%= render UI::BadgeComponent.new(tone: extra[:tone]) { extra[:text] } %><% end %>
+      </a>
+    <% end %>
+  </nav>
+</div>

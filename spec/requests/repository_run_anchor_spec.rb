@@ -28,6 +28,8 @@ RSpec.describe "Repository run anchor", type: :request do
 
   def panel(id) = page.find("##{id}")
 
+  def overview_text = console_overview.text.squish
+
   # Whitespace-collapsed, because every sentence these examples read is assembled across several
   # ERB lines: a phrase that reads as one on the page has a newline in the middle of it in the
   # source, and an assertion against a literal space would pin the indentation rather than the copy.
@@ -49,7 +51,7 @@ RSpec.describe "Repository run anchor", type: :request do
   # row that merely shares its sha.
   def marked_row_positions
     panel("recent-runs").all("tbody tr").each_with_index
-                        .select { |row, _| row.all("a[aria-current]").any? }.map(&:last)
+                        .select { |row, _| row.all("button[aria-current]").any? }.map(&:last)
   end
 
 
@@ -98,7 +100,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
       expect(response).to have_http_status(:ok)
       # The Overview's own basis line, which is where the page names the run its figures came from.
-      expect(panel_text("overview")).to include("Measured on #{older.commit_sha.first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{older.commit_sha.first(7)}")
       # The two rollups and the annotation map, each of which ranks rows of ONE run. The newest run
       # holds no `spec/models` row at all, so this cannot pass on a page that ignored the ask.
       expect(panel_text("spec-file-durations")).to include("spec/models/order_spec.rb")
@@ -147,12 +149,12 @@ RSpec.describe "Repository run anchor", type: :request do
   # `commit_sha` out instead of passing an explicit nil produces a button that navigates to the page
   # it is already on, and an expectation written from the same belief would agree with it.
   describe "the gesture that clears the anchor" do
-    def un_anchor_gesture = panel("overview").all("a", text: "Show the newest run").first
+    def un_anchor_gesture = page.find(".rc-run").all("a", text: "Show the newest run").first
 
     def asks_in(href) = Rack::Utils.parse_nested_query(URI.parse(href).query)
 
     # The fragment is the button's landing anchor and is not part of the path a request spec issues;
-    # `get` would read `#overview` as the last characters of the slug.
+    # `get` would read `#summary` as the last characters of the slug.
     def follow(href)
       uri = URI.parse(href)
       get [uri.path, uri.query].compact.join("?")
@@ -179,9 +181,11 @@ RSpec.describe "Repository run anchor", type: :request do
       follow(un_anchor_gesture[:href])
 
       expect(response).to have_http_status(:ok)
-      expect(panel_text("overview")).to include("Measured on #{newer.commit_sha.first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{newer.commit_sha.first(7)}")
       expect(anchor_notice).to be_nil
-      expect(marked_row_positions).to be_empty
+      # Un-anchored, the page reads the newest run again, so the marked row is the TOP one — it moved
+      # off the older run, which is the thing the gesture exists to do.
+      expect(marked_row_positions).to eq([0])
     end
 
     # Success criterion, second half. Un-anchoring is not a request to close an open area, file or
@@ -252,7 +256,7 @@ RSpec.describe "Repository run anchor", type: :request do
       get repository_path(repository, commit_sha: "deadbeefdeadbeef")
 
       expect(response).to have_http_status(:ok)
-      expect(panel_text("overview")).to include("Measured on #{newer.commit_sha.first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{newer.commit_sha.first(7)}")
     end
 
     # Success criterion 2, second half, and criterion 3. THE defect this ticket exists to close: the
@@ -311,7 +315,9 @@ RSpec.describe "Repository run anchor", type: :request do
       get repository_path(repository, commit_sha: "deadbeefdeadbeef")
 
       expect(recent_runs_caption).not_to include("anchored")
-      expect(marked_row_positions).to be_empty
+      # No ask resolved, so the page reads the newest run and marks ITS row (the top one) — the ask
+      # being absent is what the caption's silence is about, not the absence of a marked row.
+      expect(marked_row_positions).to eq([0])
     end
 
     # The echoed sha is the one unvalidated value this page prints back, and it reaches the reader
@@ -344,7 +350,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository)
 
-      expect(panel_text("overview")).to include("Measured on #{newer.commit_sha.first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{newer.commit_sha.first(7)}")
       expect(anchor_notice).to be_nil
     end
 
@@ -357,7 +363,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository, commit_sha: "")
 
-      expect(panel_text("overview")).to include("Measured on #{newer.commit_sha.first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{newer.commit_sha.first(7)}")
       expect(anchor_notice).to be_nil
     end
   end
@@ -378,7 +384,7 @@ RSpec.describe "Repository run anchor", type: :request do
       get repository_path(repository, **query)
 
       expect(response).to have_http_status(:ok)
-      expect(panel_text("overview")).to include("Measured on #{newer.commit_sha.first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{newer.commit_sha.first(7)}")
       expect(anchor_notice).to be_nil
     end
 
@@ -393,7 +399,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository, commit_sha: older.commit_sha)
 
-      expect(panel_text("overview")).to include("Measured on #{older.commit_sha.first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{older.commit_sha.first(7)}")
     end
   end
 
@@ -435,7 +441,7 @@ RSpec.describe "Repository run anchor", type: :request do
       get repository_path(repository, commit_sha: older.commit_sha)
 
       expect(panel_text("connection-indicator")).to include("Connected")
-      expect(panel_text("connection-indicator")).not_to include("Deliveries refused")
+      expect(panel_text("connection-indicator")).not_to include("Rejected ingests")
     end
 
     # The other half, so the example above cannot pass by the verdict having been disabled: the same
@@ -447,7 +453,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository, commit_sha: older.commit_sha)
 
-      expect(panel_text("connection-indicator")).to include("Deliveries refused")
+      expect(panel_text("connection-indicator")).to include("Rejected ingests")
     end
   end
 
@@ -463,7 +469,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository, commit_sha: older.commit_sha)
 
-      shas = panel("recent-runs").all("tbody tr td:first-child").map { |cell| cell.text.strip }
+      shas = panel("recent-runs").all("tbody tr td:first-child .row-open").map { |cell| cell.text.strip }
       expect(shas).to eq([newer.commit_sha.first(7), older.commit_sha.first(7)])
     end
 
@@ -473,7 +479,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository, commit_sha: older.commit_sha)
 
-      current = panel("recent-runs").all("a[aria-current]").map(&:text)
+      current = panel("recent-runs").all("button[aria-current]").map(&:text)
       expect(current).to eq([older.commit_sha.first(7)])
     end
 
@@ -483,7 +489,10 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository)
 
-      expect(panel("recent-runs").all("a[aria-current]")).to be_empty
+      # On a default page the top row IS the run being read, so it is the one row marked; "nothing
+      # chosen" is the anchored-on-an-older-run state's opposite, not an empty list.
+      expect(panel("recent-runs").all("button[aria-current]").size).to eq(1)
+      expect(marked_row_positions).to eq([0])
     end
 
     # ⭐ The rule the view argues for at length and nothing was checking: the mark is matched on the
@@ -566,7 +575,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository, commit_sha: eldest.commit_sha)
 
-      expect(panel_text("overview")).to include("Measured on #{eldest.commit_sha.first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{eldest.commit_sha.first(7)}")
       expect(panel("recent-runs").all("tbody tr").size).to eq(10)
       expect(marked_row_positions).to be_empty
     end
@@ -611,7 +620,7 @@ RSpec.describe "Repository run anchor", type: :request do
       get repository_path(repository, commit_sha: older.commit_sha)
 
       expect(anchor).to include("resolved" => true, "commit_sha" => older.commit_sha)
-      expect(panel_text("overview")).to include("Measured on #{anchor["commit_sha"].first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{anchor["commit_sha"].first(7)}")
     end
 
     # @intent: {"entity": "TestRun", "action": "match api fallback anchor", "behavior": "for an unresolvable sha the API reports resolved false with the requested sha and the web page measures and discloses the same fallback run", "layer": "request"}
@@ -622,7 +631,7 @@ RSpec.describe "Repository run anchor", type: :request do
       get repository_path(repository, commit_sha: "deadbeefdeadbeef")
 
       expect(anchor).to include("resolved" => false, "requested_commit_sha" => "deadbeefdeadbeef")
-      expect(panel_text("overview")).to include("Measured on #{anchor["commit_sha"].first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{anchor["commit_sha"].first(7)}")
       expect(anchor_notice).to include("anchored on #{anchor["commit_sha"].first(7)}")
     end
   end
@@ -642,8 +651,9 @@ RSpec.describe "Repository run anchor", type: :request do
     get repository_path(repository, commit_sha: older.commit_sha)
 
     expect(response).to have_http_status(:ok)
-    expect(panel("recent-runs").all("a").map(&:text)).to include(older.commit_sha.first(7))
-    expect(panel_text("overview")).to include("Measured on #{older.commit_sha.first(7)}")
+    expect(panel("recent-runs").all("tbody tr td:first-child .row-open").map(&:text)).to include(older.commit_sha.first(7))
+    expect(panel("recent-runs").all("a", visible: :all).map(&:text)).to include("Read this run")
+    expect(page.find(".rc-run").text.squish).to include("Reading run #{older.commit_sha.first(7)}")
   end
 
   # ⭐ SPGD-816. The page's half of the retention disclosure. It belongs in THIS file rather than in
@@ -727,7 +737,7 @@ RSpec.describe "Repository run anchor", type: :request do
       expect(aged_out_notice).to include("may have little or nothing left to show")
       # And it does not walk back the counts the run's own row still supports. This is the
       # conflation the whole ticket is about: the run measured a suite and still says so.
-      expect(panel_text("overview")).to include("Measured on #{oldest.commit_sha.first(7)}")
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{oldest.commit_sha.first(7)}")
     end
 
     # ⭐⭐ THE POPULATION THE SENTENCE IS MOST EASILY WRONG ABOUT, and until this example existed it

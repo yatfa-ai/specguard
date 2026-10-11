@@ -1,0 +1,9 @@
+<%# RUNS — what CI reported, newest first, every branch interleaved. %>
+<section class="rc-section" id="runs" aria-labelledby="runs-h">
+  <div class="rc-section-head">
+    <h2 class="text-app-h2" id="runs-h">Runs</h2>
+    <p>Every run CI reported, newest first, across all branches.</p>
+  </div>
+  <%= render "repositories/recent_runs" -%>
+  <%= render "repositories/repository_facts" -%>
+</section>

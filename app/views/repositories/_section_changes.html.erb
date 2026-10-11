@@ -1,0 +1,136 @@
+<%# WHAT CHANGED — between this run and the previous one on the branch, and across the window.
+    Everything that moves lives here and nowhere else: suite size, declared layers (by count and by
+    runtime, per run and over the window), and the areas that grew, shrank, slowed or sped up. %>
+<% f = run_figures(@latest_test_run, @previous_test_run) %>
+<section class="rc-section" id="changes" aria-labelledby="changes-h">
+  <div class="rc-section-head">
+    <h2 class="text-app-h2" id="changes-h">What changed</h2>
+    <p>Against the previous run on <code><%= @latest_test_run.branch.presence || "this branch" %></code>, and across the last <%= @window_size %> runs.</p>
+  </div>
+
+  <%= render "repositories/suite_growth" -%>
+
+  <div class="rc-grid-2">
+    <%= render UI::PanelComponent.new(title: "Declared layers", id: "layers") do %>
+      <% readings = f.readings %>
+      <% if readings.recorded? %>
+        <div class="space-y-3">
+          <%= layers_stack(@latest_test_run.layer_counts, key: false) %>
+          <%= render UI::TableComponent.new(
+                columns: ["Layer", { label: "Tests", end: true }, { label: "Since previous run", end: true },
+                          { label: "Across the window", end: true }],
+                sortable: true) do %>
+            <% SpecObservation::DECLARED_LAYER_KEYS.each do |layer| %>
+              <% count = @latest_test_run.layer_counts[layer] %>
+              <% next if count.zero? && !@layer_run_growth&.rows&.dig(layer)&.change.to_i.nonzero? %>
+              <% run_row = @layer_run_growth&.comparable? ? @layer_run_growth.rows[layer] : nil %>
+              <% win_row = @layer_window_growth&.comparable? ? @layer_window_growth.rows[layer] : nil %>
+              <tr>
+                <td class="font-semibold"><%= layer %></td>
+                <td class="num" data-sort="<%= count %>"><%= number_with_delimiter(count) %></td>
+                <td class="num" data-sort="<%= run_row&.change %>">
+                  <% if run_row %><%= delta_tag(run_row.change_label, tone: run_row.change.zero? ? :flat : :info) %><% else %><span class="text-app-content-secondary">—</span><% end %>
+                </td>
+                <td class="num" data-sort="<%= win_row&.change %>">
+                  <% if win_row %><%= delta_tag(win_row.change_label, tone: win_row.change.zero? ? :flat : :info) %><% else %><span class="text-app-content-secondary">—</span><% end %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+          <% if @layer_run_growth&.comparable? %>
+            <p class="text-xs text-app-content-secondary" id="layer-run-growth">Since <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span> on <%= @latest_test_run.branch %>: <%= @layer_run_growth.label %></p>
+          <% end %>
+          <%= render UI::NoteComponent.new(summary: "How declared layers are counted", id: "declared-layers-basis") do %>
+            "Declared layers" is how many of this run's <%= number_with_delimiter(readings.recorded) %>
+            recorded <%= "example".pluralize(readings.recorded) %> declared each layer in their own
+            <code>@intent</code> — never inferred from the path. "Undeclared" is the examples that
+            declared no layer, which is not "not readable by SpecGuard": such a test may still be
+            read from its description.
+          <% end %>
+        </div>
+      <% else %>
+        <%= render UI::EmptyStateComponent.new(
+              title: "No per-example rows",
+              description: "This run reported suite totals without per-example rows, so there is no declared layer to count."
+            ) %>
+      <% end %>
+    <% end %>
+
+    <%= render UI::PanelComponent.new(title: "Time by declared layer", id: "layer-durations-panel") do %>
+      <% readings = f.readings %>
+      <% if readings.recorded? %>
+        <div class="space-y-3">
+          <div id="layer-durations">
+          <%= render UI::TableComponent.new(
+                columns: ["Layer", { label: "Machine time", end: true }, { label: "Timed", end: true },
+                          { label: "Since previous run", end: true }],
+                sortable: true) do %>
+            <% parts = SpecDirectoryDurations.layer_durations_parts(@latest_test_run.layer_durations, @latest_test_run.layer_counts) %>
+            <% parts.each do |layer, _figures| %>
+              <% durations = @latest_test_run.layer_durations[layer] %>
+              <% growth = @layer_runtime_growth&.comparable? ? @layer_runtime_growth.rows[layer] : nil %>
+              <tr>
+                <td class="font-semibold">
+                  <%= link_to layer.to_s, drill_down_path(@repository, layer: layer.to_s, anchor: "slowest-examples"),
+                              class: "rc-link", aria: { current: layer.to_s == @layer_request ? "true" : nil } %>
+                </td>
+                <td class="num" data-sort="<%= durations[:total_seconds] %>"><%= SpecObservation.humanized_duration(durations[:total_seconds]) %></td>
+                <td class="num mute" data-sort="<%= durations[:timed_count] %>"><%= SpecObservation.coverage_fraction(durations[:timed_count], @latest_test_run.layer_counts[layer]) %></td>
+                <td class="num" data-sort="<%= growth&.change %>">
+                  <% if growth %>
+                    <%= delta_tag(growth.change_label, tone: delta_tone_for(growth.change, bigger_is_worse: true)) %>
+                  <% else %><span class="text-app-content-secondary">—</span><% end %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+          </div>
+          <%# The routes from a layer to WHICH things hold its time. The names in the table above go to the
+              slowest EXAMPLES (`#layer-durations a`); each line below is a line of its own, never links
+              spliced into that table, so the table's text stays exactly the plain label. All through
+              `drill_down_path`, so choosing a layer closes no other open ask, and the active layer
+              is marked `aria-current`. %>
+          <% layer_parts = SpecDirectoryDurations.layer_durations_parts(@latest_test_run.layer_durations, @latest_test_run.layer_counts) %>
+          <% [["layer-durations-files", "Spec files by declared layer", "spec-file-durations"],
+              ["layer-durations-directories", "Spec directories by declared layer", "spec-directory-durations"],
+              ["layer-durations-descriptions", "Repeated descriptions by declared layer", "repeated-descriptions"]].each do |line_id, line_label, target| %>
+            <p class="text-xs text-app-content-secondary" id="<%= line_id %>">
+              <span class="font-medium"><%= line_label %></span>:
+              <% layer_parts.each_with_index do |(layer, _figures), index| %>
+                <%= " · " if index.positive? %><%= link_to layer.to_s,
+                           drill_down_path(@repository, layer: layer.to_s, anchor: target),
+                           class: "rc-link", aria: { current: layer.to_s == @layer_request ? "true" : nil } %>
+              <% end %>
+            </p>
+          <% end %>
+          <% if @layer_runtime_growth&.comparable? %>
+            <p class="text-xs text-app-content-secondary" id="layer-runtime-growth">Since <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span> on <%= @latest_test_run.branch %>: <%= @layer_runtime_growth.label %></p>
+          <% end %>
+          <% if @layer_window_runtime_growth&.comparable? %>
+            <p class="text-xs text-app-content-secondary" id="layer-window-runtime-growth">
+              Declared-layer time, this window's two ends compared (not a trend): <%= @layer_window_runtime_growth.label %>
+            </p>
+          <% end %>
+          <%= render UI::NoteComponent.new(summary: "What machine time means here", id: "layer-durations-basis") do %>
+            Each figure is the sum of its examples' own durations — machine time, not wall clock, so
+            it can exceed the run's wall clock when the suite runs in parallel or across shards — and
+            "timed" is how many of that layer's examples reported a duration. The layer is what each
+            example's <code>@intent</code> declared, never inferred from the path; "undeclared" is not
+            "not readable by SpecGuard". The movement column compares sums of example durations
+            (machine time) between two runs and matches no tests: a test that changes its declared
+            <code>@intent</code> layer reads as one layer gaining time and another losing it.
+            <% if @layer_window_growth&.comparable? %>
+              <span id="layer-window-growth">Declared layers across this window: <%= @layer_window_growth.label %></span>
+            <% end %>
+          <% end %>
+        </div>
+      <% else %>
+        <%= render UI::EmptyStateComponent.new(title: "No per-example rows", description: "There is no per-layer time to sum.") %>
+      <% end %>
+    <% end %>
+  </div>
+
+  <%= render "repositories/areas_grew_or_shrank" -%>
+  <%= render "repositories/areas_slower_or_faster" -%>
+  <%= render "repositories/areas_over_the_window" -%>
+</section>

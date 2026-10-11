@@ -60,7 +60,7 @@ RSpec.describe "Repository repeated descriptions — ?layer=", type: :request do
   it "renders a clear link that drops only the layer" do
     get repository_path(repository, layer: "request", commit_sha: "descpanel001", branch: "main")
 
-    expect(clear_link.text).to eq("Clear layer filter")
+    expect(clear_link.text.squish).to eq("Clear layer filter")
     expect(clear_link[:href]).not_to include("layer=")
     expect(clear_link[:href]).to include("commit_sha=descpanel001").and include("branch=main")
       .and end_with("#repeated-descriptions")
@@ -73,13 +73,13 @@ RSpec.describe "Repository repeated descriptions — ?layer=", type: :request do
     expect(page).to have_css("#repeated-descriptions-layer-empty")
     expect(page).not_to have_css("#repeated-descriptions-unnamed")
     expect(panel.all("tbody tr")).to be_empty
-    expect(clear_link.text).to eq("Clear layer filter")
+    expect(clear_link.text.squish).to eq("Clear layer filter")
   end
 
   # @intent: { entity: "GET /repositories/:id", action: "carry the layer through the description drill-in", behavior: "opening a group under a layer keeps the layer, lists only the layer's examples, states the same-fraction sentence and the layer note, and the group's count equals the clicked row's", layer: "request" }
   it "opens a group under the layer with the same count the row states" do
     get repository_path(repository, layer: "request")
-    link = panel.first("tbody tr a")
+    link = panel.first("tbody tr").find("a", exact_text: "Every example under it", visible: :all)
     expect(link[:href]).to include("layer=request")
     row_count = panel.first("tbody tr").all("td")[1].text.strip.to_i
 

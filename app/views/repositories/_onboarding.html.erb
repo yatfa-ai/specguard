@@ -1,0 +1,29 @@
+<%# THE EMPTY STATE of a freshly registered repository: not a wall of empty panels but the three
+    steps that make data arrive. The wire-up instructions are step 3; once runs exist they collapse
+    into Delivery (see `_section_delivery`). locals: has_api_keys, manage_keys %>
+<% step_done = [true, has_api_keys, false] %>
+<% current = step_done.index(false) %>
+<section class="rc-section" id="getting-started" aria-labelledby="gs-h">
+  <div class="rc-section-head">
+    <h2 class="text-app-h2" id="gs-h">Nothing has been reported yet</h2>
+    <p>No CI run has reported yet, so there is no figure to show — not a figure of zero. SpecGuard cannot say how much of this suite it can see until CI posts a run to /ingest.</p>
+  </div>
+  <%= render UI::PanelComponent.new(title: "Get the first run in", id: "onboarding") do %>
+    <ol class="rc-steps">
+      <li data-done="true">
+        <div><p class="font-semibold">Register the repository</p>
+          <p class="text-sm text-app-content-secondary">Done — registered <%= time_ago_in_words(@repository.created_at) %> ago.</p></div>
+      </li>
+      <li data-done="<%= has_api_keys %>" data-current="<%= current == 1 %>">
+        <div><p class="font-semibold">Mint an API key for CI</p>
+          <% if has_api_keys %><p class="text-sm text-app-content-secondary">A key exists. CI authenticates with it; it has not been used yet.</p>
+          <% elsif manage_keys %><p class="text-sm text-app-content-secondary">This repository has no API key yet, so there is nothing for CI to authenticate with. <a class="rc-link" href="#api-keys">Mint a key in Credentials</a> — the prompt for your coding agent is then shown with the key already in it, once.</p>
+          <% else %><p class="text-sm text-app-content-secondary">This repository has no API key yet, so there is nothing for CI to authenticate with. Ask <%= @repository.user.display_name %> to mint one.</p><% end %></div>
+      </li>
+      <li data-current="<%= current == 2 %>">
+        <div class="space-y-3 min-w-0"><p class="font-semibold">Wire this repository up: send a run from CI</p>
+          <%= render "repositories/wire_up_body", has_api_keys: has_api_keys, onboarding: true %></div>
+      </li>
+    </ol>
+  <% end %>
+</section>

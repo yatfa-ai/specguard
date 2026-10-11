@@ -1,4 +1,4 @@
-    <%# == Deliveries the endpoint REFUSED
+<%# == Deliveries the endpoint REFUSED
         Every other panel on this page is built out of runs that were ACCEPTED. This one is the
         per-delivery detail record behind the refusal verdict at the top of this page — and
         before it existed, that event left no platform-side record at all: `render_bad_request`
@@ -33,26 +33,10 @@
         read-only delivery telemetry. Nothing credential is on these rows — a refusal is recorded
         only for a request that already AUTHENTICATED, so the key is not what is at fault and the
         panel names no key. %>
-    <%= render UI::PanelComponent.new(title: "Rejected deliveries", id: "rejected-ingests",
-                                      class: "lg:col-span-3") do %>
+<%= render UI::PanelComponent.new(title: "Rejected ingests", id: "rejected-ingests") do %>
       <% if @rejected_ingests.any? %>
-        <%# What these rows ARE, stated before them rather than left to be inferred. Three claims
-            here are ones a reader would otherwise guess wrong, and each is guessed wrong in a way
-            that costs them something:
-
-            1. These are NOT failed logins. A wrong or revoked key gets a 401, which resolves no
-               repository and so cannot be attributed to one — `IngestRejection` argues that at
-               length. A reader who took this for "everything that failed" would read an empty
-               panel as proof their key is fine.
-            2. Nothing here is recoverable. The payload was refused and is not stored, so this is
-               a record that it happened and what the endpoint said — not a retry queue, and
-               nothing re-delivers from it.
-            3. The list is bounded, so an absent old refusal is not evidence it did not happen —
-               and so is each ROW, so a short reason list is not evidence the endpoint said little.
-               The two bounds are independent: one refusal of a large suite is a single row
-               carrying thousands of reasons. %>
-        <p class="text-xs text-app-muted mb-3" id="rejected-ingests-basis">
-          Deliveries that authenticated successfully and were then refused for their
+        <%= render UI::NoteComponent.new(summary: "What is (and is not) listed here", id: "rejected-ingests-basis") do %>
+          Ingests that authenticated successfully and were then rejected for their
           <strong>payload</strong> — <code>400 {"error":"bad_request"}</code>. A wrong or revoked
           key gets <code>401</code> instead, which identifies no repository and so cannot be listed
           here; an empty panel is not evidence that no request was rejected for its key.
@@ -64,57 +48,16 @@
             this is a recent window rather than the whole history.
           <% end %>
           <% if @rejected_ingests.truncated_rows? %>
-            A delivery refused for every spec in a suite produces one reason per example, so at
-            most <%= IngestRejection::RETAINED_REASONS_PER_ROW %> are kept per delivery and each
+            An ingest rejected for every spec in a suite produces one reason per example, so at
+            most <%= IngestRejection::RETAINED_REASONS_PER_ROW %> are kept per ingest and each
             row below says how many it is not showing.
           <% end %>
-        </p>
-
-        <%# == The retained window, stated as a whole
-            The basis line explains what these rows ARE; this line states how MANY there are and
-            WHO sent them, across everything SpecGuard still retains rather than across the ten
-            rows the table renders. `IngestRejection::REPOSITORY_RETENTION_ROWS` keeps fifty per
-            repository because fifty "show the RANGE of user_agent across them, which is what
-            turns 'we are being refused' into 'the old gem is being refused'" — and until this
-            line nothing performed that reading: the table renders one page in five of the
-            retained window, so a client appearing only in rows eleven-to-fifty was invisible,
-            and a repository refused eleven times read identically to one refused fifty times.
-
-            Two things this deliberately is not:
-
-            * Not pagination. `PANEL_LIMIT`'s comment refuses it — the panel is a disclosure, not
-              a browsable archive. This adds no page and lists no additional deliveries: it is a
-              verdict about the window the panel already discloses.
-            * Not derived from the rows below. A summary computed off them would describe the
-              PAGE — a repository refused eleven times would say ten, and the row-eleven client
-              would vanish. `RejectedIngests::RetainedWindow` reads the whole window in one
-              grouped query (the row set served by the recency index's leading `repository_id`;
-              the walk itself bounded by the retention rule, at most fifty rows whatever the
-              repository's size), and its total is the SUM of its own buckets, so the number and
-              the breakdown cannot disagree.
-
-            A `<p>` and not a list, on purpose: the size guards on this panel count the `<li>`
-            elements the table renders, and the summary has no reason to join that count.
-            "Not reported" is the rows' own wording for a missing `User-Agent` — the fold of nil
-            and blank happens in `RetainedWindow`, in Ruby, because SQL's GROUP BY keeps `NULL`
-            and `''` apart where `IngestRejection#reported_client` does not. %>
+        <% end %>
         <% window = @rejected_ingests.retained_window %>
-        <%# The bucket phrases are built here and joined with `safe_join`, rather than emitted one
-            at a time inside the loop: a `", " unless index.zero?` inside ERB puts a space before
-            its comma (the newline+indent the trimmer keeps on a line that also emits content),
-            and a `.` on its own line after the loop's closing tag picks up the same leading
-            space — both user-visible, and both invisible to an `include` against `.squish`,
-            which collapses whitespace runs without removing one that sits before punctuation.
-            `safe_join` is this codebase's established phrase-list join
-            (`_slowest_tests_over_window`, `_unstable_tests`,
-            `_descriptions_recorded_more_than_once`), and the request spec asserts this sentence
-            EXACTLY, separators included, so neither failure can return. The comment's own body
-            stays free of ERB closing markers for the reason this fix exists: one inside a
-            comment ends the comment there and leaks the rest as page text. %>
-        <p class="text-xs text-app-muted mb-3" id="rejected-ingests-window">
+        <p class="text-sm text-app-content-secondary" id="rejected-ingests-window">
           The retained window holds
           <strong class="text-app-content"><%= window.total %></strong>
-          refused <%= "delivery".pluralize(window.total) %>:
+          rejected <%= "ingest".pluralize(window.total) %>:
           <% parts = window.entries.map do |client, count|
                if client
                  safe_join(["#{count} from ", tag.span(client, class: "font-mono break-all")])
@@ -123,115 +66,43 @@
                end
              end %><%= safe_join(parts, ", ") %>.
         </p>
-
-        <%= render UI::TableComponent.new(columns: ["When", "Reported by", "Served by",
-                                                    "What the endpoint said"],
-                                          describedby: "rejected-ingests-basis") do %>
+        <%= render UI::TableComponent.new(
+              columns: ["When", "Reported by", "Served by", "What the endpoint said"],
+              describedby: "rejected-ingests-basis", sortable: true) do %>
           <% @rejected_ingests.rows.each do |rejection| %>
             <tr>
-              <td class="px-3 py-2 whitespace-nowrap align-top text-app-content">
-                <%# `title` carries the exact timestamp, because "3 days ago" is the right
-                    granularity for reading a list and the wrong one for matching a row against a
-                    CI build log. %>
-                <span title="<%= rejection.occurred_at.utc.iso8601 %>">
-                  <%= time_ago_in_words(rejection.occurred_at) %> ago
-                </span>
+              <td class="whitespace-nowrap" data-sort="<%= rejection.occurred_at.to_i %>">
+                <span title="<%= rejection.occurred_at.utc.iso8601 %>"><%= time_ago_in_words(rejection.occurred_at) %> ago</span>
               </td>
-              <td class="px-3 py-2 align-top text-app-content-secondary">
-                <%# The client's `User-Agent`. This column is the whole reason the header is on the
-                    row: the gem sends `specguard-ruby/<version>` (gem versions <= 0.3.0, before the
-                    rename from `specguard-rspec`, sent `specguard-rspec/<version>`, so a window
-                    spanning the rename legitimately shows BOTH), and the concrete
-                    failure this panel was built for is a VERSION FLOOR — a gem sending
-                    `Content-Encoding: gzip` against an installation deployed before
-                    `GzipRequestBody` is refused on every run over 256 KiB, i.e. every large suite.
-                    A column of identical old versions beside a column of identical reasons is what
-                    turns "we are being refused" into "the old gem is being refused". %>
-                <% if rejection.reported_client %>
-                  <span class="font-mono text-xs break-all"><%= rejection.reported_client %></span>
-                <% else %>
-                  <span class="text-app-muted">Not reported</span>
-                <% end %>
+              <td class="mute">
+                <% if rejection.reported_client %><span class="font-mono text-xs [overflow-wrap:anywhere]"><%= rejection.reported_client %></span>
+                <% else %><span class="text-app-content-secondary">Not reported</span><% end %>
               </td>
-              <td class="px-3 py-2 align-top text-app-content-secondary">
-                <%# WHICH BUILD refused this delivery — the other half of the version-floor
-                    question. `specguard-ruby/<version>` beside this column makes "the old gem"
-                    and "the old installation" distinguishable pictures: the founding scenario
-                    (`CreateIngestRejections`) is a gem gzipping against an installation deployed
-                    before `GzipRequestBody`, and without the server build on the row a window
-                    spanning that deploy cannot tell the two sides apart. The value is the
-                    recorder's capture of `VersionsController.server_version` at the moment of
-                    refusal — a historical record, because a retained window spans deploys and the
-                    build that answered days ago may be gone when the owner reads the row.
-
-                    Rendered verbatim, stored string and no other — the standing rule these rows
-                    are held to for the endpoint's own sentences and the client's own header.
-
-                    "Not recorded" is deliberately a DIFFERENT word from the rows' "Not reported":
-                    "Not reported" means the client sent no header (the row knows, and the client
-                    said nothing); a nil `server_version` means the ROW carries no build identity
-                    recorded, so the platform genuinely does not know which build answered. The
-                    write path can land on that nil in more than one way — for example a row
-                    retained from before the stamp existed, a build whose VERSION file is missing
-                    or unreadable, a column stored blank — so the nil does not distinguish them.
-                    One blank meaning two different things would read the absence as the same
-                    fact, which it is not. %>
-                <% if rejection.served_by %>
-                  <span class="font-mono text-xs break-all"><%= rejection.served_by %></span>
-                <% else %>
-                  <span class="text-app-muted">Not recorded</span>
-                <% end %>
+              <td class="mute">
+                <% if rejection.served_by %><span class="font-mono text-xs [overflow-wrap:anywhere]"><%= rejection.served_by %></span>
+                <% else %><span class="text-app-content-secondary">Not recorded</span><% end %>
               </td>
-              <td class="px-3 py-2 align-top text-app-content">
-                <%# The endpoint's own words, verbatim. `Ingest::Payload` assembled this list and
-                    the client was handed exactly it in the `details` of the 400; nothing
-                    platform-side re-words it into a verdict here, on the standing rule the ingest
-                    path already applies to `outcome`. One reason per line because the client is
-                    handed a LIST, and collapsing it into a sentence would invent a delimiter that
-                    any error message is free to contain. %>
+              <td>
                 <% if rejection.reasons.any? %>
                   <ul class="space-y-1">
-                    <% rejection.reasons.each do |reason| %>
-                      <li class="font-mono text-xs break-words"><%= reason %></li>
-                    <% end %>
+                    <% rejection.reasons.each do |reason| %><li class="font-mono text-xs [overflow-wrap:anywhere]"><%= reason %></li><% end %>
                   </ul>
-                  <%# What the row could not keep, said with the row rather than in a footnote.
-                      `Ingest::Payload` emits one error per invalid spec, so the refusal this panel
-                      exists for — a version floor, which refuses EVERY spec in the suite — produces
-                      one reason per example. `IngestRejection::RETAINED_REASONS_PER_ROW` is what
-                      stops that row and this cell being megabytes; this line is what stops the cap
-                      being a quiet one.
-
-                      And the number is not an apology, it is the diagnosis. "…and 19,990 more"
-                      says the whole suite was refused, which is the difference between one
-                      malformed spec and a gem the installation will not accept — a distinction the
-                      full list would have buried rather than shown. %>
                   <% if rejection.reasons_truncated? %>
-                    <p class="text-xs text-app-muted mt-1">
-                      … and <%= number_with_delimiter(rejection.omitted_reasons_count) %> more
+                    <p class="rc-sec">… and <%= number_with_delimiter(rejection.omitted_reasons_count) %> more
                       <%= "reason".pluralize(rejection.omitted_reasons_count) %> not kept
-                      (<%= number_with_delimiter(rejection.total_reasons_count) %> in total) —
-                      the client was sent all of them at the time.
-                    </p>
+                      (<%= number_with_delimiter(rejection.total_reasons_count) %> in total) — the client was told all of them at the time.</p>
                   <% end %>
                 <% else %>
-                  <%# A refusal with no reason recorded. Not synthesised into one: the row says the
-                      delivery was refused, and inventing a cause it never carried would be the
-                      same class of defect as the stat this panel exists to correct. %>
-                  <span class="text-app-muted">No reason was recorded.</span>
+                  <span class="text-app-content-secondary">No reason was recorded.</span>
                 <% end %>
               </td>
             </tr>
           <% end %>
         <% end %>
       <% else %>
-        <%# The good news, said out loud. Deliberately scoped to what this table can actually see:
-            "no delivery has been REFUSED FOR ITS PAYLOAD", never "everything is fine". A 401 is
-            invisible here by construction, and an empty panel that claimed otherwise would replace
-            the false `Connected` this ticket removed with a quieter false claim of its own. %>
         <%= render UI::EmptyStateComponent.new(
-              title: "No rejected deliveries",
-              description: "No request has authenticated and then been refused for its payload. " \
+              title: "No rejected ingests",
+              description: "No request has authenticated and then been rejected for its payload. " \
                            "Requests rejected for a bad or revoked key are not recorded here — " \
                            "they identify no repository."
             ) %>

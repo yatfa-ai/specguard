@@ -1,0 +1,18 @@
+<%# DELIVERY — is CI reaching SpecGuard, and what did it send that was refused. Member-readable: the
+    connection state and the wiring instructions are not credential metadata, and a `view` member
+    legitimately needs to know whether CI is reaching this repository. Wiring COLLAPSES once runs
+    exist (the instructions are for the first run, not the hundredth). locals: has_api_keys,
+    manage_keys, has_runs %>
+<section class="rc-section" id="delivery" aria-labelledby="delivery-h">
+  <div class="rc-section-head">
+    <h2 class="text-app-h2" id="delivery-h">Delivery</h2>
+    <p>Whether CI is reaching this repository, and what it sent that was rejected.</p>
+  </div>
+  <%= render "repositories/rejected_ingests" -%>
+  <% if has_runs %>
+    <details class="dc-note" id="wire-up">
+      <summary>Wire this repository up</summary>
+      <div class="space-y-3 p-3 pt-1"><%= render "repositories/wire_up_body", has_api_keys: has_api_keys %></div>
+    </details>
+  <% end %>
+</section>

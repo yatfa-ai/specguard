@@ -3550,18 +3550,18 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["branches"].map { |row| row["name"] }).not_to include("release/does-not-exist")
     end
 
-    # AC4. `RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES` is about what a row of links can carry
-    # before it stops being a way to find a branch. A JSON array has no such limit, and a display
-    # bound leaking into a machine response would drop branches for a reason that does not apply.
-    # @intent: { entity: "Repository branches catalogue", action: "serve every walked branch", behavior: "the catalogue serves every branch the walk reached, not only the eight a row of links can hold", layer: "request" }
-    it "serves every branch the walk reached, not the eight a row of links can hold" do
+    # AC4. The web page's filter bar offers EVERY branch it loaded (it once cut a row of links to
+    # eight, behind a complete menu). A JSON array has no display limit either, and a display bound
+    # leaking into a machine response would drop branches for a reason that does not apply — so the
+    # catalogue is pinned against the count of branches the fixture holds, not against any cut.
+    # @intent: { entity: "Repository branches catalogue", action: "serve every walked branch", behavior: "the catalogue serves every branch the walk reached, not a display-sized cut of them", layer: "request" }
+    it "serves every branch the walk reached, not a display-sized cut of them" do
       trunk_hidden_repository
 
       names = get_repository["branches"].map { |row| row["name"] }
 
-      expect(RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES).to eq(8)
       expect(names.length).to eq(11)
-      expect(names.length).to be > RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES
+      expect(names.uniq.length).to eq(11)
     end
 
     # AC5. `branch` is nullable and ingest accepts a body without it, so `null` means "the client

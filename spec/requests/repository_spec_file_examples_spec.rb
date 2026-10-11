@@ -39,7 +39,7 @@ RSpec.describe "Repository spec file examples", type: :request do
   def rows
     panel.all("tbody tr").map do |row|
       cells = row.all("td")
-      test, layer, duration, outcome = cells.map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      test, layer, duration, outcome = cells.first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
       { test: test, name: row_name(cells.first), layer: layer, duration: duration, outcome: outcome }
     end
@@ -47,11 +47,21 @@ RSpec.describe "Repository spec file examples", type: :request do
 
   def row_names = rows.map { |row| row[:name] }
 
+  # The rollup row for one file: its handle (the button that opens the drawer) and the drawer's
+  # "Examples in this file" action, which is the link into this drill-in.
+  def file_row(path) = files_panel.all("tbody tr", visible: :all).find { |tr| tr.first("td").text(:all).squish == path }
+
+  def file_handle(path) = file_row(path).first(".row-open")
+
+  def file_action(path) = file_row(path).find("a", exact_text: "Examples in this file", visible: :all)
+
   # The definition-site link — the row's only anchor, on BOTH label branches: a named row wears it
   # on the location line under the name and a nameless one wears the coordinate AS the name, so a
   # cell-wide read finds the same element either way and an example does not have to know which
   # branch built the row.
-  def definition_links = panel.all("tbody tr").map { |row| row.all("td").first.find("a") }
+  # A row's definition site is its drawer's "Open on GitHub" action (the console's one overlay holds
+  # a row's destinations); the cell keeps the coordinate as a plain line.
+  def definition_links = panel.all("tbody tr").map { |row| row.find("a", exact_text: "Open on GitHub", visible: :all) }
 
   def definition_hrefs = definition_links.map { |link| link[:href] }
 
@@ -114,10 +124,11 @@ RSpec.describe "Repository spec file examples", type: :request do
     it "links each listed file to its own examples" do
       get repository_path(two_file_run)
 
-      href = files_panel.find("a", text: ORDER_SPEC)[:href]
+      href = file_action(ORDER_SPEC)[:href]
 
       expect(href).to include("spec_file=#{CGI.escape(ORDER_SPEC)}")
-      expect(href).to include("#spec-file-examples")
+      # The console opens the examples in its drawer, anchored back at the section that holds them.
+      expect(href).to end_with("#slow")
     end
 
     # A list of choices with one of them taken. The drill-down sits a long way down the page, so a
@@ -126,8 +137,8 @@ RSpec.describe "Repository spec file examples", type: :request do
     it "marks the open file in the panel it was opened from" do
       get repository_path(two_file_run, spec_file: ORDER_SPEC)
 
-      expect(files_panel.find("a", text: ORDER_SPEC)["aria-current"]).to eq("true")
-      expect(files_panel.find("a", text: REFUND_SPEC)["aria-current"]).to be_nil
+      expect(file_handle(ORDER_SPEC)["aria-current"]).to eq("true")
+      expect(file_handle(REFUND_SPEC)["aria-current"]).to be_nil
     end
 
     # `?branch=` anchors the "Suite growth" panel and nothing else. Opening a file must not
@@ -136,7 +147,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     it "carries a branch ask through the link rather than dropping it" do
       get repository_path(two_file_run, branch: "main")
 
-      expect(files_panel.find("a", text: ORDER_SPEC)[:href]).to include("branch=main")
+      expect(file_action(ORDER_SPEC)[:href]).to include("branch=main")
     end
 
     # @intent: {"entity": "SpecObservation", "action": "omit panel without ask", "behavior": "a plain repository show returns ok and renders no #spec-file-examples panel at all", "layer": "request"}
@@ -446,8 +457,11 @@ RSpec.describe "Repository spec file examples", type: :request do
                                       blob("feedfacecafe0001", ORDER_SPEC, 1),
                                       blob("feedfacecafe0001", ORDER_SPEC, 3)])
       # The link text is the coordinate the panel already printed, not a second control on the row.
-      expect(definition_links.map { |link| link.text.strip })
+      # The coordinate stays on the row as the printed line under the test's name; the link to it is
+      # the drawer's "Open on GitHub" action, so the line and the link are asserted separately.
+      expect(panel.all("tbody tr").map { |row| row.first("td").first(".rc-sec").text.strip })
         .to eq(["#{ORDER_SPEC}:2", "#{ORDER_SPEC}:1", "#{ORDER_SPEC}:3"])
+      expect(definition_links.map { |link| link.text(:all).squish }).to all(eq("Open on GitHub"))
     end
 
     # BOTH LABEL BRANCHES. `#label` is `name.presence || location_label`, so a row from a producer
@@ -466,7 +480,9 @@ RSpec.describe "Repository spec file examples", type: :request do
       expect(definition_hrefs).to eq([blob("feedfacecafe0001", ORDER_SPEC, 42)])
       # And NOT TWICE: the fallback already IS the coordinate, so there is no location line under it
       # to link as well, and the cell holds exactly one anchor.
-      expect(panel.first("tbody tr").all("td").first.all("span")).to be_empty
+      # A nameless row wears its coordinate as its name, and the coordinate is also the one printed
+      # line under it; there is exactly one definition link, in the drawer.
+      expect(panel.first("tbody tr").all("td").first.all("span").map { |span| span.text.strip }).to eq(["#{ORDER_SPEC}:42"])
       expect(definition_links.size).to eq(1)
     end
 

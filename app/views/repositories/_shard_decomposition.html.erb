@@ -1,0 +1,150 @@
+<%# SHARD DECOMPOSITION of the run being read: what the wall clock waited for. Every sentence and
+    every guard is the old Summary's own; only the per-shard list became a table.
+
+    About SHARDS, never about tests: every noun below is a shard, a split, or the suite as a whole,
+    and no wording here may imply otherwise. The rule is unchanged; its old justification is not. This
+    prose used to say that nothing in the schema recorded how long any single test took and that
+    "which tests are slow" was therefore unanswerable — true when it was written, and false since
+    `spec_observations` began retaining one timed row per example per run. The "Slowest tests" panel
+    answers exactly that question off those rows. %>
+<% shard_count = @latest_test_run.shard_count %>
+<% presented_as_sharded = @latest_test_run.multi_shard? %>
+    <% if presented_as_sharded %>
+      <% untimed_shards = @latest_test_run.untimed_shard_count %>
+      <% timed_shards = @latest_test_run.timed_shard_count %>
+      <p class="text-xs text-app-content-secondary" id="shard-assembly">
+        Assembled from <%= shard_count %> shard reports — what SpecGuard recorded, which is
+        not necessarily <%= shard_count %> distinct CI jobs if a shard did not name itself.
+        <% if untimed_shards.zero? %>
+          The wall clock is the slowest single shard, which is what a reader waited through.
+          The machine time is those <%= shard_count %> added together, which is what the
+          suite cost.
+        <% elsif timed_shards.zero? %>
+          Not one of them reported a timing, so there is neither a wall clock nor a machine
+          time to show — this run's cost is unknown, not zero.
+        <% else %>
+          Only <%= timed_shards %> of them reported a timing, so both figures above cover
+          just that much: the wall clock is the slowest that reported rather than the slowest
+          overall, and the machine time is a floor rather than a total — the real cost is
+          higher by however long the <%= untimed_shards %>
+          silent <%= "shard".pluralize(untimed_shards) %> took.
+          Which shard was slowest, and how much of the wait went to uneven splitting, cannot
+          be answered without every shard's timing: spreading a partial machine time across
+          all <%= shard_count %> would put the floor below where it belongs and overstate the
+          gap by exactly the same margin. Both are withheld rather than estimated.
+        <% end %>
+      </p>
+      <% if @latest_test_run.wall_clock_decomposable? %>
+        <% imbalanced = @latest_test_run.wall_clock_excess_material? %>
+        <p id="wall-clock-decomposition" class="text-xs text-app-content-secondary">
+          <% if imbalanced %>
+            The slowest was <%= @latest_test_run.longest_shard_label %>, at
+            <%= @latest_test_run.duration_label %>.
+          <% else %>
+            No shard stood out: the longest was <%= @latest_test_run.longest_shard_label %>,
+            at <%= @latest_test_run.duration_label %>.
+          <% end %>
+          Those <%= shard_count %> shards hold
+          <%= @latest_test_run.machine_seconds_label %> of machine time between them, so
+          <%= @latest_test_run.balanced_wall_clock_label %> is the shortest wall clock any
+          arrangement of them could have produced — a floor nothing can go under, not a split
+          known to exist, since tests cannot be divided arbitrarily finely.
+          <% if imbalanced %>
+            This run waited <%= @latest_test_run.duration_label %>:
+            <%= @latest_test_run.wall_clock_excess_label %> of that,
+            <%= @latest_test_run.wall_clock_excess_percent %>% of the wait, came from how the
+            suite was divided across shards rather than from the suite itself.
+          <% else %>
+            This run waited <%= @latest_test_run.duration_label %> —
+            <%= @latest_test_run.wall_clock_excess_label %> over that floor,
+            <%= @latest_test_run.wall_clock_excess_percent %>% of the wait. The shards on
+            record are evenly matched, so nothing in what they reported reads as a cost of
+            how the suite was split. That is a statement about those reports rather than
+            about the run: a slice that never arrived leaves no trace in them, and a missing
+            slice is likelier to be a slow one than a fast one.
+          <% end %>
+        </p>
+        <% if imbalanced %>
+          <p id="shard-imbalance-cause" class="text-xs text-app-content-secondary">
+            <% if @latest_test_run.unsized_shard_count.positive? %>
+              Whether that came from uneven test counts or from individually expensive tests
+              is not answerable on these rows:
+              <%= @latest_test_run.unsized_shard_count %> of these
+              <%= shard_count %> shards reported no tests at all, so there is a wall clock
+              there with no denominator to divide it by. The per-test comparison is withheld
+              rather than taken over the shards that did report and described as the run's.
+            <% elsif @latest_test_run.spec_count_spread_material? && @latest_test_run.seconds_per_spec_spread_material? %>
+              Both halves moved: these shards' test counts spread
+              <%= @latest_test_run.spec_count_spread_label %> and their per-test costs spread
+              <%= @latest_test_run.seconds_per_spec_spread_label %>, from
+              <%= @latest_test_run.cheapest_seconds_per_spec_label %> to
+              <%= @latest_test_run.dearest_seconds_per_spec_label %>. Evening the counts out
+              addresses the first and leaves the second, so it takes a split that weighs each
+              test's recorded duration — or cheaper tests in the dearest partition — to close
+              the whole gap.
+            <% elsif @latest_test_run.spec_count_spread_material? %>
+              That came from how many tests each shard got: their counts spread
+              <%= @latest_test_run.spec_count_spread_label %>, while every shard's tests cost
+              much the same each — within
+              <%= @latest_test_run.seconds_per_spec_spread_label %>, from
+              <%= @latest_test_run.cheapest_seconds_per_spec_label %> to
+              <%= @latest_test_run.dearest_seconds_per_spec_label %>. Re-dividing the suite
+              across the same shards is what moves this number.
+            <% elsif @latest_test_run.seconds_per_spec_spread_material? %>
+              That did not come from how many tests each shard got — their counts are within
+              <%= @latest_test_run.spec_count_spread_label %> of each other. Their per-test
+              costs spread <%= @latest_test_run.seconds_per_spec_spread_label %>, from
+              <%= @latest_test_run.cheapest_seconds_per_spec_label %> to
+              <%= @latest_test_run.dearest_seconds_per_spec_label %>: the expensive work is in
+              what that partition holds, not in how much of it there is, so a split that
+              divides the suite evenly by test count reproduces this gap however often it
+              re-runs. Closing it takes a split that weighs each test's recorded duration, or
+              cheaper tests in that partition.
+            <% else %>
+              Neither half accounts for it on its own: these shards' test counts are within
+              <%= @latest_test_run.spec_count_spread_label %> of each other and their per-test
+              costs within <%= @latest_test_run.seconds_per_spec_spread_label %>. Two spreads
+              this size compound into the gap above without either being a finding, so no
+              cause is named for it here.
+            <% end %>
+            A shard is an arbitrary slice of the suite rather than a directory, so this says
+            which partition of the run was expensive and not which code.
+          </p>
+        <% end %>
+        <%# One read of the shards for the whole table: `shard_distribution_labels` ranks the same
+            `shard_durations` tuples this needs (shard_id, duration, size), so the bar width and the
+            sort key come off that list rather than off a `MAX` and a second ordered `SELECT *` —
+            the page's shard queries stay constant in the number of shards. %>
+        <% shard_rows = @latest_test_run.shard_durations %>
+        <% max_seconds = shard_rows.filter_map { |_, seconds, _| seconds }.max.to_f %>
+        <div id="shard-distribution-wrap">
+        <%= render UI::TableComponent.new(
+              columns: ["Shard", { label: "Duration", end: true }, "Against the slowest", { label: "Tests", end: true }, { label: "Cost per test", end: true }],
+              describedby: "wall-clock-decomposition", sortable: true, table_id: "shard-distribution") do %>
+          <% @latest_test_run.shard_distribution_labels.each_with_index do |(name, duration, size, per_spec), index| %>
+            <% _shard_id, seconds, spec_count = shard_rows[index] %>
+            <tr>
+              <td class="font-semibold"><%= name %></td>
+              <td class="num" data-sort="<%= seconds %>"><%= duration %></td>
+              <td data-sort="<%= seconds %>">
+                <span class="rc-meter" style="width: 9rem; margin: 0"><i style="width: <%= max_seconds.positive? && seconds ? (seconds / max_seconds * 100).round : 0 %>%"></i></span>
+              </td>
+              <td class="num mute" data-sort="<%= spec_count %>"><%= size %></td>
+              <td class="num mute"><%= per_spec || "—" %></td>
+            </tr>
+          <% end %>
+        <% end %>
+        </div>
+      <% elsif @latest_test_run.wall_clock_decomposition_pending? %>
+        <p id="wall-clock-decomposition-pending" class="text-xs text-app-content-secondary">
+          A shard report arrived in the last
+          <%= distance_of_time_in_words(TestRun::SHARD_DELIVERY_SETTLING_PERIOD) %>, so more
+          may still be on their way — a run's parts arrive one POST at a time and nothing in
+          a report says how many to expect. Naming a slowest shard now would name the slowest
+          of however many have got here so far, and spreading their machine time across their
+          own count would put the floor wherever the run happens to have reached. The
+          decomposition waits until the reports stop coming rather than describing a run
+          mid-delivery.
+        </p>
+      <% end %>
+    <% end %>

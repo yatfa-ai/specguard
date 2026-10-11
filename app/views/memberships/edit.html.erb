@@ -49,7 +49,7 @@
           `membership_params` refuses `user_id` so the server agrees with what the page shows. %>
       <div class="mb-4 flex flex-wrap items-center gap-2">
         <% if @membership.user.avatar_url.present? %>
-          <%= image_tag @membership.user.avatar_url, alt: "", class: "size-6 rounded-full", loading: "lazy" %>
+          <%= image_tag @membership.user.avatar_url, alt: "", class: "size-6 rounded-[var(--app-radius-pill)]", loading: "lazy" %>
         <% end %>
         <span class="text-app-content"><%= @membership.user.github_handle %></span>
         <span class="text-xs text-app-muted">

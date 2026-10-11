@@ -225,7 +225,7 @@ RSpec.describe "GET /api/v1/repository — layer_run_growth", type: :request do
   end
 
   describe "the Overview panel line" do
-    def declared_layers_line = Capybara.string(response.body).find("#overview #layer-run-growth")
+    def declared_layers_line = Capybara.string(response.body).find("#changes #layer-run-growth")
 
     # @intent: { entity: "TestRun", action: "show the mix movement", behavior: "the Overview prints Since the previous sha7 on main with request +40 and undeclared −2 and the unmoved unit as ±0, from the same object the API serves", layer: "request" }
     it "prints the movement under the Declared layers row when comparable" do
@@ -244,7 +244,8 @@ RSpec.describe "GET /api/v1/repository — layer_run_growth", type: :request do
       get repository_path(repository)
 
       html = Capybara.string(response.body)
-      expect(html).to have_text("Declared layers unit 2", normalize_ws: true)
+      expect(html.find("#layers").all("tbody tr").map { |row| row.all("td").first(2).map { |cell| cell.text.squish } })
+        .to eq([%w[unit 2]])
       expect(html).to have_no_css("#layer-run-growth")
     end
   end

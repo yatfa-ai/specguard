@@ -16,9 +16,11 @@ RSpec.describe "Repository recent runs", type: :request do
   # is exactly the ambiguity this slice had to fix in the API-keys file.
   def runs_table = Capybara.string(response.body).find("#recent-runs table")
 
-  def run_headers = runs_table.all("thead th").map(&:text)
+  def run_headers = runs_table.all("thead th").map { |th| th.text.squish }
 
   def run_row(commit) = runs_table.find("tbody tr", text: commit)
+
+  # The console's sortable column headers wrap their label in a button; a header's NAME is its text.
 
   # Cell-level, not row-level, and that is load-bearing. Several cells share the "not reported"
   # wording, so a row-level `have_text("not reported")` for the duration is satisfied by a nil
@@ -33,7 +35,7 @@ RSpec.describe "Repository recent runs", type: :request do
   # holds a single token, so collapsing changes nothing about what they assert.
   def run_cells(commit) = run_row(commit).all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
-  def runs_panel = Capybara.string(response.body).find("#recent-runs")
+  def runs_panel = Capybara.string(response.body).find("#recent-runs", visible: :all)
 
   # `count_queries` comes from spec/support/query_capture.rb. Two blocks below hold a query-budget
   # example — the composition sub-line's and the duration coverage's — and they pin the same panel's
@@ -54,7 +56,7 @@ RSpec.describe "Repository recent runs", type: :request do
     expect(run_headers).to eq(["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested", ""])
 
     cells = run_cells("a1b2c3d")
-    expect(cells[COMMIT]).to eq("a1b2c3d")
+    expect(cells[COMMIT]).to eq("a1b2c3d the run being read")
     expect(cells[BRANCH]).to eq("main")
     # The composition rides INSIDE the `Tests` cell rather than in a seventh column, which is why
     # the header assertion above is untouched and the indices below still mean what they meant.
@@ -146,8 +148,13 @@ RSpec.describe "Repository recent runs", type: :request do
     get repository_path(repository)
 
     expect(response).to have_http_status(:ok)
-    expect(runs_panel).to have_text("No runs yet")
-    expect(runs_panel).to have_no_selector("table")
+    # A repository CI has never reached gets the onboarding checklist in place of the empty Runs
+    # section: the run list and every run-grain section are simply not there, so there is no empty
+    # table to render and no "0" to read as a measurement.
+    onboarding = Capybara.string(response.body).find("#getting-started")
+    expect(onboarding).to have_text("Nothing has been reported yet")
+    expect(onboarding).to have_no_selector("table")
+    expect(Capybara.string(response.body)).to have_no_css("#recent-runs")
   end
 
   # @intent: {"entity": "TestRun", "action": "cap listed runs", "behavior": "twelve ingested runs render exactly ten tbody rows", "layer": "request"}
@@ -396,7 +403,7 @@ RSpec.describe "Repository recent runs", type: :request do
       # And the qualifier is a sub-line in the existing cell, not a seventh column: the header set
       # asserted at the top of this file is what a new column would break.
       expect(run_row("silentx").all("td")[DURATION])
-        .to have_css("span.text-xs.text-app-muted", text: "slowest of the 3 that reported")
+        .to have_css("span.rc-sec", text: "slowest of the 3 that reported")
     end
 
     # The top row of this table IS the run the Overview panel names — `Repository#recent_test_runs`
@@ -414,8 +421,8 @@ RSpec.describe "Repository recent runs", type: :request do
       coverage = "slowest of the 3 that reported"
       expect(runs_table.all("tbody tr").first).to have_text("toprow0")
       expect(run_cells("toprow0")[DURATION]).to eq("1m 14s #{coverage}")
-      expect(Capybara.string(response.body).find("#overview"))
-        .to have_text("Wall clock (#{coverage}) 1m 14s", normalize_ws: true)
+      # The verdict card words the same run's wall clock as a figure with its coverage beside it.
+      expect(console_overview.find(".rc-verdict-stats")).to have_text("Wall clock 1m 14s slowest shard · #{coverage}", normalize_ws: true)
     end
 
     # Gated on `multi_shard?`, and NOT on the `shard_count.positive?` the Tests cell one column over
@@ -553,8 +560,8 @@ RSpec.describe "Repository recent runs", type: :request do
 
       get repository_path(repository)
 
-      expect(runs_panel).to have_text("No runs yet")
-      expect(runs_panel).to have_no_selector("#recent-runs-basis")
+      expect(Capybara.string(response.body).find("#getting-started")).to have_text("Nothing has been reported yet")
+      expect(Capybara.string(response.body)).to have_no_css("#recent-runs-basis")
     end
   end
 end

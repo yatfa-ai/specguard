@@ -6,7 +6,7 @@ class UI::AlertComponent < ApplicationComponent
     warning: "bg-app-warning-surface border-app-warning text-app-warning",
     error: "bg-app-error-surface border-app-error text-app-error",
     info: "bg-app-info-surface border-app-info text-app-info",
-    neutral: "bg-app-neutral-surface border-app-border-light text-app-content-secondary"
+    neutral: "bg-app-neutral-surface border-app-border text-app-content-secondary"
   }.freeze
 
   def initialize(tone: :info, title: nil, **options)
@@ -23,7 +23,7 @@ class UI::AlertComponent < ApplicationComponent
   # caller's `:class` has to leave `@options`; memoising is what makes a second call return the
   # same string instead of silently dropping it.
   def wrapper_class
-    @wrapper_class ||= merge_classes("rounded-md border px-4 py-3 text-sm",
+    @wrapper_class ||= merge_classes("rounded-card border px-4 py-3 text-sm",
                                      TONES.fetch(@tone, TONES[:info]), @options.delete(:class))
   end
 
