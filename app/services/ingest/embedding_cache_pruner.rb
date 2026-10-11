@@ -58,8 +58,8 @@ module Ingest
   #
   # == Why the resolve pass and not the ingest write path
   #
-  # {Ingest::IdentityResolver} is the ONLY writer of this table — `#cached_embeddings` reads it,
-  # `#store_embeddings` writes it, and no other production code touches it — so enforcement sits on
+  # {Ingest::PageEmbedder} (via {Ingest::IdentityResolver}) is the ONLY writer of this table — `Ingest::PageEmbedder#cached_embeddings` reads it,
+  # `Ingest::PageEmbedder#store_embeddings` writes it, and no other production code touches it — so enforcement sits on
   # the path that causes the growth. That is the same rule that puts {Ingest::ObservationPruner} at
   # {Ingest::RunRecorder}, applied to a different table rather than copied to the same call site:
   # `RunRecorder` writes `spec_observations` and writes nothing here, and an ingest under a provider
@@ -77,7 +77,7 @@ module Ingest
   # ⚠️ **The prune is NOT gated on a fingerprint, and that is deliberate.** An expired row is
   # expired whoever wrote it, so a deployment that has switched embedding off entirely — or whose
   # provider has stopped publishing a fingerprint, which turns caching off wholesale — still walks
-  # its existing table down to nothing on subsequent ingests. Gating this on `cache_fingerprint`
+  # its existing table down to nothing on subsequent ingests. Gating this on `Ingest::PageEmbedder#cache_fingerprint`
   # would strand the rows of exactly the deployment that has stopped being able to use them.
   #
   # No `config/recurring.yml` entry, and the trigger is the next ingest for the reason
@@ -92,7 +92,7 @@ module Ingest
   # the product's data; this table is a CACHE, and {EmbeddingCacheEntry}'s header makes losing it a
   # requirement rather than a tolerance — *"a read that fails, a write that fails, an empty table and
   # a table that was dropped are all the same thing to a caller"*. Both existing call sites honour
-  # that already: `#cached_embeddings` and `#store_embeddings` each rescue `StandardError`, log at
+  # that already: `Ingest::PageEmbedder#cached_embeddings` and `Ingest::PageEmbedder#store_embeddings` each rescue `StandardError`, log at
   # `warn`, and carry on.
   #
   # A prune that could fail a resolve would make a losable cache load-bearing for the write path —

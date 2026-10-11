@@ -110,7 +110,7 @@ class EmbeddingGenerator
     # provider that failed the request has not told us WHICH input it failed on — one bad text and
     # a dropped connection arrive identically. Callers that need per-row containment fall back to
     # `.call` per text on this error and let each text fail on its own (see
-    # `Ingest::IdentityResolver#embed_page`, which is what keeps SPGD-367's "one unembeddable
+    # `Ingest::PageEmbedder#embed_page`, which is what keeps SPGD-367's "one unembeddable
     # example does not abandon the other 19,999" true through a batch).
     def embed_many(texts)
       texts = Array(texts)
