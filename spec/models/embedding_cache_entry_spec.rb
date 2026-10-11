@@ -38,7 +38,7 @@ RSpec.describe EmbeddingCacheEntry do
 
     # @intent: { entity: "EmbeddingCacheEntry", action: "cache a vector", behavior: "a nil vector is skipped so a refused embed is retried later instead of being remembered as failed", layer: "unit" }
     it "does not store a nil, so a refused text is asked again rather than remembered as failed" do
-      # `Ingest::IdentityResolver#embed_page`'s fallback answers one text at a time and each can
+      # `Ingest::PageEmbedder#embed_page`'s fallback answers one text at a time and each can
       # fail on its own, so the hash it returns can carry nils. A nil is the absence of an answer.
       # Caching it would turn one transient provider failure into a permanent one for every
       # repository that ever ships that string.

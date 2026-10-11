@@ -18,7 +18,7 @@
 # is exactly what a miss does, so a read that fails, a write that fails, an empty table and a table
 # that was dropped are all the same thing to a caller: today's behaviour, at today's price. That is
 # why `Ingest::IdentityResolver` rescues around these two calls and why neither of them raises past
-# a caller that forgot to — see `#cached_embeddings` there for the containment argument.
+# a caller that forgot to — see `Ingest::PageEmbedder#cached_embeddings` there for the containment argument.
 #
 # == The text is never stored
 #
@@ -86,7 +86,7 @@ class EmbeddingCacheEntry < ApplicationRecord
   #
   # **One query for the whole page**, as an `IN` list on the unique key — the same page-shaped seam
   # `#digest_index` already occupies, and for the same reason: the cost is per page and the
-  # decision stays per row. A lookup driven from `#embedding_for` would be a round trip per row,
+  # decision stays per row. A lookup driven from `Ingest::PageEmbedder#embedding_for` would be a round trip per row,
   # which on a 20,000-example changed suite is the shape this whole lineage exists to remove.
   #
   # The digests are computed here rather than accepted as an argument so that the mapping used to
@@ -132,7 +132,7 @@ class EmbeddingCacheEntry < ApplicationRecord
   #
   # @param fingerprint [String] what embedded them.
   # @param vectors_by_text [Hash{String => Array<Float>, nil}] the page's fresh answers, exactly as
-  #   `Ingest::IdentityResolver#embed_page` returns them.
+  #   `Ingest::PageEmbedder#embed_page` returns them.
   # @return [void]
   #
   # **Nils are dropped rather than stored.** `#embed_page`'s fallback path answers one text at a

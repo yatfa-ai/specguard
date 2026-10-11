@@ -261,7 +261,7 @@ class NearProbe
 
   def similarity_of(hit) = (1 - hit.neighbor_distance).round(2)
 
-  # The probe's own embed, mirroring `Ingest::IdentityResolver#embed_page`'s per-row fallback
+  # The probe's own embed, mirroring `Ingest::PageEmbedder#embed_page`'s per-row fallback
   # register: the failure is caught HERE (not allowed to 500 an authenticated GET) and disclosed
   # by the answer shape. A nil is "no answer", never a zero vector — the nil is what makes the
   # failure branch above reachable and nothing else.

@@ -12,7 +12,7 @@ module Ingest
   # == No retry policy, and it is a finding rather than a deferral
   #
   # No `retry_on`, no `discard_on`. `retry_on EmbeddingGenerator::Error` is the obvious policy here
-  # and it would **never fire**: {Ingest::IdentityResolver#embed} rescues that class at the single
+  # and it would **never fire**: {Ingest::PageEmbedder#embed} rescues that class at the single
   # call site and returns nil, so the error is consumed before ActiveJob can see it and this job
   # always completes *successfully* having resolved zero rows. That rescue is deliberate — one
   # unembeddable example must not abandon the other 19,999 — so the retry belongs in the work list,
