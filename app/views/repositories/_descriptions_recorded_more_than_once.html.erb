@@ -2,7 +2,39 @@
     <% if @repeated_descriptions&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Descriptions this run recorded more than once",
                                         id: "repeated-descriptions") do %>
-        <% if @repeated_descriptions.named? %>
+        <%# A DECLARED LAYER was asked (`?layer=`): the grouping ran over that layer's examples alone, so
+            a group here is a description repeated WITHIN the layer and every figure on this panel is
+            the layer's — said once, above whichever state follows, with the one control that clears
+            the ask. A description with one example in each of two layers is repeated in neither, so it
+            is absent by construction; the same behaviour covered on several levels is the near-duplicate
+            census's question. The layer is what each example's own `@intent` declared, never inferred
+            from the path. %>
+        <% if @repeated_descriptions.layer? %>
+          <p class="text-xs text-app-content-secondary" id="repeated-descriptions-layer">
+            Showing only the examples that declared <code><%= @repeated_descriptions.layer %></code>
+            as their layer in their own <code>@intent</code> (never inferred from the path). A group
+            is a description repeated <em>within</em> that layer, ranked by that layer's time, and
+            every figure on this panel — each group's examples and timings, the group count, the
+            examples recorded and those carrying no description — is that layer's alone.
+          </p>
+          <p class="text-xs" id="repeated-descriptions-clear-layer">
+            <%= link_to "Clear layer filter",
+                        drill_down_path(@repository, layer: nil, anchor: "repeated-descriptions"),
+                        class: "rc-link" %>
+          </p>
+        <% end %>
+        <% if @repeated_descriptions.layer_empty? %>
+          <%# A layer was asked and the run recorded NO example that declared it — an empty answer, not
+              a run without rows (the panel only renders for a run that recorded some). %>
+          <div id="repeated-descriptions-layer-empty">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No example declared this layer",
+                  description: "No example of this run declared " \
+                               "#{@repeated_descriptions.layer} as its layer, so there is no " \
+                               "description to find repeated within it."
+                ) %>
+          </div>
+        <% elsif @repeated_descriptions.named? %>
           <% if @repeated_descriptions.any? && !@repeated_descriptions.any_timed? %>
             <div id="repeated-descriptions-untimed">
               <%= render UI::EmptyStateComponent.new(

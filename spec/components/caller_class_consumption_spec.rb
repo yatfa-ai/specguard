@@ -21,28 +21,28 @@ RSpec.describe "caller-supplied component classes" do
   exempt = ["app/components/forms/form_builder.rb"].freeze
 
   registry = [
-    { klass: UI::AlertComponent, base: "rounded-md",
+    { klass: UI::AlertComponent, base: "rounded-card",
       build: ->(opts) { UI::AlertComponent.new(**opts) } },
 
-    { klass: UI::BadgeComponent, base: "rounded-full", method: :badge_class,
+    { klass: UI::BadgeComponent, base: "rounded-[var(--app-radius-pill)]", method: :badge_class,
       build: ->(opts) { UI::BadgeComponent.new(**opts) } },
 
     { klass: UI::BreadcrumbComponent, base: "text-app-content-secondary",
       build: ->(opts) { UI::BreadcrumbComponent.new(items: [{ label: "Repositories" }], **opts) } },
 
-    { klass: UI::ButtonComponent, base: "bg-app-cta", method: :button_class,
+    { klass: UI::ButtonComponent, base: "bg-app-accent-solid", method: :button_class,
       build: ->(opts) { UI::ButtonComponent.new(variant: :primary, **opts) } },
 
     # `link_to` MERGES its kwargs where `tag.button`/`tag.div` do not, so for the two components
     # that branch on `href:` the splat regression only reproduces on one of the two branches. Both
     # are enumerated rather than trusting whichever one happens to be the default.
-    { klass: UI::ButtonComponent, base: "bg-app-cta", method: :button_class, suffix: "with an href",
+    { klass: UI::ButtonComponent, base: "bg-app-accent-solid", method: :button_class, suffix: "with an href",
       build: ->(opts) { UI::ButtonComponent.new(href: "/repositories", **opts) } },
 
     { klass: UI::CardComponent, base: "bg-app-surface-raised",
       build: ->(opts) { UI::CardComponent.new(**opts) } },
 
-    { klass: UI::CardComponent, base: "hover:border-app-cta", suffix: "with an href",
+    { klass: UI::CardComponent, base: "hover:border-app-accent-ink", suffix: "with an href",
       build: ->(opts) { UI::CardComponent.new(href: "/repositories", **opts) } },
 
     { klass: UI::CopyableCodeComponent, base: "items-center",
@@ -62,6 +62,9 @@ RSpec.describe "caller-supplied component classes" do
 
     { klass: UI::MeterComponent, base: "space-y-1",
       build: ->(opts) { UI::MeterComponent.new(value: 1, max: 2, **opts) } },
+
+    { klass: UI::NoteComponent, base: "dc-note",
+      build: ->(opts) { UI::NoteComponent.new(summary: "How to read this", **opts) } },
 
     { klass: UI::PageComponent, base: "px-6",
       build: ->(opts) { UI::PageComponent.new(**opts) } },

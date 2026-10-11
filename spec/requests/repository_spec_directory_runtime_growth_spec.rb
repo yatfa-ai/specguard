@@ -446,7 +446,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
 
       get repository_path(repository)
 
-      expect(Capybara.string(response.body).find("#overview")).to have_no_css("#runtime-delta")
+      expect(Capybara.string(response.body).find("#summary")).to have_no_css("#runtime-delta")
       expect(row_for("spec/models")).to include(then: "2.00s", now: "8.00s", change: "+6.00s")
       expect(row_for("spec/system")).to include(change: "±0")
     end

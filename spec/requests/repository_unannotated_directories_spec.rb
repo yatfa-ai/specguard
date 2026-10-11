@@ -36,7 +36,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
 
   # The Overview panel one screen up. Read from this file for exactly one example — the pair that
   # asserts the two surfaces now agree about a run with no per-example rows.
-  def overview = Capybara.string(response.body).find("#overview")
+  def overview = console_overview
 
   # ELEMENT-scoped, never panel-scoped: the caption's two truncation branches share most of their
   # words, and a panel-level `have_text` would pass for the wrong branch with the deciding `if`

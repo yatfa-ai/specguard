@@ -56,10 +56,11 @@
       <% end %>
     <% end %>
 
-    <%= render UI::PanelComponent.new(title: "Time by declared layer", id: "layer-durations") do %>
+    <%= render UI::PanelComponent.new(title: "Time by declared layer", id: "layer-durations-panel") do %>
       <% readings = f.readings %>
       <% if readings.recorded? %>
         <div class="space-y-3">
+          <div id="layer-durations">
           <%= render UI::TableComponent.new(
                 columns: ["Layer", { label: "Machine time", end: true }, { label: "Timed", end: true },
                           { label: "Since previous run", end: true }],
@@ -70,7 +71,7 @@
               <% growth = @layer_runtime_growth&.comparable? ? @layer_runtime_growth.rows[layer] : nil %>
               <tr>
                 <td class="font-semibold">
-                  <%= link_to layer.to_s, drill_down_path(@repository, layer: layer.to_s, anchor: "slow"),
+                  <%= link_to layer.to_s, drill_down_path(@repository, layer: layer.to_s, anchor: "slowest-examples"),
                               class: "rc-link", aria: { current: layer.to_s == @layer_request ? "true" : nil } %>
                 </td>
                 <td class="num" data-sort="<%= durations[:total_seconds] %>"><%= SpecObservation.humanized_duration(durations[:total_seconds]) %></td>
@@ -83,8 +84,32 @@
               </tr>
             <% end %>
           <% end %>
+          </div>
+          <%# The routes from a layer to WHICH things hold its time. The names in the table above go to the
+              slowest EXAMPLES (`#layer-durations a`); each line below is a line of its own, never links
+              spliced into that table, so the table's text stays exactly the plain label. All through
+              `drill_down_path`, so choosing a layer closes no other open ask, and the active layer
+              is marked `aria-current`. %>
+          <% layer_parts = SpecDirectoryDurations.layer_durations_parts(@latest_test_run.layer_durations, @latest_test_run.layer_counts) %>
+          <% [["layer-durations-files", "Spec files by declared layer", "spec-file-durations"],
+              ["layer-durations-directories", "Spec directories by declared layer", "spec-directory-durations"],
+              ["layer-durations-descriptions", "Repeated descriptions by declared layer", "repeated-descriptions"]].each do |line_id, line_label, target| %>
+            <p class="text-xs text-app-content-secondary" id="<%= line_id %>">
+              <span class="font-medium"><%= line_label %></span>:
+              <% layer_parts.each_with_index do |(layer, _figures), index| %>
+                <%= " · " if index.positive? %><%= link_to layer.to_s,
+                           drill_down_path(@repository, layer: layer.to_s, anchor: target),
+                           class: "rc-link", aria: { current: layer.to_s == @layer_request ? "true" : nil } %>
+              <% end %>
+            </p>
+          <% end %>
           <% if @layer_runtime_growth&.comparable? %>
             <p class="text-xs text-app-content-secondary" id="layer-runtime-growth">Since <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span> on <%= @latest_test_run.branch %>: <%= @layer_runtime_growth.label %></p>
+          <% end %>
+          <% if @layer_window_runtime_growth&.comparable? %>
+            <p class="text-xs text-app-content-secondary" id="layer-window-runtime-growth">
+              Declared-layer time, this window's two ends compared (not a trend): <%= @layer_window_runtime_growth.label %>
+            </p>
           <% end %>
           <%= render UI::NoteComponent.new(summary: "What machine time means here", id: "layer-durations-basis") do %>
             Each figure is the sum of its examples' own durations — machine time, not wall clock, so

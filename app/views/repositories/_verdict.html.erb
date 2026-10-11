@@ -70,8 +70,12 @@
       <span class="rc-stat-label">Carrying an @intent</span>
       <% if f.measured %>
         <span class="rc-stat-value"><%= run.annotated_ratio %>%</span>
-        <span class="rc-meter" role="meter" aria-valuenow="<%= f.annotated %>" aria-valuemin="0" aria-valuemax="<%= f.total %>"
-              aria-label="<%= number_with_delimiter(f.annotated) %> of <%= number_with_delimiter(f.total) %> tests carry an @intent">
+        <%# The share sentence and the fold's "how it reads" prose are the same claim in two places
+            ("no figure twice"), so the meter carries both in one element: the sentence is the
+            meter's accessible label — what a screen reader announces — and the fold beneath the
+            card holds the basis prose in the old panel's own words. %>
+        <span class="rc-meter" role="meter" aria-valuenow="<%= f.annotated.to_f %>" aria-valuemin="0.0" aria-valuemax="<%= f.total.to_f %>"
+              aria-label="<%= test_run_annotated_share(run) %>">
           <i style="width: <%= run.annotated_ratio %>%"></i>
         </span>
         <span class="rc-stat-sub">of the tests in this run</span>

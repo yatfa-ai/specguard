@@ -241,7 +241,7 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_growth", type: :request
   end
 
   describe "the Overview panel line" do
-    def runtime_line = Capybara.string(response.body).find("#overview #layer-runtime-growth")
+    def runtime_line = Capybara.string(response.body).find("#changes #layer-runtime-growth")
 
     # @intent: { entity: "TestRun", action: "show the time movement", behavior: "the Overview prints Since the previous sha7 on main with request +41.20s from the same object the API serves", layer: "request" }
     it "prints the movement under Time by declared layer when comparable" do

@@ -28,7 +28,7 @@ RSpec.describe UI::ButtonComponent, type: :component do
   it "appends caller classes instead of replacing the variant's" do
     render_inline(described_class.new(variant: :primary, class: "w-full") { "Save" })
 
-    expect(page).to have_css("button.w-full.bg-app-cta")
+    expect(page).to have_css("button.w-full.bg-app-accent-solid")
   end
 
   # @intent: { entity: "UI::ButtonComponent", action: "expose .classes", behavior: "the .classes helper returns variant, size and extra classes together for button_to call sites", layer: "unit" }

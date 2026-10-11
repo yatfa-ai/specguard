@@ -414,7 +414,7 @@ RSpec.describe "Repository recent runs", type: :request do
       coverage = "slowest of the 3 that reported"
       expect(runs_table.all("tbody tr").first).to have_text("toprow0")
       expect(run_cells("toprow0")[DURATION]).to eq("1m 14s #{coverage}")
-      expect(Capybara.string(response.body).find("#overview"))
+      expect(Capybara.string(response.body).find("#summary"))
         .to have_text("Wall clock (#{coverage}) 1m 14s", normalize_ws: true)
     end
 

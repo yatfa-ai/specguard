@@ -25,7 +25,7 @@ require "rails_helper"
 RSpec.describe "Repository suite-size growth", type: :request do
   before { @user = sign_in_via_github }
 
-  def overview_panel = Capybara.string(response.body).find("#overview")
+  def overview_panel = console_overview
 
   # ELEMENT-scoped, never panel-scoped, and that is load-bearing — the same trap
   # spec/requests/repository_runs_spec.rb:23-30 documents from a verified mutation, one surface

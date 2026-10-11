@@ -1008,7 +1008,7 @@ RSpec.describe "Repository unstable tests", type: :request do
   it "renders its outcome words through the badge component rather than by hand" do
     get repository_path(repository_with(%w[passed failed]))
 
-    expect(panel).to have_css("span.rounded-full.text-xs.font-semibold", text: "failed")
+    expect(panel).to have_css("span.rounded-\[var\(--app-radius-pill\)\].text-xs.font-semibold", text: "failed")
     expect(panel).to have_css("span.bg-app-error-surface", text: "failed")
   end
 

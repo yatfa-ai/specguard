@@ -143,14 +143,14 @@ RSpec.describe UI::MeterComponent, type: :component do
     #   * Against literals, because interpolating `TONES[tone]` into the expectation puts the
     #     same frozen hash on both sides one layer further out: editing a TONES value to a class
     #     that does not exist moves expectation and actual together and the full suite stays
-    #     green. Verified — `cta: "bg-app-cta"` -> `"bg-app-WRONG"` left 677 examples passing
+    #     green. Verified — `cta: "bg-app-accent-solid"` -> `"bg-app-WRONG"` left 677 examples passing
     #     with the render-based-but-interpolated form. Only the literal goes red.
     #
     # `eq` on the full attribute rather than `include`/`have_css`, matching the reasoning already
     # used for `CODE_CLASSES`: `include` passes when an EXTRA tone class is also applied, so only
     # equality catches "the class was dropped" as well as "a second tone was painted over it".
     expected_tone_classes = {
-      cta: "bg-app-cta",
+      cta: "bg-app-accent-solid",
       success: "bg-app-success",
       warning: "bg-app-warning",
       error: "bg-app-error",
@@ -169,7 +169,7 @@ RSpec.describe UI::MeterComponent, type: :component do
       it "paints the bar element with #{expected_class} for the #{tone} tone" do
         render_inline(described_class.new(value: 1, max: 2, tone: tone))
 
-        expect(page.find("[role='meter'] > div")[:class]).to eq("h-full rounded-full #{expected_class}")
+        expect(page.find("[role='meter'] > div")[:class]).to eq("h-full rounded-[var(--app-radius-pill)] #{expected_class}")
       end
     end
 
@@ -182,7 +182,7 @@ RSpec.describe UI::MeterComponent, type: :component do
     it "falls back to the cta tone on the element rather than raising when the tone is unknown" do
       render_inline(described_class.new(value: 1, max: 2, tone: :chartreuse))
 
-      expect(page.find("[role='meter'] > div")[:class]).to eq("h-full rounded-full bg-app-cta")
+      expect(page.find("[role='meter'] > div")[:class]).to eq("h-full rounded-[var(--app-radius-pill)] bg-app-accent-solid")
     end
   end
 

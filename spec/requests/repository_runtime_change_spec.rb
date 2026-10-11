@@ -25,7 +25,7 @@ require "rails_helper"
 RSpec.describe "Repository runtime change", type: :request do
   before { @user = sign_in_via_github }
 
-  def overview_panel = Capybara.string(response.body).find("#overview")
+  def overview_panel = console_overview
 
   # ELEMENT-scoped, never panel-scoped, on the rule the growth file documents from a verified
   # mutation: four states here produce a no-delta panel and they share vocabulary ("no timing",

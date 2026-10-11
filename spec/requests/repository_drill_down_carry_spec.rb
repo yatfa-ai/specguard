@@ -290,7 +290,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # run's sha, so the ask resolves, `@run_anchor_run` is present and the gesture is on the page
     # every other row is asserted against.
     { name: "Show the newest run",
-      panel: "#overview", link: "Show the newest run",
+      panel: "#summary", link: "Show the newest run",
       clears: :commit_sha }
   ]
 
@@ -394,7 +394,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       "Close directory" => [:spec_directory, "#spec-directory-files"],
       "Close description" => [:repeated_description, "#repeated-description-examples"],
       "Close test" => [[:unstable_test, :unstable_test_from], "#unstable-test-runs"],
-      "Show the newest run" => [:commit_sha, "#overview"]
+      "Show the newest run" => [:commit_sha, "#summary"]
     }.each do |label, (ask, panel_id)|
       # @intent: {"entity": "GET /repositories/:id", "action": "drop own ask", "behavior": "each closing control — Close file, Close directory, Close description, Close test and Show the newest run — emits an href whose own ask key is absent while every other ask rides through, at each value", "layer": "request"}
       it "#{label} still drops its own ask" do

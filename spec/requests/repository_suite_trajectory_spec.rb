@@ -578,7 +578,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       expect(response).to have_http_status(:ok)
       expect(Capybara.string(response.body)).to have_no_css("#suite-trajectory")
-      expect(Capybara.string(response.body).find("#overview"))
+      expect(Capybara.string(response.body).find("#summary"))
         .to have_text("No CI run has reported yet", normalize_ws: true)
     end
   end
@@ -676,7 +676,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       get repository_path(repository, branch: "main")
 
       page = Capybara.string(response.body)
-      expect(page.find("#overview")).to have_text("Measured on feat111 (feature/x)", normalize_ws: true)
+      expect(page.find("#summary")).to have_text("Measured on feat111 (feature/x)", normalize_ws: true)
       expect(page.find("#recent-runs")).to have_text("feat111", normalize_ws: true)
     end
 

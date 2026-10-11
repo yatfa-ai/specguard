@@ -1065,8 +1065,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
   describe "the Overview panel's suite figures" do
     # Scoped to the panel rather than the whole document, because the page is full of numbers and
-    # prose that would satisfy a bare `response.body` match. `#overview` is the panel's own id.
-    def overview_panel = Capybara.string(response.body).find("#overview")
+    # prose that would satisfy a bare `response.body` match. `#summary` is the verdict card's own id.
+    def overview_panel = console_overview
 
     # A sharded run, written directly. The suite's own canonical fixture one layer up —
     # `spec/requests/api/v1/ingest_spec.rb` builds a 4-shard, 20,000-example run and pins its MAX
@@ -4243,7 +4243,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # panel rendered, which is what the silence examples assert.
     def registration_panel
       Capybara.string(response.body)
-              .all(".rounded-md.border")
+              .all(".rounded-card.border")
               .map { |node| node.text.gsub(/\s+/, " ").strip }
               .find { |text| text.include?(lapsed_state) }
     end
