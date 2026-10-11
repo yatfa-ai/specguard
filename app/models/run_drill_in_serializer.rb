@@ -422,11 +422,11 @@ class RunDrillInSerializer
   # panel's reads unchanged, so that certification transfers rather than needing to be repeated in
   # a request spec.
   def serialized_repeated_descriptions(test_run)
-    repeated = RepeatedDescriptions.for(test_run)
+    repeated = RepeatedDescriptions.for(test_run, layer: requested_layer)
 
     return nil unless repeated.recorded?
 
-    {
+    body = {
       rows: repeated.rows.map do |row|
         {
           name: row.name,
@@ -446,6 +446,14 @@ class RunDrillInSerializer
       repeated_timed_count: repeated.repeated_timed_count,
       limit: SpecObservation::REPEATED_DESCRIPTIONS_LIMIT
     }
+    # `?layer=` finds the descriptions repeated WITHIN that declared layer, so every figure above is
+    # the layer's (a row's counts, `group_count`, `recorded_count`, `unnamed_row_count`, the
+    # `repeated_*` pair). Echoed ONLY when asked — the key is ABSENT, never null, unasked, so an
+    # unasked or malformed-ask body is byte-identical to before the parameter reached this block. A
+    # layer holding no repeated description is `rows: []` / `group_count: 0` with the block present;
+    # `nil` above still means the run recorded no per-example rows.
+    body[:layer] = repeated.layer if repeated.layer?
+    body
   end
 
   # WHICH FILES ONE AREA HOLDS — the middle rung of area → file → example, and the one move an
@@ -730,9 +738,9 @@ class RunDrillInSerializer
   def serialized_repeated_description_examples(test_run)
     return nil if requested_repeated_description.nil?
 
-    examples = RepeatedDescriptionExamples.for(test_run, requested_repeated_description)
+    examples = RepeatedDescriptionExamples.for(test_run, requested_repeated_description, layer: requested_layer)
 
-    {
+    body = {
       # The ask, restated as the server read it — never echoed from the raw parameter, on the rule
       # `path` follows on both sibling blocks: a malformed shape is no ask at all and reaches no
       # block, so what is served here is always the description the rows were actually gathered
@@ -764,6 +772,11 @@ class RunDrillInSerializer
       timed_count: examples.timed_count,
       limit: SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT
     }
+    # Under `?layer=` the group holds only the examples of that declared layer, so `rows`,
+    # `recorded_count` and `timed_count` equal the clicked ranking row's. Echoed ONLY when asked (key
+    # absent otherwise), on `serialized_spec_files`' rule.
+    body[:layer] = examples.layer if examples.layer?
+    body
   end
 
   # WHICH TESTS CARRY NO `@intent` — the rows behind the product's stated primary adoption metric,

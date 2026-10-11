@@ -66,6 +66,14 @@
           <p class="text-xs text-app-muted mb-3" id="repeated-description-examples-basis">
             <span class="text-app-content-secondary"><%= @repeated_description_examples.name %></span>
             — <%= repeated_description_examples_scope_sentence(@repeated_description_examples) %>
+            <%# With `?layer=` asked the group holds only that layer's examples — exactly the rows the
+                clicked ranking row counted — so "the same fraction the row states" below stays true,
+                and every figure here is that layer's. %>
+            <% if @repeated_description_examples.layer? %>
+              Only the examples that declared <code><%= @repeated_description_examples.layer %></code>
+              as their layer in their own <code>@intent</code> (never inferred from the path) are
+              counted here, which is the population the row in the panel above counts.
+            <% end %>
             <% if @repeated_description_examples.complete? %>
               <%# Completeness is a claim about the group's TIMING and has to be spent on the
                   population the page actually holds — `#complete?` is counted before the cap, so on

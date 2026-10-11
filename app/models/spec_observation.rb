@@ -1069,8 +1069,13 @@ class SpecObservation < ApplicationRecord
   # timed counts off the same read as the rows. Those two are ATTRIBUTES of the returned records
   # rather than a separate value, which makes this relation one to load and read —
   # `RepeatedDescriptionExamples` is its one caller — rather than one to count or paginate further.
-  def self.with_description(test_run, name, limit: REPEATED_DESCRIPTION_EXAMPLES_LIMIT)
-    where(test_run_id: test_run.id, name: name)
+  #
+  # `layer:` narrows the group to the examples that declared ONE layer ({DECLARED_LAYER_KEYS}),
+  # through {.in_declared_layer}, so a group opened out of a layer-ranked row holds exactly the rows
+  # that row counted: the drill-in's `description_recorded_count` / `description_timed_count` windows
+  # equal the clicked row's `recorded_count` / `timed_count`. `nil` is the unnarrowed read.
+  def self.with_description(test_run, name, limit: REPEATED_DESCRIPTION_EXAMPLES_LIMIT, layer: nil)
+    in_declared_layer(where(test_run_id: test_run.id, name: name), layer)
       .select(Arel.sql("spec_observations.*, #{DESCRIPTION_POPULATION_COUNTS}"))
       .order(Arel.sql("duration_seconds DESC NULLS LAST"), id: :asc)
       .limit(limit)
@@ -2519,8 +2524,24 @@ class SpecObservation < ApplicationRecord
   # in the SAME grouped pass — no second statement. They are appended AFTER the window totals so
   # `RepeatedDescriptions::WINDOW_INDEXES` keeps its meaning; the caller reads the totals by those
   # indexes, never from the tail.
-  def self.repeated_descriptions_in(test_run, limit: REPEATED_DESCRIPTIONS_LIMIT)
-    where(test_run_id: test_run.id)
+  #
+  # == `layer:` — repeated WITHIN a declared layer, narrowed before `GROUP BY`, `HAVING` and `LIMIT`
+  #
+  # With a declared layer asked ({DECLARED_LAYER_KEYS} member), the rows are narrowed through
+  # {.in_declared_layer} — the one shared predicate {.slowest_in}, {.coverage_in} and
+  # {.file_durations_in} use, never retyped — BEFORE the grouping, so a group is a description carried
+  # by more than one example OF THAT LAYER (`HAVING COUNT(*) > 1` runs over the layer's rows), and the
+  # ranking and the cut are by that layer's own `SUM(duration_seconds)`. It cannot be recovered from
+  # the unasked top ten: a description repeated four times inside the request layer can sit below
+  # the cut of a run-wide ranking led by cheaper-per-example unit loops. Every figure is then the
+  # layer's — each group's `COUNT(*)` / `COUNT(duration_seconds)` / layer operands and the three
+  # window totals (`group_count`, `repeated_*`) — and a description with exactly one example in each
+  # of two layers is NOT repeated within either, so it is absent under both (the cross-layer
+  # question — the same behaviour covered on several levels — is the near-duplicate census's
+  # `layer_redundancy`, not this read's). `nil` — the default — is byte-identical to the unnarrowed
+  # read, and the layer-asked read is still ONE grouped statement.
+  def self.repeated_descriptions_in(test_run, limit: REPEATED_DESCRIPTIONS_LIMIT, layer: nil)
+    in_declared_layer(where(test_run_id: test_run.id), layer)
       .where.not(name: nil)
       .group(:name)
       .having(Arel.sql("COUNT(*) > 1"))
@@ -2563,8 +2584,13 @@ class SpecObservation < ApplicationRecord
   # records why the drill-down beside it does not have to.
   #
   # @return [Hash{Symbol=>Integer}] `recorded_count` and `unnamed_count`, both counted in rows.
-  def self.description_presence_in(test_run)
-    counts = where(test_run_id: test_run.id)
+  #
+  # `layer:` narrows both counts to ONE declared layer through {.in_declared_layer}, the predicate
+  # {.repeated_descriptions_in} narrows by, so the presence figures describe the SAME row set the
+  # ranking grouped and `recorded_count - unnamed_count` still reconciles with the ranking's named
+  # population. Still ONE statement; `nil` is the unnarrowed read.
+  def self.description_presence_in(test_run, layer: nil)
+    counts = in_declared_layer(where(test_run_id: test_run.id), layer)
              .pick(Arel.sql("COUNT(*)"), Arel.sql("COUNT(*) FILTER (WHERE name IS NULL)"))
 
     { recorded_count: counts[0].to_i, unnamed_count: counts[1].to_i }

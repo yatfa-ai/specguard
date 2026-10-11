@@ -20,7 +20,39 @@
     <% if @repeated_descriptions&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Descriptions this run recorded more than once",
                                         id: "repeated-descriptions", class: "lg:col-span-3") do %>
-        <% if @repeated_descriptions.named? %>
+        <%# A DECLARED LAYER was asked (`?layer=`): the grouping ran over that layer's examples alone,
+            so a group here is a description repeated WITHIN the layer and every figure on this panel
+            is the layer's — rendered once, above whichever state follows, with the one control that
+            clears the ask. A description with one example in each of two layers is repeated in
+            neither, so it is absent here by construction; the same behaviour covered on several
+            levels is the near-duplicate census's question, not this panel's. The layer is what each
+            example's own `@intent` declared, never inferred from the path. %>
+        <% if @repeated_descriptions.layer? %>
+          <p class="text-xs text-app-muted mb-3" id="repeated-descriptions-layer">
+            Showing only the examples that declared <code><%= @repeated_descriptions.layer %></code>
+            as their layer in their own <code>@intent</code> (never inferred from the path). A group
+            is a description repeated <em>within</em> that layer, ranked by that layer's time, and
+            every figure on this panel — each group's examples and timings, the group count, the
+            examples recorded and those carrying no description — is that layer's alone.
+            <%= link_to "Clear layer filter",
+                        drill_down_path(@repository, layer: nil, anchor: "repeated-descriptions"),
+                        id: "repeated-descriptions-clear-layer",
+                        class: "underline underline-offset-2 decoration-app-border-light " \
+                               "text-app-content hover:decoration-app-content" %>
+          </p>
+        <% end %>
+        <% if @repeated_descriptions.layer_empty? %>
+          <%# A layer was asked and the run recorded NO example that declared it — an empty answer, not
+              a run without rows (the panel only renders for a run that recorded some). %>
+          <div id="repeated-descriptions-layer-empty">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No example declared this layer",
+                  description: "No example of this run declared " \
+                               "#{@repeated_descriptions.layer} as its layer, so there is no " \
+                               "description to find repeated within it."
+                ) %>
+          </div>
+        <% elsif @repeated_descriptions.named? %>
           <%# The untimed run is answered FIRST, before the basis paragraph rather than under it.
               That paragraph is a claim about a RANKING — "costliest first", and a column named
               "Examples timed" it tells the reader is the denominator of every total. On a run that

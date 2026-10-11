@@ -75,4 +75,92 @@ RSpec.describe RepeatedDescriptions do
     expect(repeated.rows).to eq([])
     expect([repeated.group_count, repeated.repeated_recorded_count, repeated.repeated_timed_count]).to eq([0, 0, 0])
   end
+  # The layer ask (SPGD-1763): descriptions repeated WITHIN one declared layer.
+  describe ".for layer:" do
+    def layered_run
+      # "loop": 4 request examples at 3s = 12s, repeated inside request.
+      4.times { |i| observe(name: "loop", line_number: i + 1, intent_layer: "request", duration: 3.0) }
+      # Ten unit descriptions repeated twice at 7s each (14s per group, above loop's 12s) fill the unasked top ten.
+      10.times do |g|
+        2.times { |i| observe(name: "unit-#{g}", line_number: 100 + g * 2 + i, intent_layer: "unit", duration: 7.0) }
+      end
+      # One request + one unit example: repeated across layers, within neither.
+      observe(name: "straddle", line_number: 200, intent_layer: "request", duration: 1.0)
+      observe(name: "straddle", line_number: 201, intent_layer: "unit", duration: 1.0)
+      # An unnamed request example and an undeclared repeated pair.
+      observe(name: nil, line_number: 300, intent_layer: "request", duration: 1.0)
+      2.times { |i| observe(name: "plain", line_number: 400 + i, intent_layer: nil, duration: 0.5) }
+    end
+
+    # @intent: { entity: "RepeatedDescriptions", action: "find descriptions repeated within a declared layer", behavior: "a description repeated four times inside the request layer is absent from the unasked default top ten and ranks first under the request layer", layer: "request" }
+    it "ranks within the layer before the limit, surfacing a group the unasked top ten drops" do
+      layered_run
+
+      unasked = described_class.for(run)
+      expect(unasked.rows.size).to eq(SpecObservation::REPEATED_DESCRIPTIONS_LIMIT)
+      expect(unasked.rows.map(&:name)).not_to include("loop")
+
+      asked = described_class.for(run, layer: "request")
+      expect(asked.rows.map(&:name)).to eq(["loop"])
+      expect(asked.rows.first.layer_counts).to eq(unit: 0, integration: 0, request: 4, system: 0, undeclared: 0)
+      expect(asked.rows.first).to have_attributes(recorded_count: 4, timed_count: 4, total_seconds: 12.0)
+      expect(asked.layer).to eq("request")
+      expect(asked).to be_layer
+    end
+
+    # @intent: { entity: "RepeatedDescriptions", action: "find descriptions repeated within a declared layer", behavior: "a description with exactly one request and one unit example is repeated within neither layer, so it is absent under both and present unasked", layer: "request" }
+    it "does not count a description repeated only across layers" do
+      layered_run
+
+      expect(described_class.for(run, limit: 100).rows.map(&:name)).to include("straddle")
+      expect(described_class.for(run, limit: 100, layer: "request").rows.map(&:name)).not_to include("straddle")
+      expect(described_class.for(run, limit: 100, layer: "unit").rows.map(&:name)).not_to include("straddle")
+    end
+
+    # @intent: { entity: "RepeatedDescriptions", action: "count within a declared layer", behavior: "under a layer the window totals and the presence counts describe that layer's population and named_row_count reconciles with its recorded and unnamed counts", layer: "request" }
+    it "reads the window totals by index over the layer's population" do
+      layered_run
+
+      asked = described_class.for(run, limit: 100, layer: "request")
+
+      expect(asked.group_count).to eq(1)
+      expect(asked.repeated_recorded_count).to eq(4)
+      expect(asked.repeated_timed_count).to eq(4)
+      # 4 loop + 1 straddle + 1 unnamed request example.
+      expect(asked.recorded_count).to eq(6)
+      expect(asked.unnamed_row_count).to eq(1)
+      expect(asked.named_row_count).to eq(5)
+      expect(asked.recorded_count - asked.unnamed_row_count).to eq(asked.named_row_count)
+      expect(described_class.for(run, limit: 100, layer: "undeclared").rows.map(&:name)).to eq(["plain"])
+    end
+
+    # @intent: { entity: "RepeatedDescriptions", action: "separate an empty layer from an unrecorded run", behavior: "a layer no example declared is an empty answer that is still recorded, while a run with no observation rows is not recorded with or without the layer", layer: "system" }
+    it "keeps recorded? a run-level fact when a layer is asked" do
+      layered_run
+
+      empty = described_class.for(run, layer: "system")
+      expect(empty.rows).to be_empty
+      expect(empty.group_count).to eq(0)
+      expect(empty).to be_recorded
+      expect(empty).to be_layer_empty
+
+      bare = described_class.for(create_test_run(repository: repository), layer: "request")
+      expect(bare).not_to be_recorded
+      expect(described_class.for(create_test_run(repository: repository))).not_to be_recorded
+    end
+
+    # @intent: { entity: "RepeatedDescriptions", action: "find descriptions repeated within a declared layer", behavior: "the unasked read issues exactly the two statements it always did and the layer-asked read issues the same two plus at most the run-level intent readings read", layer: "request" }
+    it "adds no statement unasked and at most the intent_readings read when asked" do
+      layered_run
+      fresh = -> { TestRun.find(run.id) }
+
+      unasked = queries_against("spec_observations") { described_class.for(fresh.call) }
+      asked = queries_against("spec_observations") { described_class.for(fresh.call, layer: "request") }
+
+      expect(unasked.size).to eq(2)
+      expect(asked.size).to be_between(2, 3)
+      expect(asked.count { it.include?("GROUP BY \"spec_observations\".\"name\"") }).to eq(1)
+      expect(asked.first).to include("intent_layer")
+    end
+  end
 end

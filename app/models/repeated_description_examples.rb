@@ -49,14 +49,24 @@
 # test renamed since, a description edited, a stale bookmark, a typo. `.for` returns an object with
 # no rows and the surface says so — the same shape `#recorded?` answers on both siblings.
 class RepeatedDescriptionExamples
-  def self.for(test_run, name, limit: SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT)
-    new(name: name, rows: SpecObservation.with_description(test_run, name, limit: limit).to_a)
+  # `layer:` opens the group as the layer-ranked rollup counted it — only the examples under this
+  # description that declared that layer (`SpecObservation::DECLARED_LAYER_KEYS`) — so the group's
+  # `recorded_count` / `timed_count` equal the clicked row's. `nil` is the all-layer group.
+  def self.for(test_run, name, limit: SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT, layer: nil)
+    new(name: name, rows: SpecObservation.with_description(test_run, name, limit: limit, layer: layer).to_a,
+        layer: layer)
   end
 
-  def initialize(name:, rows:)
+  def initialize(name:, rows:, layer: nil)
     @name = name
     @rows = rows
+    @layer = layer&.to_s
   end
+
+  # The declared layer this group was narrowed to, or nil for the all-layer group.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
 
   # The description that was asked for, as it was asked for. Held even when nothing came back,
   # because the empty state has to name it — "no examples" without a subject is a sentence about

@@ -155,6 +155,103 @@ RSpec.describe SpecObservation do
 
       def names_returned = described_class.repeated_descriptions_in(run, limit: 100).map(&:first)
 
+      # SPGD-1763: the layer rides into the query before the grouping, so `HAVING COUNT(*) > 1` runs
+      # over the layer's rows.
+      def declare(name, layer, durations, test_run: run)
+        now = Time.current
+        rows = durations.each_with_index.map do |seconds, index|
+          key = "#{layer}-#{name}-#{index}"
+          { test_run_id: test_run.id, repository_id: test_run.repository_id,
+            example_id: "./spec/d0/f0_spec.rb[9:#{key}]", spec_file_path: "spec/d0/f0_spec.rb",
+            file_path: "spec/d0/f0_spec.rb", line_number: 950 + index, name: name, duration_seconds: seconds,
+            status: "unannotated", intent_layer: layer, created_at: now, updated_at: now }
+        end
+
+        described_class.insert_all(rows)
+      end
+
+      # @intent: { entity: "SpecObservation", action: "group one run's examples by description within a layer", behavior: "with a layer the grouping and its HAVING run over that layer's rows, so a description repeated only across layers is absent and the window totals describe the layer", layer: "request" }
+      it "groups within the asked layer: HAVING, the window totals and the layer operands are the layer's" do
+        declare("req-loop", "request", [3.0, 3.0, 3.0, 3.0])
+        declare("straddle", "request", [1.0])
+        declare("straddle", "unit", [1.0])
+        declare("unit-pair", "unit", [5.0, 5.0])
+
+        asked = described_class.repeated_descriptions_in(run, limit: 100, layer: "request")
+
+        expect(asked.map(&:first)).to eq(["req-loop"])
+        name, total, recorded, timed, _files, groups, repeated, repeated_timed, *layers = asked.first
+        expect([name, total, recorded, timed, groups, repeated, repeated_timed]).to eq(["req-loop", 12.0, 4, 4, 1, 4, 4])
+        expect(layers).to eq([0, 0, 4, 0, 0])
+        expect(names_returned).to include("straddle", "unit-pair", "req-loop")
+        expect(described_class.repeated_descriptions_in(run, limit: 100, layer: "unit").map(&:first))
+          .to contain_exactly("unit-pair")
+        expect(described_class.repeated_descriptions_in(run, layer: "system")).to eq([])
+      end
+
+      # MUTATION CHECK for this slice: removing the `in_declared_layer` call from the read turns this red.
+      # @intent: { entity: "SpecObservation", action: "group one run's examples by description within a layer", behavior: "the layer is applied before the limit so a request-repeated description below the unasked cut leads the layer-asked read", layer: "request" }
+      it "applies the layer before the limit" do
+        declare("req-loop", "request", [2.0, 2.0, 2.0, 2.0])
+        3.times { |i| declare("unit-#{i}", "unit", [5.0, 5.0]) }
+
+        expect(described_class.repeated_descriptions_in(run, limit: 3).map(&:first)).not_to include("req-loop")
+        asked = described_class.repeated_descriptions_in(run, limit: 1, layer: "request")
+        expect(asked.map(&:first)).to eq(["req-loop"])
+      end
+
+      # @intent: { entity: "SpecObservation", action: "group one run's examples by description within a layer", behavior: "an unasked layer issues the identical statement as before the keyword existed, and an asked layer stays one grouped statement adding the shared predicate to the WHERE clause", layer: "unit" }
+      it "adds only the shared predicate, in one statement, and none when unasked" do
+        bare = executed_sql { described_class.repeated_descriptions_in(run) }
+        explicit_nil = executed_sql { described_class.repeated_descriptions_in(run, layer: nil) }
+        asked = executed_sql { described_class.repeated_descriptions_in(run, layer: "request") }
+
+        expect(explicit_nil).to eq(bare)
+        expect(bare.size).to eq(1)
+        expect(asked.size).to eq(1)
+        where_clause = ->(sql) { sql[/ FROM .*? GROUP BY/m] }
+        expect(where_clause.(bare.first)).not_to include("intent_layer")
+        expect(where_clause.(asked.first)).to include("intent_layer = $").or include("intent_layer = 'request'")
+      end
+
+      # @intent: { entity: "SpecObservation", action: "group one run's examples by description within a layer", behavior: "the layer-asked ranking is still served by an index rather than a scan", layer: "unit" }
+      it "reads the layer-asked ranking off an index rather than scanning" do
+        plan = plan_for_actual_sql("spec_observations") { described_class.repeated_descriptions_in(run, layer: "request") }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # @intent: { entity: "SpecObservation", action: "count one run's description presence within a layer", behavior: "with a layer both presence counts are the layer's, so recorded minus unnamed reconciles with the ranking's named population, in one statement", layer: "request" }
+      it "narrows description_presence_in to the layer in the same single statement" do
+        declare("named", "request", [1.0, 1.0])
+        described_class.insert_all([{ test_run_id: run.id, repository_id: run.repository_id,
+                                     example_id: "./x[1:nil]", spec_file_path: "spec/x_spec.rb",
+                                     file_path: "spec/x_spec.rb", line_number: 1, name: nil, status: "unannotated",
+                                     intent_layer: "request", created_at: Time.current, updated_at: Time.current }])
+
+        expect(described_class.description_presence_in(run, layer: "request")).to eq(recorded_count: 3, unnamed_count: 1)
+        expect(described_class.description_presence_in(run, layer: "system")).to eq(recorded_count: 0, unnamed_count: 0)
+        expect(described_class.description_presence_in(run, layer: nil)[:recorded_count])
+          .to eq(described_class.description_presence_in(run)[:recorded_count])
+        expect(executed_sql { described_class.description_presence_in(run, layer: "request") }.size).to eq(1)
+      end
+
+      # @intent: { entity: "SpecObservation", action: "open one description's examples within a layer", behavior: "with_description narrows the group to the layer's examples so its population windows equal the layer ranking row's counts", layer: "request" }
+      it "opens a group narrowed to the layer, its windows equal the ranking row's counts" do
+        declare("mixed", "request", [2.0, nil, 1.0])
+        declare("mixed", "unit", [9.0])
+
+        row = described_class.repeated_descriptions_in(run, layer: "request").first
+        rows = described_class.with_description(run, "mixed", layer: "request").to_a
+
+        expect(rows.size).to eq(3)
+        expect(rows.map(&:intent_layer).uniq).to eq(["request"])
+        expect(rows.first.description_recorded_count).to eq(row[2])
+        expect(rows.first.description_timed_count).to eq(row[3])
+        expect(described_class.with_description(run, "mixed").to_a.size).to eq(4)
+      end
+
       # The whole predicate: a description ONE example carries is not a repetition, and the 500
       # uniquely-named rows the seed wrote are the proof that `HAVING COUNT(*) > 1` is doing the
       # work rather than the fixture being small.
