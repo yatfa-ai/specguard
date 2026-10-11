@@ -21,11 +21,26 @@
     </div>
   <% else %>
     <%# The stamp (when, and which run) is a fact about the CENSUS, so it reads whether or not any group
-        was found — an empty answer from a stale census is a different claim from one from today's. %>
-    <p class="text-xs text-app-content-secondary" id="near-duplicate-clusters-stamp-line">
-      Taken <%= time_ago_in_words(Time.zone.parse(census["computed_at"])) %> ago<% if @near_duplicate_weighed_sha.present? %>,
-      weighing run <%= link_to @near_duplicate_weighed_sha.first(7), drill_down_path(@repository, commit_sha: @near_duplicate_weighed_sha, anchor: "summary"), class: "rc-link" %><% if @near_duplicate_weighed_branch.present? %>
-      on <code><%= @near_duplicate_weighed_branch %></code><% end %><% if @near_duplicate_weighed_sha != @latest_test_run&.commit_sha %> (not the run this page is on)<% end %><% end %>. Stored at ingest: this page reads it and never recomputes it, so a census can be older than the run being read.
+        was found — an empty answer from a stale census is a different claim from one from today's.
+        The weighed run is named by commit and branch, as the Runs section names runs, and never by
+        `weighed_run_id` (a bare bigint no person can see anywhere else on the page). When the run row
+        is gone or none was recorded the stamp says so in words: no numeral, no guessed link. %>
+    <% weighed_sha = @near_duplicate_weighed_sha %>
+    <p class="text-xs text-app-content-secondary" id="near-duplicate-clusters-stamp">
+      Taken <%= time_ago_in_words(Time.zone.parse(census["computed_at"])) %> ago
+      (<time datetime="<%= census["computed_at"] %>"><%= census["computed_at"] %></time>),
+      <% if weighed_sha.present? %>
+        weighing run
+        <%= link_to weighed_sha.first(7), drill_down_path(@repository, commit_sha: weighed_sha, anchor: "summary"), class: "rc-link" %><% if @near_duplicate_weighed_branch.present? %>
+        on <code><%= @near_duplicate_weighed_branch %></code><% end %><% if weighed_sha != @latest_test_run&.commit_sha %>
+        (not the run this page is on)<% end %>.
+      <% elsif census["weighed_run_id"].nil? %>
+        no weighed run recorded.
+      <% else %>
+        weighing a run that has since been deleted.
+      <% end %>
+      Stored at ingest: this page reads it and never recomputes it, so a census can be older than the
+      run being read.
     </p>
     <% if census["clusters"].empty? %>
       <% if census["identity_count"].to_i.zero? %>
@@ -67,35 +82,39 @@
           <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>.
         <% end %></p>
       <% coverage_sentence = near_duplicate_coverage_sentence(census) %>
-      <% if coverage_sentence %>
-      <% end %>
       <% unresolved_clause = near_duplicate_unresolved_clause(census) %>
-      <% if unresolved_clause %>
-      <% end %>
-      <% if census["layer_source"].present? %>
-      <% end %>
-      <% weighed_sha = @near_duplicate_weighed_sha %>
+      <%# The basis, the floor, the saturation, the coverage and the provenance of the layers, folded
+          into one disclosure and each kept under its own id — a cluster count without what "alike"
+          meant is a confident number over an uncalibrated threshold, so the words are all still here;
+          only their place moved. The stamp above is the one line that stays unfolded. %>
       <details class="dc-note" id="near-duplicate-clusters-basis-all">
         <summary>How to read these groups</summary>
         <div class="rc-notes-body">
-        <section id="near-duplicate-clusters-members"><h4 class="rc-h">What a group counts</h4><p>Each group counts its members (distinct test texts) and its examples (every run row those
-        texts resolved to) separately: a table-driven loop is one member and several examples.
-        A member's time counts only its timed examples in the weighed run, so for a partially timed
-        member the figure is a floor.</p></section>
-        <section id="near-duplicate-clusters-basis"><h4 class="rc-h">How tests are grouped</h4><p>Tests are grouped by <%= census["similarity_basis"] %>: two tests are placed together when
-      their descriptions score at least <%= census["similarity_floor"] %> against each other, a floor
-      that has not been calibrated. Presented for review and not as a finding of duplication — tests
-      that read alike can be a table-driven loop, a shared example group, or a deliberate cover of
-      the same behaviour at another level, and these rows do not decide which.</p></section>
-
-        <% if census["saturated_identity_count"].to_i.positive? && census["clusters"].present? %><section id="near-duplicate-clusters-saturation"><h4 class="rc-h">Why a group may be larger than shown</h4><p>Some tests had a full ten neighbours at or above the floor, and only ten are kept per test,
-        so a group listed here may be part of a larger one.</p></section><% end %>
-        <section id="near-duplicate-clusters-coverage"><h4 class="rc-h">What the ranking covers</h4><p><%= coverage_sentence %></p></section>
-        <section id="near-duplicate-clusters-unresolved"><h4 class="rc-h">Tests not compared yet</h4><p><%= unresolved_clause %></p></section>
-        <section id="near-duplicate-clusters-layer-source"><h4 class="rc-h">How layers are read here</h4><p>Layers shown below are as declared by each test's <code>@intent</code>
-          (<%= census["layer_source"] %>), never inferred from file paths. A test that declared two
-          layers is listed under both, so a layer group can hold more tests than its cluster has
-          members.</p></section>
+          <section id="near-duplicate-clusters-members"><h4 class="rc-h">What a group counts</h4><p>Each group counts its members (distinct test texts) and its examples (every run row those
+          texts resolved to) separately: a table-driven loop is one member and several examples.
+          A member's time counts only its timed examples in the weighed run, so for a partially timed
+          member the figure is a floor.</p></section>
+          <section><h4 class="rc-h">How tests are grouped</h4><p id="near-duplicate-clusters-basis">Tests are grouped by <%= census["similarity_basis"] %>: two tests are placed together when
+          their descriptions score at least <%= census["similarity_floor"] %> against each other, a floor
+          that has not been calibrated. Presented for review and not as a finding of duplication — tests
+          that read alike can be a table-driven loop, a shared example group, or a deliberate cover of
+          the same behaviour at another level, and these rows do not decide which.</p></section>
+          <% if census["saturated_identity_count"].to_i.positive? && census["clusters"].present? %>
+            <section><h4 class="rc-h">Why a group may be larger than shown</h4><p id="near-duplicate-clusters-saturation">Some tests had a full ten neighbours at or above the floor, and only ten are kept per test,
+            so a group listed here may be part of a larger one.</p></section>
+          <% end %>
+          <% if coverage_sentence %>
+            <section><h4 class="rc-h">What the ranking covers</h4><p id="near-duplicate-clusters-coverage"><%= coverage_sentence %></p></section>
+          <% end %>
+          <% if unresolved_clause %>
+            <section><h4 class="rc-h">Tests not compared yet</h4><p id="near-duplicate-clusters-unresolved"><%= unresolved_clause %></p></section>
+          <% end %>
+          <% if census["layer_source"].present? %>
+            <section><h4 class="rc-h">How layers are read here</h4><p id="near-duplicate-clusters-layer-source">Layers shown below are as declared by each test's <code>@intent</code>
+            (<%= census["layer_source"] %>), never inferred from file paths. A test that declared two
+            layers is listed under both, so a layer group can hold more tests than its cluster has
+            members.</p></section>
+          <% end %>
         </div>
       </details>
       <%= render UI::TableComponent.new(
@@ -135,7 +154,7 @@
                         ["Layers", layer_text],
                         ["Similarity", range_ok ? (range[0] == range[1] ? "alike at #{format('%.2f', range[0])}" : "alike at #{format('%.2f', range[0])} at best, #{format('%.2f', range[1])} at worst") : nil],
                         ["Note", cluster["unobserved_members"] ? "lists a test the weighed run did not observe (its link is pinned to the weighed run and may not resolve on GitHub)" : nil]],
-                body: members_body) do %>
+                body: members_body, row_data: { near_duplicate_cluster: "" }) do %>
             <td>
               <%= row_open(lead ? lead["text"] : "Group #{index + 1}") %>
               <span class="rc-sec mono"><%= lead && "#{lead['file_path']}:#{lead['line_number']}" %><%= " +#{members.size - 1} more" if members.size > 1 %></span>

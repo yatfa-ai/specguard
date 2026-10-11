@@ -5,27 +5,40 @@
 <% readings = @latest_test_run&.intent_readings %>
 <div class="rc-bar" data-scrollspy-target="bar">
   <div class="rc-filters">
-    <div class="rc-field">
+    <div class="rc-field" id="suite-trajectory-branches">
       <span class="rc-label" id="rc-branch-label">Branch</span>
       <% if @suite_trajectory.branch.blank? && branch_items.empty? %>
         <span class="rc-ctl" aria-labelledby="rc-branch-label">no branch reported</span>
       <% else %>
-        <details class="rc-menu" data-controller="menu">
+        <%# EVERY branch SpecGuard loaded, in `Repository#branch_histories`' order (most history first):
+            a branch you cannot name is a branch you cannot ask for, so the menu is never cut to a
+            handful. The branch being read is marked `aria-current="page"`. It is a native
+            details/summary — keyboard-reachable and Escape-closable — and an overlay, not a region of
+            the page, so the page itself still has no nested scroll area. %>
+        <details class="rc-menu" id="suite-trajectory-branch-menu" data-controller="menu">
           <summary class="rc-ctl" aria-labelledby="rc-branch-label rc-branch-value">
             <span id="rc-branch-value" class="text-left [overflow-wrap:anywhere]"><%= @suite_trajectory.branch.presence || "no branch reported" %></span>
             <span class="rc-chev" aria-hidden="true"></span>
           </summary>
           <div class="rc-menu-list" role="list">
             <% branch_items.each do |item| %>
-              <%= link_to item[:href], class: "rc-menu-item", aria: { current: item[:current] ? "true" : nil } do %>
-                <span><%= item[:name] %></span><small><%= item[:runs] %></small>
+              <%= link_to item[:href], class: "rc-menu-item", aria: { current: item[:current] ? "page" : nil } do %>
+                <span><%= item[:name] %></span> <small>(<%= item[:runs] %>)</small>
               <% end %>
             <% end %>
-            <% if @trajectory_branches.size > branch_items.size %>
-              <p class="px-2.5 py-1.5 text-xs text-app-content-secondary">
-                <%= number_with_delimiter(@trajectory_branches.size - branch_items.size) %> more with less history than these.
-              </p>
-            <% end %>
+            <p class="px-2.5 py-1.5 text-xs text-app-content-secondary" id="suite-trajectory-branches-basis">
+              The page reads the newest run on the branch you pick and the last
+              <%= @window_size %> runs behind it, most history first.
+              <% if @trajectory_branches.any?(&:capped?) %>
+                A run count stops at <%= Repository::TRAJECTORY_LIMIT %>, so
+                “<%= Repository::TRAJECTORY_LIMIT %>+” means the branch holds more history than the
+                window reaches.
+              <% end %>
+              <% if trajectory_walk_cut?(@trajectory_branches) %>
+                SpecGuard stops after walking <%= number_with_delimiter(Repository::BRANCH_HISTORY_LIMIT) %>
+                branches, so this is an ordering over the ones it walked and not over every branch here.
+              <% end %>
+            </p>
           </div>
         </details>
       <% end %>

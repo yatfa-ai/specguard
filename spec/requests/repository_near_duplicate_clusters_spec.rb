@@ -93,7 +93,11 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       stored["clusters"].sole["members"].each do |member|
         expect(text).to include("#{member['file_path']}:#{member['line_number']}")
       end
-      expect(text).to include("2 members", "4 examples")
+      # The table-row figures and the drawer facts both carry the two grains; the text is the drawer's.
+      # The two grains are two cells of the group's row — members (distinct texts) and examples (rows).
+      cells = panel.find("[data-near-duplicate-cluster]").all("td").map { |cell| cell.text(normalize_ws: true) }
+      expect(cells[1]).to eq("2")
+      expect(cells[2]).to eq("4")
       expect(text).to include("1.00s")
       expect(text).to include(NearDuplicateClusters::SIMILARITY_BASIS)
       expect(text).to include("at least #{NearDuplicateClusters::SIMILARITY}")
@@ -108,10 +112,11 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     it "shows the three-example table-driven member's example count beside the member count" do
       get repository_path(repository)
 
-      loop_row = panel.all("li li").find { |row| row.text(normalize_ws: true).include?("#{expired} (") }
+      loop_row = panel.all("[data-near-duplicate-cluster] li").find { |row| row.text(normalize_ws: true).include?("#{expired} (") }
 
       expect(loop_row.text(normalize_ws: true)).to include("(3 examples)")
-      expect(panel.text(normalize_ws: true)).to include("2 members · 4 examples")
+      cells = panel.find("[data-near-duplicate-cluster]").all("td").map { |cell| cell.text(normalize_ws: true) }
+      expect(cells.values_at(1, 2)).to eq(%w[2 4])
     end
 
     # @intent: {"entity": "NearDuplicateCensus", "action": "render member time", "behavior": "each flat-list member row shows its own stored total_seconds through SpecObservation.humanized_duration, after its example count", "layer": "request"}
@@ -119,7 +124,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       get repository_path(repository)
 
       members = NearDuplicateCensus.stored_block_for(repository)["clusters"].sole["members"]
-      rows = panel.all("[data-near-duplicate-cluster] > ul > li")
+      rows = panel.all("[data-near-duplicate-cluster] [data-near-duplicate-layer-group] > ul > li")
       expect(rows.size).to eq(members.size)
       members.each do |member|
         row = rows.find { |r| r.text(normalize_ws: true).include?("#{member['file_path']}:#{member['line_number']}") }
@@ -188,7 +193,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
 
       get repository_path(repository)
 
-      href = repository_path(repository, commit_sha: weighed_sha, anchor: "overview")
+      href = repository_path(repository, commit_sha: weighed_sha, anchor: "summary")
       link = stamp.find("a")
       expect(link.text).to eq(weighed_sha.first(7))
       expect(link[:href]).to eq(href)
@@ -224,6 +229,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     # @intent: {"entity": "NearDuplicateCensus", "action": "state a deleted weighed run", "behavior": "when the weighed run row was deleted the stamp has no link and no numeral and says the run has since been deleted", "layer": "request"}
     it "says in words that the weighed run is gone, with no link and no numeral" do
       ingest(repository, pair_specs, commit_sha: weighed_sha)
+      record_and_resolve(repository, pair_specs, commit_sha: latest_sha)
       run_id = census.weighed_run_id
       TestRun.where(id: run_id).destroy_all
 
@@ -325,7 +331,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       get repository_path(repository)
 
       members = cluster["members"]
-      rows = panel.all("[data-near-duplicate-cluster] > ul > li")
+      rows = panel.all("[data-near-duplicate-cluster] [data-near-duplicate-layer-group] > ul > li")
       expect(rows.size).to eq(members.size)
       members.each do |member|
         href = repository.github_blob_url(member["file_path"], member["line_number"], weighed_sha)
@@ -369,7 +375,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       get repository_path(repository)
 
       expect(response).to have_http_status(:ok)
-      rows = panel.all("[data-near-duplicate-cluster] > ul > li")
+      rows = panel.all("[data-near-duplicate-cluster] [data-near-duplicate-layer-group] > ul > li")
       expect(rows.size).to eq(cluster["members"].size)
       expect(rows.sum { |row| row.all("a").size }).to eq(0)
       cluster["members"].each do |member|
@@ -384,7 +390,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       get repository_path(repository)
 
       expect(response).to have_http_status(:ok)
-      expect(panel.all("[data-near-duplicate-cluster] > ul > li").sum { |row| row.all("a").size }).to eq(0)
+      expect(panel.all("[data-near-duplicate-cluster] [data-near-duplicate-layer-group] > ul > li").sum { |row| row.all("a").size }).to eq(0)
       expect(panel).to have_text(expired)
     end
 
@@ -598,7 +604,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       get repository_path(repository)
 
       members = NearDuplicateCensus.stored_block_for(repository)["clusters"].sole["members"]
-      rows = panel.all("[data-near-duplicate-cluster] > ul > li")
+      rows = panel.all("[data-near-duplicate-cluster] [data-near-duplicate-layer-group] > ul > li")
       expect(members.map { |m| m["total_seconds"] }).to all(be_nil)
       expect(rows.size).to eq(members.size)
       rows.each do |row|
@@ -611,6 +617,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
   describe "the four states" do
     # @intent: {"entity": "NearDuplicateCensus", "action": "render no stored row", "behavior": "a repository with no stored census renders the No census yet state with no numeral and no cluster list", "layer": "request"}
     it "(a) no stored row: says no census yet and prints no numeral" do
+      record_and_resolve(repository, pair_specs)
       expect(NearDuplicateCensus.find_by(repository_id: repository.id)).to be_nil
 
       get repository_path(repository)
@@ -624,6 +631,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
 
     # @intent: {"entity": "NearDuplicateCensus", "action": "render a marker-only row", "behavior": "a row created by the refresh marker whose payload was never computed is served as no census, not as zeros", "layer": "request"}
     it "(a) a never-computed marker row reads as no census, never as zeros" do
+      record_and_resolve(repository, pair_specs)
       NearDuplicateCensus.create!(repository_id: repository.id, refresh_wanted_at: Time.current)
 
       get repository_path(repository)
@@ -661,7 +669,7 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
       clear = panel.find("#near-duplicate-clusters-clear")
       expect(clear.text(normalize_ws: true)).to include("Nothing reads alike at this floor")
       expect(clear.text(normalize_ws: true)).to include("2 tests")
-      expect(panel).to have_css("#near-duplicate-clusters-basis")
+      expect(panel).to have_css("#near-duplicate-clusters-stamp")
       expect(panel).to have_no_css("[data-near-duplicate-cluster]")
     end
 
@@ -859,12 +867,15 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
         { "layer" => nil, "members" => cluster["members"] }
       ])
 
-      text = panel.find("[data-near-duplicate-cluster]").text(normalize_ws: true)
-      expect(text).to include(location(expired_member), location(outright_member))
-      expect(text).not_to match(/declared|no layer|\b(unit|integration|request|system)\b/i)
+      row = panel.find("[data-near-duplicate-cluster]")
+      expect(row.text(normalize_ws: true)).to include(location(expired_member), location(outright_member))
+      # The console's table has a Layers column, so a group that declared nothing says exactly that —
+      # "none declared" — and names no layer and carries no layer provenance sentence.
+      expect(row.all("td")[4].text(normalize_ws: true)).to eq("none declared")
+      expect(row.text(normalize_ws: true)).not_to match(/\b(unit|integration|request|system)\b/i)
       expect(panel).to have_no_css("#near-duplicate-clusters-layer-source")
-      expect(panel).to have_no_css("[data-near-duplicate-layer-group]")
-      expect(panel.text(normalize_ws: true)).not_to include("declared")
+      expect(panel.all("[data-near-duplicate-layer-group] p.rc-h")).to be_empty
+      expect(panel.text(normalize_ws: true)).not_to include("as declared by each test")
     end
   end
 end

@@ -578,20 +578,22 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       expect(response).to have_http_status(:ok)
       expect(Capybara.string(response.body)).to have_no_css("#suite-trajectory")
-      expect(Capybara.string(response.body).find("#summary"))
+      expect(Capybara.string(response.body).find("#getting-started"))
         .to have_text("No CI run has reported yet", normalize_ws: true)
     end
   end
 
   # == Choosing the branch (`?branch=`)
   #
-  # The state this whole surface was dark for, and which NO example above can observe: the newest
-  # run in the repository is a feature branch's FIRST run, so the panel re-anchors to it and has
-  # one point to draw, while `main` holds a month of comparable history in the same table. The two
-  # mixed-branch examples above cannot reach it — "never reaches across branches" puts its
-  # `feature/x` run BETWEEN two `main` runs, and the sharded budget example puts its feature run
-  # OLDER than the anchor. Both leave `main` as the anchor, which is the case that was never broken.
-  describe "choosing the branch the panel is drawn on" do
+  # The state this whole surface was dark for: the newest run in the repository is a feature branch's
+  # FIRST run, so the history has one point to draw while `main` holds a month of comparable history
+  # in the same table. `?branch=` is how a reader asks for that history back.
+  #
+  # In the console `?branch=` is the ONE filter that governs the whole page — the verdict, every
+  # section and the history chart all read the branch's newest run — so "which branch is being read"
+  # is asked of the filter bar (`#suite-trajectory-branches`), not of any one panel. The filter bar's
+  # menu names EVERY branch SpecGuard loaded, most history first, in a native details/summary.
+  describe "choosing the branch the page is read on" do
     # Newest run in the repository is `feature/x`'s first and only one; `main` has two comparable
     # runs behind it. On a busy repository whose CI reports on every PR, this is the normal state.
     def repository_anchored_on_a_feature_branch
@@ -602,39 +604,23 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       repository
     end
 
-    def branch_choices
-      trajectory_panel.all("#suite-trajectory-branches nav a").map(&:text)
-    end
+    def filter_doc = Capybara.string(response.body)
 
-    # The OVERFLOW control, and deliberately a different accessor from `branch_choices`.
-    #
-    # That one is scoped to `nav a` — the eight-item primary row — so it would go on reporting eight
-    # names however many the menu reached, and every criterion about reaching PAST the row asserted
-    # through it would be green by construction. The two selectors are disjoint on purpose: the menu
-    # is rendered outside the `<nav>`, which is also why the row's size, order and `30+` wording are
-    # unchanged by this control existing.
-    #
-    # `visible: :all` because the control is a CLOSED `<details>` and Capybara is right to call its
-    # contents hidden — that is the disclosure working, not the links missing. What these accessors
-    # assert is that the names are in the document the server sent, which is what makes them
-    # reachable from the keyboard and with no JavaScript at all.
-    def branch_menu_links
-      trajectory_panel.all("#suite-trajectory-branch-menu a", visible: :all)
-    end
+    def branch_menu = filter_doc.find("#suite-trajectory-branch-menu", visible: :all)
 
-    def branch_menu_choices
-      branch_menu_links.map(&:text)
-    end
+    # `visible: :all` because the menu is a CLOSED `<details>`; what these assert is that the names are
+    # in the document the server sent, which is what makes them reachable from the keyboard and with
+    # no JavaScript at all.
+    def branch_menu_links = branch_menu.all("a", visible: :all)
 
-    # The branch each menu link actually asks for, read off the rendered `href` rather than assumed
-    # from its label — an href carrying the wrong name, or no `branch=` at all, is the failure this
-    # is here to catch and a label assertion cannot see it.
+    def branch_choices = branch_menu_links.map { |link| link.text(:all).squish }
+
+    def current_choices = branch_menu.all("a[aria-current='page']", visible: :all).map { |link| link.text(:all).squish }
+
     def branch_menu_targets
       branch_menu_links.map { |link| Rack::Utils.parse_query(URI.parse(link[:href]).query)["branch"] }
     end
 
-    # `main` plus ten feature branches: three more than the row can carry, which is the fixture
-    # shape the cut-and-say-so example above already pins the row's half of.
     def repository_with_eleven_branches
       repository = create_repository(user: @user)
       run(repository, "trunkaaaaaa", total: 1_000, at: 30.days.ago)
@@ -653,7 +639,6 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       get repository_path(repository)
 
-      # Today's behaviour, unchanged: the panel is dark because the newest run is a first run.
       expect(trajectory_panel).to have_no_css("svg", visible: :all)
       expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
 
@@ -666,50 +651,44 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(basis_line).to have_text("Drawn through 2 of the last 2 runs on main", normalize_ws: true)
     end
 
-    # The selected branch anchors THIS panel and nothing else. `@latest_test_run` is untouched, so
-    # the Overview's suite size and the Recent-runs panel go on naming the repository's latest run —
-    # and a reader can never end up with a headline figure about one run above a chart about another.
-    # @intent: {"entity": "Repository", "action": "move panel only", "behavior": "asking ?branch=main leaves the overview reading Measured on feat111 (feature/x) and the recent-runs panel naming feat111, so only the trajectory re-anchors", "layer": "request"}
-    it "moves this panel only, leaving the rest of the page naming the latest run" do
+    # The console's reading of a branch is page-wide, where the old panel's was local: choosing `main`
+    # re-anchors the verdict and the Runs section on main's newest run too, so a headline figure can
+    # never sit over a chart about a different branch. The Runs section still lists every branch.
+    # @intent: {"entity": "Repository", "action": "move the whole page", "behavior": "asking ?branch=main makes the verdict card read main's newest run (trunkbb) rather than the repository's newest run (feat111), and the Runs section still lists the feature branch's run", "layer": "request"}
+    it "reads the whole page on the branch it was asked for" do
       repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository)
+      expect(filter_doc.find("#summary")).to have_text("Measured", normalize_ws: true)
+      expect(filter_doc.find(".rc-run")).to have_text("feat111", normalize_ws: true)
 
       get repository_path(repository, branch: "main")
 
-      page = Capybara.string(response.body)
-      expect(page.find("#summary")).to have_text("Measured on feat111 (feature/x)", normalize_ws: true)
-      expect(page.find("#recent-runs")).to have_text("feat111", normalize_ws: true)
+      expect(filter_doc.find(".rc-run")).to have_text("trunkbb", normalize_ws: true)
+      expect(filter_doc.find(".rc-run")).to have_no_text("feat111", normalize_ws: true)
+      expect(filter_doc.find("#recent-runs")).to have_text("feat111", normalize_ws: true)
     end
 
-    # Criterion 2: a dark panel discloses that another branch has history. Without this the reader
-    # of a dark panel has no way to learn that `main` is one click away — nothing else on the page
-    # mentions a branch they are not already looking at.
-    # @intent: {"entity": "Repository", "action": "list branch run counts", "behavior": "the selector reads main (2 runs) then feature/x (1 run), most history first, with the branch being drawn marked aria-current rather than moved to the front", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "list branch run counts", "behavior": "the selector reads main (2 runs) then feature/x (1 run), most history first, with the branch being drawn marked aria-current", "layer": "request"}
     it "names the branches that have runs and how many each has" do
       repository = repository_anchored_on_a_feature_branch
 
       get repository_path(repository)
 
-      # Most history first, and the branch being drawn is the one marked current — not the one
-      # moved to the front, so the list does not reshuffle as the reader clicks along it.
       expect(branch_choices).to eq(["main (2 runs)", "feature/x (1 run)"])
-      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
-        .to eq(["feature/x (1 run)"])
+      expect(current_choices).to eq(["feature/x (1 run)"])
     end
 
     # @intent: {"entity": "Repository", "action": "mark drawn branch current", "behavior": "asking ?branch=main marks main (2 runs) as the sole aria-current entry of the selector", "layer": "request"}
-    it "marks the branch it is drawing as the current one" do
+    it "marks the branch it is reading as the current one" do
       repository = repository_anchored_on_a_feature_branch
 
       get repository_path(repository, branch: "main")
 
-      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
-        .to eq(["main (2 runs)"])
+      expect(current_choices).to eq(["main (2 runs)"])
     end
 
-    # A count that STOPPED is not a count that finished. The query walks one row past the window and
-    # no further, so a trunk with thousands of runs is never counted to answer a question the chart
-    # does not ask — and the label says "30+" rather than publishing the row it stopped at.
-    # @intent: {"entity": "Repository", "action": "word over-window count", "behavior": "a branch holding more runs than the window is labelled main (30+ runs) with a basis explaining that means the branch holds more history than the chart reaches", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "word over-window count", "behavior": "a branch holding more runs than the window is labelled main (30+ runs) with a basis explaining that means the branch holds more history than the window reaches", "layer": "request"}
     it "words a history longer than the window it counts as 30+" do
       repository = create_repository(user: @user)
       (Repository::TRAJECTORY_LIMIT + 1).times do |i|
@@ -719,214 +698,60 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       get repository_path(repository)
 
       expect(branch_choices).to eq(["main (30+ runs)"])
-      expect(trajectory_panel.find("#suite-trajectory-branches-basis"))
-        .to have_text("means the branch holds more history than the chart reaches", normalize_ws: true)
+      expect(branch_menu.find("#suite-trajectory-branches-basis", visible: :all))
+        .to have_text("means the branch holds more history than the window reaches", normalize_ws: true)
     end
 
-    # A truncated list of branches with nothing said about it reads as the complete set. The ones
-    # shown are the ones with the most history, so `main` survives a cut that an alphabetical list
-    # would have dropped it out of.
-    # @intent: {"entity": "Repository", "action": "cut and disclose branches", "behavior": "eleven branches render exactly the helper's row size led by main (2 runs) and feature/9 (1 run), and the basis says 3 further branches have runs and are not in the row above while the branch menu names all 11", "layer": "request"}
-    it "lists the branches with the most history and says how many it left out" do
-      repository = create_repository(user: @user)
-      run(repository, "trunkaaaaaa", total: 1_000, at: 30.days.ago)
-      run(repository, "trunkbbbbbb", total: 1_047, at: 29.days.ago)
-      10.times { |i| run(repository, "feat#{i}0000000", branch: "feature/#{i}", total: 10, at: (20 - i).days.ago) }
-
-      get repository_path(repository)
-
-      expect(branch_choices.size).to eq(RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES)
-      # `main` has twice the history of any feature branch and leads on that; the feature branches
-      # follow newest-pushed first, which is where the cut falls.
-      expect(branch_choices.first(2)).to eq(["main (2 runs)", "feature/9 (1 run)"])
-      expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
-        "3 further branches have runs and are not in the row above. The branch menu names all 11.",
-        normalize_ws: true
-      )
-    end
-
-    # The one case the display order bends for. A reader can arrive by URL on a branch holding a
-    # single run with a dozen busier branches ahead of it — and a selector that cannot show the
-    # branch it is drawing is a selector that has lost the reader.
-    # @intent: {"entity": "Repository", "action": "pin drawn branch in row", "behavior": "arriving on feature/0, which the cut would drop, still lists feature/0 (1 run) first in the row, marks it aria-current, shows the 1-run-so-far sentence, and the basis says the branch being drawn is listed first, then the branches with the most history", "layer": "request"}
-    it "shows the branch it is drawing even when the cut would have left it out" do
-      repository = create_repository(user: @user)
-      run(repository, "trunkaaaaaa", total: 1_000, at: 30.days.ago)
-      run(repository, "trunkbbbbbb", total: 1_047, at: 29.days.ago)
-      10.times { |i| run(repository, "feat#{i}0000000", branch: "feature/#{i}", total: 10, at: (20 - i).days.ago) }
-
-      # The thinnest, least recently pushed branch there is: last in the order, well past the cut.
-      get repository_path(repository, branch: "feature/0")
-
-      expect(branch_choices.size).to eq(RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES)
-      expect(branch_choices.first).to eq("feature/0 (1 run)")
-      expect(branch_choices).to include("main (2 runs)")
-      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
-        .to eq(["feature/0 (1 run)"])
-      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/0 so far", normalize_ws: true)
-      # …and the sentence describing the order says so, rather than claiming a most-history-first
-      # list the reader can see the first entry is not the head of.
-      expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
-        "The branch being drawn is listed first, then the branches with the most history",
-        normalize_ws: true
-      )
-    end
-
-    # == Reaching the branches the row does not carry
-    #
-    # The row is cut to eight and the page said so — a COUNT, and nothing that turns it into names.
-    # `?branch=` is a mechanism nothing rendered on this page mentioned, so the only route to a
-    # branch behind the cut was to type the URL, and a reader cannot type a name they were never
-    # shown. Every step past the click already shipped: the controller honours `?branch=`, the panel
-    # re-anchors, and `trajectory_shown_branches` pulls the asked-for branch into the row and marks
-    # it current. What was missing was the first step.
-
-    # Criterion 1. Eleven branches are loaded out of one query; before this, three of them existed
-    # on the page only as the number 3.
-    #
-    # Asserted through `branch_menu_*` and never `branch_choices` — see that accessor's note.
-    # @intent: {"entity": "Repository", "action": "name every loaded branch", "behavior": "the overflow menu offers all eleven branches as links whose hrefs each carry branch= for that branch, including feature/0, feature/1 and feature/2 that the eight-item row leaves out", "layer": "request"}
-    it "names every branch it loaded, not only the eight the row lists" do
+    # @intent: {"entity": "Repository", "action": "name every loaded branch", "behavior": "the filter bar's menu offers all eleven branches as links whose hrefs each carry branch= for that branch, led by the one with the most history", "layer": "request"}
+    it "names every branch it loaded, never a cut of them" do
       repository = repository_with_eleven_branches
 
       get repository_path(repository)
 
-      # The row is untouched: still eight, and still the eight with the most history.
-      expect(branch_choices.size).to eq(RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES)
-
-      expect(branch_menu_choices).to match_array(
-        ["main (2 runs)", *0.upto(9).map { |i| "feature/#{i} (1 run)" }]
-      )
-      # Every one of them is a link that ASKS for that branch, not merely a name printed on a page.
+      expect(branch_choices).to match_array(["main (2 runs)", *0.upto(9).map { |i| "feature/#{i} (1 run)" }])
+      expect(branch_choices.first).to eq("main (2 runs)")
       expect(branch_menu_links.map { |link| link[:href] }).to all(include("branch="))
       expect(branch_menu_targets).to match_array(every_branch_in_the_eleven)
-      # The three the row left out are the whole point, and they are the ones an assertion over the
-      # union of both controls would not notice going missing.
-      expect(branch_menu_choices - branch_choices).to contain_exactly(
-        "feature/0 (1 run)", "feature/1 (1 run)", "feature/2 (1 run)"
-      )
     end
 
-    # Criterion 2. The URL is taken off the page rather than written here: a spec that composes
-    # `repository_path(repository, branch: "feature/0")` itself would pass against the very page
-    # this ticket describes, where the reader has no way to compose it.
-    # @intent: {"entity": "Repository", "action": "follow menu link", "behavior": "GETting the href the menu itself rendered for feature/0 returns ok, re-anchors the panel to that branch's 1-run sentence, and marks feature/0 (1 run) aria-current in the row", "layer": "request"}
-    it "draws a branch from behind the cut by following a link the page itself rendered" do
+    # @intent: {"entity": "Repository", "action": "follow menu link", "behavior": "GETting the href the menu itself rendered for feature/0 returns ok, re-anchors the page to that branch's 1-run state and marks feature/0 (1 run) current", "layer": "request"}
+    it "reads a branch from behind the busiest ones by following a link the page itself rendered" do
       repository = repository_with_eleven_branches
 
       get repository_path(repository)
 
-      # Thinnest and least recently pushed: last in the order, well past the cut.
-      expect(branch_choices).not_to include("feature/0 (1 run)")
-
-      href = trajectory_panel.find("#suite-trajectory-branch-menu a", exact_text: "feature/0 (1 run)",
-                                    visible: :all)[:href]
+      href = branch_menu_links.find { |link| link.text(:all).squish == "feature/0 (1 run)" }[:href]
       get href
 
       expect(response).to have_http_status(:ok)
       expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/0 so far", normalize_ws: true)
-      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
-        .to eq(["feature/0 (1 run)"])
+      expect(current_choices).to eq(["feature/0 (1 run)"])
     end
 
-    # Criterion 7. The disclosure is `details`/`summary`, so it opens from the keyboard and closes on
-    # Escape with no JavaScript — and its links are in the document whether it is open or not, which
-    # is what makes the criterion-1 assertion above a statement about the page rather than about a
-    # widget's default state.
-    # @intent: {"entity": "Repository", "action": "open menu without script", "behavior": "the branch menu is a details/summary disclosure summarised All 11 branches whose eleven links are present in the server-sent document with no JavaScript", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "open menu without script", "behavior": "the branch menu is a details/summary disclosure whose eleven links are present in the document for a reader with no script", "layer": "request"}
     it "opens from the keyboard, with no script and nothing hidden from a non-visual reader" do
       repository = repository_with_eleven_branches
 
       get repository_path(repository)
 
-      menu = trajectory_panel.find("#suite-trajectory-branch-menu")
-      expect(menu).to have_css("details > summary")
-      expect(menu.find("summary").text.squish).to eq("All 11 branches")
-      expect(menu.all("details a", visible: :all).size).to eq(11)
+      expect(branch_menu.native.name).to eq("details")
+      expect(branch_menu).to have_css("summary", visible: :all)
+      expect(branch_menu.all("a", visible: :all).size).to eq(11)
     end
 
-    # Criterion 7's other half. The drawn branch is named TWICE on this page — pulled into the row
-    # by `trajectory_shown_branches` and listed in the menu, which omits nothing — so both have to
-    # say it is the current one. A menu that marked none of its entries would tell a screen reader
-    # the opposite of what the row says about the same branch.
-    # @intent: {"entity": "Repository", "action": "mark current twice", "behavior": "asking ?branch=feature/0 marks feature/0 (1 run) aria-current in both the row and the menu, and those two are the only aria-current entries in the whole selector", "layer": "request"}
-    it "marks the branch it is drawing as current in the menu as well as in the row" do
+    # @intent: {"entity": "Repository", "action": "keep the drawn branch findable", "behavior": "arriving on a branch holding one run behind ten busier ones names that branch current in the menu and says it has 1 run so far", "layer": "request"}
+    it "shows the branch it is reading even when ten busier ones sit ahead of it" do
       repository = repository_with_eleven_branches
 
       get repository_path(repository, branch: "feature/0")
 
-      expect(trajectory_panel.all("#suite-trajectory-branch-menu a[aria-current='page']", visible: :all).map(&:text))
-        .to eq(["feature/0 (1 run)"])
-      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
-        .to eq(["feature/0 (1 run)"])
-      # Twice, and only the two: one control marking a branch the other does not is a reader being
-      # told two different things about which branch they are looking at.
-      expect(trajectory_panel.all("#suite-trajectory-branches [aria-current='page']", visible: :all).map(&:text))
-        .to eq(["feature/0 (1 run)", "feature/0 (1 run)"])
+      expect(current_choices).to eq(["feature/0 (1 run)"])
+      expect(branch_choices).to include("main (2 runs)")
+      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/0 so far", normalize_ws: true)
     end
 
-    # The menu and the hidden-branches sentence are two halves of one disclosure — what the row left
-    # out, and where it is — so neither may appear without the other. A menu on a page whose row
-    # already names every branch is a control with nothing behind it, and the sentence with no menu
-    # under it is the state this ticket exists to end.
-    # @intent: {"entity": "Repository", "action": "omit menu when row complete", "behavior": "with only main and feature/x holding runs the page renders no #suite-trajectory-branch-menu and the basis never says further branch", "layer": "request"}
-    it "renders no menu on a page whose row already names every branch" do
-      repository = repository_anchored_on_a_feature_branch
-
-      get repository_path(repository)
-
-      expect(branch_choices).to match_array(["main (2 runs)", "feature/x (1 run)"])
-      expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-menu")
-      expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_no_text("further branch")
-    end
-
-    # Criterion 2 in the shape the ticket was written for, and the composed case nothing reached
-    # before: the newest run is a feature branch's FIRST, `main` holds the history, and there are
-    # more branches than the selector shows. `:163` puts its `feature/x` run BETWEEN two `main` runs
-    # and `:565` puts it OLDER than the anchor, so both keep `main` as the anchor and neither can
-    # observe this.
-    #
-    # The walk that finds the branches is alphabetical, so `main` sorts behind every `feature/*`
-    # here — a walk bounded near the display size would offer eight unrelated one-run branches on
-    # the one page whose reason for existing is that `main` has the runs, and mark none of them
-    # current. A dark panel that lists only branches with nothing behind them tells the reader the
-    # opposite of the thing it is here to disclose. Sixty of them, deliberately: that is where a
-    # bound set for a display list rather than for branch cardinality drops the trunk.
-    # @intent: {"entity": "Repository", "action": "name trunk on dark panel", "behavior": "with sixty feature branches and a first-run feature/999 newest the dark panel still lists main (5 runs) first in the row and marks feature/999 current, and ?branch=main then draws 5 of the last 5 runs with main marked current", "layer": "request"}
-    it "names the branch that holds the history, on a dark panel drawn on another one" do
-      repository = create_repository(user: @user)
-      5.times { |i| run(repository, "trunk#{i}000000", total: 1_000 + i, at: (40 - i).days.ago) }
-      60.times do |i|
-        run(repository, "old#{i.to_s.rjust(8, "0")}", branch: "feature/#{i.to_s.rjust(3, "0")}",
-                        total: 10, at: (30 - (i * 0.4)).days.ago)
-      end
-      run(repository, "newest000000", branch: "feature/999", total: 12, at: 1.minute.ago)
-
-      get repository_path(repository)
-
-      expect(trajectory_panel).to have_no_css("svg", visible: :all)
-      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/999 so far", normalize_ws: true)
-      expect(branch_choices.first).to eq("main (5 runs)")
-      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
-        .to eq(["feature/999 (1 run)"])
-
-      # …and the way out of it. The chart draws `main`, and the selector says that is what it drew.
-      get repository_path(repository, branch: "main")
-
-      expect(basis_line).to have_text("Drawn through 5 of the last 5 runs on main", normalize_ws: true)
-      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
-        .to eq(["main (5 runs)"])
-    end
-
-    # What the panel may still claim once the walk STOPPED rather than finished. The ordering is a
-    # property of the branches SpecGuard walked and the walk is alphabetical, so past its bound the
-    # head of this list is the busiest of a prefix and not of the repository — and a sentence
-    # promising otherwise tells a reader who cannot find `main` that `main` has no history.
-    #
-    # The branch being drawn is in the list whatever the walk did: it is pinned, not walked to.
-    # Here `main` sorts behind every `feature/*`, so the walk never reaches it.
-    # @intent: {"entity": "Repository", "action": "bound ordering claim", "behavior": "with BRANCH_HISTORY_LIMIT stubbed to 10 the basis says At least 3 further branches have runs, that the menu names these 11 and cannot offer one the walk never reached, and that SpecGuard stops after walking 10 branches \u2014 while the menu summary reads 11 branches, not All 11", "layer": "request"}
-    it "stops claiming an ordering over every branch once the walk was cut, and still offers the one it drew" do
+    # @intent: {"entity": "Repository", "action": "bound ordering claim", "behavior": "with BRANCH_HISTORY_LIMIT stubbed to 10 the menu says the page is an ordering over the branches SpecGuard walked and not over every branch, and still offers the branch being read", "layer": "request"}
+    it "stops claiming an ordering over every branch once the walk was cut, and still offers the one it read" do
       stub_const("Repository::BRANCH_HISTORY_LIMIT", 10)
       repository = create_repository(user: @user)
       2.times { |i| run(repository, "trunk#{i}000000", total: 1_000 + i, at: (40 - i).days.ago) }
@@ -938,33 +763,14 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       get repository_path(repository, branch: "main")
 
       expect(branch_choices.first).to eq("main (2 runs)")
-      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
-        .to eq(["main (2 runs)"])
-      # NOTE: the sentence says "these 11" and NOT "the 11 SpecGuard walked to". The walk reached
-      # TEN here — `BRANCH_HISTORY_LIMIT` is stubbed to 10 and the walk is alphabetical, so it gets
-      # `feature/000`…`feature/009` and stops. `main` is the eleventh and it is in this list because
-      # it was PINNED, outside `:branch_limit` (the `candidate` CTE of `BRANCH_HISTORY_SQL`, whose
-      # `SELECT pin FROM unnest(ARRAY[:pinned_branches]…)` arm sits outside the subquery carrying
-      # the `LIMIT :branch_limit`) — i.e. it is here precisely because the walk never reached it,
-      # which is the same fact `trajectory_walk_cut?` needs `>=` for. A provenance claim over this
-      # count is off by the pins in exactly the branch written to not overclaim; the bare count is
-      # true however a row arrived. Do not reach for "walked to" when rewording this again.
-      expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
-        "At least 3 further branches have runs and are not in the row above. The branch menu names " \
-        "these 11, and cannot offer one the walk never reached. The branches with " \
-        "the most history are listed first. SpecGuard stops after walking 10 branches, so that is an " \
-        "ordering over the ones it walked and not over every branch here.", normalize_ws: true
+      expect(current_choices).to eq(["main (2 runs)"])
+      expect(branch_menu.find("#suite-trajectory-branches-basis", visible: :all)).to have_text(
+        "SpecGuard stops after walking 10 branches, so this is an ordering over the ones it walked " \
+        "and not over every branch here.", normalize_ws: true
       )
-      # The menu's own label carries the same bound. "All 11 branches" over a walk that STOPPED
-      # would be the completeness claim the sentence above is written to withhold — said on the
-      # control itself, where a reader deciding whether to open it will read it first.
-      expect(trajectory_panel.find("#suite-trajectory-branch-menu summary").text.squish).to eq("11 branches")
     end
 
-    # Criterion 3, and the reason the fallback is disclosed rather than silent: a deleted branch, a
-    # typo and a stale bookmark are ordinary ways to arrive here. The page renders what it would
-    # have rendered anyway — and says which branch it drew instead of the one that was asked for.
-    # @intent: {"entity": "Repository", "action": "fall back with notice", "behavior": "asking for feature/deleted returns ok with the panel still dark on feature/x's 1-run sentence and a notice reading SpecGuard has no runs on feature/deleted, so this panel is drawn on feature/x", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "fall back with notice", "behavior": "asking for feature/deleted returns ok with the page still reading feature/x's 1-run state and a notice naming the branch asked for and the one read instead", "layer": "request"}
     it "falls back to the default anchor for a branch it has no runs on, and says so" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -973,125 +779,57 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(response).to have_http_status(:ok)
       expect(trajectory_panel).to have_no_css("svg", visible: :all)
       expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
-      expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
-        "SpecGuard has no runs on feature/deleted, so this panel is drawn on feature/x", normalize_ws: true
+      expect(filter_doc.find("#suite-trajectory-branch-fallback")).to have_text(
+        "SpecGuard has no runs on feature/deleted, so this page is read on feature/x", normalize_ws: true
       )
     end
 
-    # ⭐ The echoed branch name is the one unvalidated value this panel prints back, and it reaches
-    # the reader escaped EXACTLY ONCE. This was a live, user-visible defect in
-    # `trajectory_branch_fallback_notice` for the whole of its life, and it survived every reading
-    # of that helper for one reason: NO EXAMPLE ASSERTED THE PROPERTY. `truncate` defaults to
-    # escaping its input and returning a `SafeBuffer`; interpolating that into a plain String yields
-    # a String that is not itself safe but already holds escaped text, and ERB escapes it a second
-    # time — so `?branch=a%26b` printed `a&amp;b` at the reader.
-    #
-    # Every other example in this describe asks for `feature/deleted` or `feature/gone`, branch
-    # names with nothing escapable in them, so they pass identically with `escape: false` present or
-    # removed. That is exactly the state that let the bug ship, and removing the option now reads as
-    # tidying away a redundant argument. This example is what makes it not redundant.
-    #
-    # Both halves asserted, because the fix MOVED an escape rather than adding one: the name renders
-    # as the reader typed it AND the raw body carries no live markup. The twin over the sha echo on
-    # the same page is `spec/requests/repository_run_anchor_spec.rb`, "echoes an unvalidated sha
-    # escaped exactly once, and never as markup" — the two idioms are identical and are pinned
-    # identically.
-    # @intent: {"entity": "Repository", "action": "echo branch escaped once", "behavior": "asking ?branch=a&b<script>x</script> returns ok, prints the name back exactly as typed in the fallback notice, and the raw response body contains no live script markup", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "echo branch escaped once", "behavior": "asking ?branch=a&b<script>x</script> returns ok, prints the name back exactly as typed in the fallback notice, and never emits it as markup", "layer": "request"}
     it "echoes an unvalidated branch name escaped exactly once, and never as markup" do
       repository = repository_anchored_on_a_feature_branch
 
       get repository_path(repository, branch: "a&b<script>x</script>")
 
       expect(response).to have_http_status(:ok)
-      expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
-        "SpecGuard has no runs on a&b<script>x</script>, so this panel is drawn on feature/x",
+      expect(filter_doc.find("#suite-trajectory-branch-fallback")).to have_text(
+        "SpecGuard has no runs on a&b<script>x</script>, so this page is read on feature/x",
         normalize_ws: true
       )
       expect(response.body).not_to include("<script>x</script>")
     end
 
-    # @intent: {"entity": "Repository", "action": "treat blank branch as none", "behavior": "asking ?branch= leaves the panel anchored on feature/x with its 1-run sentence and renders no #suite-trajectory-branch-fallback notice", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "treat blank branch as none", "behavior": "asking ?branch= leaves the page on feature/x with its 1-run sentence and renders no fallback notice", "layer": "request"}
     it "treats a blank branch as no ask at all, and says nothing about a fallback that did not happen" do
       repository = repository_anchored_on_a_feature_branch
 
       get repository_path(repository, branch: "")
 
       expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
-      expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-fallback")
+      expect(filter_doc).to have_no_css("#suite-trajectory-branch-fallback")
     end
 
-    # @intent: {"entity": "Repository", "action": "omit satisfied fallback notice", "behavior": "asking for main when the panel is drawn on main renders no #suite-trajectory-branch-fallback element", "layer": "request"}
-    it "says nothing about a fallback when the branch asked for is the one it drew" do
+    # @intent: {"entity": "Repository", "action": "omit satisfied fallback notice", "behavior": "asking for main when the page is read on main renders no fallback notice", "layer": "request"}
+    it "says nothing about a fallback when the branch asked for is the one it read" do
       repository = repository_anchored_on_a_feature_branch
 
       get repository_path(repository, branch: "main")
 
-      expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-fallback")
+      expect(filter_doc).to have_no_css("#suite-trajectory-branch-fallback")
     end
 
-    # @intent: {"entity": "Repository", "action": "omit satisfied fallback notice", "behavior": "asking for main when the panel is drawn on main renders no #suite-trajectory-branch-fallback element", "layer": "request"}
-    it "says nothing about a fallback when the branch asked for is the one it drew" do
-      repository = repository_anchored_on_a_feature_branch
-
-      get repository_path(repository, branch: "main")
-
-      expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-fallback")
-    end
-
-    # The branch controls' own carry rule. `trajectory_branch_item` is the ONE constructor behind
-    # both the chip row and the "All branches" menu, and the row-vs-menu agreement its comment
-    # claims is a property nothing asserted until now. Two things are pinned here on the overflow
-    # fixture, where both controls render the same branches:
-    #
-    #   - row and menu agree: for a branch visible in both, the SAME href — a chip and a menu entry
-    #     naming one branch must be one link offered twice, not two links that can drift.
-    #   - a branch gesture keeps the reader's open drill-downs: the asks ride through the branch
-    #     link (`drill_down_path`'s carry-by-default), and the href lands on the panel that owns
-    #     the gesture (`#suite-trajectory`), because switching series is not a request to close an
-    #     open file, area, description, run anchor or flaky test.
-    #
-    # The ask values need no matching fixture rows: `drill_down_path` reads the RAW request ivars,
-    # so the assertion is about what the link carries, not about what the panels render.
-    # @intent: {"entity": "Repository", "action": "mirror branch href", "behavior": "the row chip and the menu entry for main (2 runs) carry the identical href, and that href ends on the #suite-trajectory anchor", "layer": "request"}
-    it "offers the same branch at the same href from the row and from the menu" do
+    # @intent: {"entity": "Repository", "action": "carry drill-down asks", "behavior": "a menu link for feature/3 keeps every open drill-down ask in its query \u2014 commit_sha excepted, since a branch gesture re-reads the branch's newest run \u2014 and clears the open drill-ins that belong to the branch it left", "layer": "request"}
+    it "clears the open drill-ins and the run anchor on a branch gesture, and keeps the other global asks" do
       repository = repository_with_eleven_branches
 
-      get repository_path(repository)
+      get repository_path(repository, branch: "main", window: 20, layer: "unit")
 
-      row_href = trajectory_panel.find("#suite-trajectory-branches nav a",
-                                       text: "main (2 runs)", match: :prefer_exact)[:href]
-      menu_href = trajectory_panel.find("#suite-trajectory-branch-menu a",
-                                        text: "main (2 runs)", match: :prefer_exact,
-                                        visible: :all)[:href]
-
-      expect(row_href).to eq(menu_href)
-      expect(row_href).to end_with("#suite-trajectory")
-    end
-
-    # @intent: {"entity": "Repository", "action": "carry drill-down asks", "behavior": "a menu link for feature/3 keeps every open drill-down ask in its query \u2014 branch, commit_sha, spec_file, spec_directory, repeated_description, unstable_test and unstable_test_from \u2014 and lands on #suite-trajectory", "layer": "request"}
-    it "carries every open drill-down ask through a branch gesture" do
-      repository = repository_with_eleven_branches
-
-      get repository_path(repository, branch: "main", commit_sha: "feedfacecafe0001",
-                          spec_file: "spec/models/order_spec.rb", spec_directory: "spec/models",
-                          repeated_description: "settles the balance",
-                          unstable_test: "reconciles the ledger",
-                          unstable_test_from: "unstable-tests")
-
-      href = trajectory_panel.find("#suite-trajectory-branch-menu a",
-                                   text: "feature/3 (1 run)", match: :prefer_exact,
-                                   visible: :all)[:href]
-      query = href.split("#").first.split("?", 2).last
-      pairs = query.split("&")
+      href = branch_menu_links.find { |link| link.text(:all).squish == "feature/3 (1 run)" }[:href]
+      pairs = href.split("#").first.split("?", 2).last.split("&")
 
       expect(pairs).to include("branch=feature%2F3")
-      expect(pairs).to include("commit_sha=feedfacecafe0001")
-      expect(pairs).to include("spec_file=spec%2Fmodels%2Forder_spec.rb")
-      expect(pairs).to include("spec_directory=spec%2Fmodels")
-      expect(pairs).to include("repeated_description=settles+the+balance")
-      expect(pairs).to include("unstable_test=reconciles+the+ledger")
-      expect(pairs).to include("unstable_test_from=unstable-tests")
-      expect(href).to end_with("#suite-trajectory")
+      expect(pairs).to include("window=20")
+      expect(pairs).to include("layer=unit")
+      expect(pairs.grep(/\A(commit_sha|spec_file|spec_directory|repeated_description|unstable_test)=/)).to be_empty
     end
 
     # `?branch[]=main` and `?branch[x]=1` are a URL anyone can type, and neither is a branch name.
@@ -1100,13 +838,11 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     #
     # The shapes are listed ONCE, in `spec/support/shared_examples/malformed_branch_param.rb`, and
     # `GET /api/v1/repository` runs the same list against the same guard
-    # (`RequestedBranchParam#requested_branch`). This page pinned two of the three before that guard
-    # was shared; the third was never a live bug here, but the gap was the leading indicator that
-    # the two copies were being maintained apart.
+    # (`RequestedBranchParam#requested_branch`).
     #
-    # The assertion is the panel's own words rather than a bare 200, and its force comes from the
-    # example directly above: `?branch=main` IS honoured and renders no fallback, so a guard that
-    # simply threw the parameter away could not pass both.
+    # The assertion is the page's own words rather than a bare 200, and its force comes from the
+    # example above: `?branch=main` IS honoured and renders no fallback, so a guard that simply threw
+    # the parameter away could not pass both.
     describe "a branch parameter that is not a branch name" do
       def expect_branch_param_treated_as_no_ask(query)
         repository = repository_anchored_on_a_feature_branch
@@ -1120,15 +856,9 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       it_behaves_like "a surface that treats a malformed branch parameter as no ask"
     end
 
-    # The counterweight to the NUL half of the guard, and the pin that separates the real guard from
-    # a check done with the wrong escaping. The six literal characters backslash-u-0-0-0-0 —
-    # single-quoted here, so Ruby delivers them as text rather than as a NUL — are ordinary
-    # characters in a branch name as far as Postgres is concerned, so the ask is honoured
+    # The counterweight to the NUL half of the guard. The six literal characters backslash-u-0-0-0-0
+    # are ordinary characters in a branch name as far as Postgres is concerned, so the ask is honoured
     # byte-unchanged: no branch by that name exists, and the page says so in the fallback notice.
-    # An over-broad guard — `include?("\\u0000")` or a `/\\u0000/` match, both of which read the
-    # literal backslash spelling and would swallow this ask — answers with the unfiltered panel and
-    # no notice, which is exactly what this example fails on. It must stay green against no fix at
-    # all as well as against the shipped one.
     # @intent: {"entity": "Repository", "action": "honour literal NUL-spelling text as an ask", "behavior": "asking ?branch=ma followed by the literal six characters backslash-u-0-0-0-0 renders the fallback notice naming that branch, proving the ask was honoured rather than swallowed as a NUL", "layer": "request"}
     it "honours a branch name carrying the literal six characters \\u0000 as an ordinary ask" do
       repository = repository_anchored_on_a_feature_branch
@@ -1136,15 +866,15 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       get repository_path(repository, branch: 'ma\u0000in')
 
       expect(response).to have_http_status(:ok)
-      expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
-        "SpecGuard has no runs on ma\\u0000in, so this panel is drawn on feature/x",
+      expect(filter_doc.find("#suite-trajectory-branch-fallback")).to have_text(
+        "SpecGuard has no runs on ma\\u0000in, so this page is read on feature/x",
         normalize_ws: true
       )
     end
 
-    # The anonymous runs are not a branch and are not offered as one — pooling them is the failure
-    # the "No branch to plot a history on" state exists to refuse. What the selector adds is the way
-    # OUT of that state: the panel names the branch that does have a history.
+    # The anonymous runs are not a branch and are not offered as one — pooling them is the failure the
+    # "No branch to plot a history on" state exists to refuse. What the menu adds is the way OUT of
+    # that state: it names the branch that does have a history.
     # @intent: {"entity": "Repository", "action": "offer exit from branchless state", "behavior": "a branchless newest run shows No branch to plot a history on with only main (2 runs) offered, and asking ?branch=main then plots trunkaa and trunkbb", "layer": "request"}
     it "offers no way to select the runs that named no branch, and a way to leave that state" do
       repository = create_repository(user: @user)
@@ -1163,8 +893,8 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(plotted_labels).to eq(%w[trunkaa trunkbb])
     end
 
-    # @intent: {"entity": "Repository", "action": "omit selector without branches", "behavior": "when no run has ever named a branch the panel says No branch to plot a history on and renders no #suite-trajectory-branches element", "layer": "request"}
-    it "renders no selector at all when no run has ever named a branch" do
+    # @intent: {"entity": "Repository", "action": "omit menu without branches", "behavior": "when no run has ever named a branch the page says No branch to plot a history on and the filter bar offers no branch menu, only the words no branch reported", "layer": "request"}
+    it "offers no menu at all when no run has ever named a branch" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "anonymous01", branch: nil, total_specs_count: 900,
                                    created_at: 2.days.ago)
@@ -1172,15 +902,15 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       get repository_path(repository)
 
       expect(trajectory_panel).to have_text("No branch to plot a history on", normalize_ws: true)
-      expect(trajectory_panel).to have_no_css("#suite-trajectory-branches")
+      expect(filter_doc).to have_no_css("#suite-trajectory-branch-menu", visible: :all)
+      expect(filter_doc.find("#suite-trajectory-branches")).to have_text("no branch reported", normalize_ws: true)
     end
 
-    # The one page state where there is no selector to nest the disclosure in — and the one state
-    # where nothing else on the panel says anything about the ask. Whether there are CHOICES to
-    # offer and whether an ASK was substituted are independent questions, and a notice rendered
-    # inside the selector could answer the second only when the first happened to be yes.
-    # @intent: {"entity": "Repository", "action": "disclose fallback without selector", "behavior": "on a branchless page asking for feature/gone returns ok with no selector rendered and a fallback notice saying SpecGuard has no runs on feature/gone and that the latest run named no branch, so there is still no history to draw", "layer": "request"}
-    it "discloses a substituted branch where there is no selector to hang the notice on" do
+    # The one page state where there is no menu to hang the notice on — and the one state where
+    # nothing else on the page says anything about the ask. Whether there are CHOICES to offer and
+    # whether an ASK was substituted are independent questions.
+    # @intent: {"entity": "Repository", "action": "disclose fallback without selector", "behavior": "on a branchless page asking for feature/gone returns ok with no menu rendered and a fallback notice saying SpecGuard has no runs on feature/gone and that the latest run named no branch, so there is still no history to draw", "layer": "request"}
+    it "discloses a substituted branch where there is no menu to hang the notice on" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "anonymous01", branch: nil, total_specs_count: 900,
                                    created_at: 2.days.ago)
@@ -1188,9 +918,9 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       get repository_path(repository, branch: "feature/gone")
 
       expect(response).to have_http_status(:ok)
-      expect(trajectory_panel).to have_no_css("#suite-trajectory-branches")
+      expect(filter_doc).to have_no_css("#suite-trajectory-branch-menu", visible: :all)
       expect(trajectory_panel).to have_text("No branch to plot a history on", normalize_ws: true)
-      expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
+      expect(filter_doc.find("#suite-trajectory-branch-fallback")).to have_text(
         "SpecGuard has no runs on feature/gone. The latest run named no branch, so there is still " \
         "no history to draw.", normalize_ws: true
       )
