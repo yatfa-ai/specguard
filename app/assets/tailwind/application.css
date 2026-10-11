@@ -443,7 +443,7 @@
     background: var(--app-background); border-bottom: 1px solid var(--app-border);
   }
   .rc-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.25rem; }
-  .rc-field { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+  .rc-field { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; min-width: 0; max-width: 100%; }
   .rc-field > .rc-label { font-size: var(--text-xs); font-weight: 600; color: var(--app-text-secondary); white-space: nowrap; }
   .rc-run {
     margin-left: auto; display: flex; align-items: center; gap: 0.5rem; min-width: 0;
@@ -481,7 +481,7 @@
   .rc-menu-item[aria-current="true"] span, .rc-menu-item[aria-current="true"] small { color: var(--app-solid-label); }
 
   /* segmented choice (window, layer): selected = filled, not outlined */
-  .rc-seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--app-border-strong); border-radius: var(--app-radius-control); background: var(--app-surface); }
+  .rc-seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; padding: 2px; gap: 2px; border: 1px solid var(--app-border-strong); border-radius: var(--app-radius-control); background: var(--app-surface); }
   .rc-seg a {
     display: inline-flex; align-items: center; height: 26px; padding: 0 0.625rem; border-radius: var(--app-radius-control);
     font-size: var(--text-xs); font-weight: 600; color: var(--app-text-secondary); white-space: nowrap;
@@ -697,6 +697,15 @@
   .rc-facts dd { margin: 0; color: var(--app-text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .rc-drawer-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
+  /* Below ~1200px the card is narrower than a seven-column table's minimum content width, and the
+     sidebar takes a fixed share of the viewport, so the table would push past its card (and the
+     page would scroll sideways). The wrapper contains it instead. The sticky header is given up
+     here on purpose: a scroll container takes `position: sticky` away from `th`, and a header that
+     sticks to a clipped card is worse than one that scrolls with it. */
+  @media (max-width: 1200px) {
+    .rc-table-wrap { overflow-x: auto; }
+    .rc-table-wrap .dt thead th { position: static; }
+  }
   @media (max-width: 1100px) {
     .rc-verdict { grid-template-columns: minmax(0, 1fr); }
     .rc-verdict-lead { border-right: 0; border-bottom: 1px solid var(--app-border); }
@@ -706,8 +715,6 @@
   @media (max-width: 720px) {
     .rc-verdict-stats { grid-template-columns: minmax(0, 1fr); }
     .rc-stat + .rc-stat { border-left: 0; border-top: 1px solid var(--app-border); }
-    .rc-table-wrap { overflow-x: auto; }
-    .rc-table-wrap .dt thead th { position: static; }
   }
 }
 
