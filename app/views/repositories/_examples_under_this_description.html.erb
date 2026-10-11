@@ -36,7 +36,7 @@
               <% end %>
             <% elsif @repeated_description_examples.any_timed? %>
               Durations here cover <%= @repeated_description_examples.coverage_label %> — the same
-              fraction the row for this description states in that table.
+              fraction the row for this description states in the panel above.
               <% if @repeated_description_examples.untimed_omitted_count.zero? %>
                 The other
                 <%= number_with_delimiter(@repeated_description_examples.untimed_count) %> reported

@@ -30,7 +30,7 @@
               <% end %>
             <% elsif @spec_file_examples.any_timed? %>
               Durations here cover <%= @spec_file_examples.coverage_label %> — the same fraction
-              the row for this file states in that table.
+              the row for this file states in the panel above.
               <% if @spec_file_examples.untimed_omitted_count.zero? %>
                 The other <%= number_with_delimiter(@spec_file_examples.untimed_count) %> reported
                 none and sit at the END of the list rather than at the head of it.

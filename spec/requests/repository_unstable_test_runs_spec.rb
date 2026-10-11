@@ -56,6 +56,13 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
   def ranking_panel = page.find("#unstable-tests")
 
+  def ranking_row(name) = ranking_panel.all("tbody tr", visible: :all).find { |tr| tr.first("td").first(".row-open").text(:all).squish == name }
+
+  def ranking_handle(name) = ranking_row(name).first(".row-open")
+
+  # The row's destination into this drill-in: the drawer's "Run by run" action.
+  def ranking_action(name) = ranking_row(name).find("a", exact_text: "Run by run", visible: :all)
+
   # One row as a reader meets it: which run, where the test was defined in it, on which branch, when
   # it landed, how long it took and what that run said happened. Whitespace-collapsed, because a
   # cell assembled across two ERB tags is one reading on the page whatever the source did with
@@ -163,10 +170,10 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
       get repository_path(repository)
 
-      href = ranking_panel.find("a", text: flaky)[:href]
+      href = ranking_action(flaky)[:href]
 
       expect(href).to include("unstable_test=#{CGI.escape(flaky)}")
-      expect(href).to include("#unstable-test-runs")
+      expect(href).to end_with("#unstable")
     end
 
     # A list of choices with one of them taken. The drill-in sits below a long panel, so a reader
@@ -177,7 +184,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
       get repository_path(repository, unstable_test: flaky)
 
-      expect(ranking_panel.find("a", text: flaky)["aria-current"]).to eq("true")
+      expect(ranking_handle(flaky)["aria-current"]).to eq("true")
     end
 
     # And marks nothing when nothing is open — an `aria-current` on every row is the same as one on
@@ -188,7 +195,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
       get repository_path(repository)
 
-      expect(ranking_panel.find("a", text: flaky)["aria-current"]).to be_nil
+      expect(ranking_handle(flaky)["aria-current"]).to be_nil
     end
 
     # Criterion 5 — the groups below the list stay PLAIN TEXT. Those are descriptions carried by

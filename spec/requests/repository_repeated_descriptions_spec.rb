@@ -47,8 +47,11 @@ RSpec.describe "Repository repeated descriptions", type: :request do
   # four-cell row assertions keep stating exactly what they stated.
   def layer_cells
     panel.all("tbody tr").to_h do |row|
-      cells = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
-      [cells.first.split(" in spec/").first, cells.fifth]
+      cells = row.all("td").first(5).map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      # The layer cell is a stacked bar with a key: "unit 1request 1undeclared 1". Read as the old
+      # sentence ("unit 1 · request 1 · undeclared 1") from the key items, which are its parts.
+      key = row.all("td")[4].all(".rc-key li").map { |item| item.text.gsub(/\s+/, " ").strip }.join(" · ")
+      [cells.first.split(" in spec/").first, key.presence || cells.fifth]
     end
   end
 
@@ -142,8 +145,10 @@ RSpec.describe "Repository repeated descriptions", type: :request do
 
       get repository_path(repository)
 
-      expect(panel.find("tbody tr").text)
-        .to include("in spec/models/invoice_spec.rb and spec/models/ledger_spec.rb")
+      row = panel.find("tbody tr")
+      # The row keeps a short "in <files>" line; the drawer's "In" fact names them all.
+      expect(row.text).to include("in spec/models/invoice_spec.rb, spec/models/ledger_spec.rb")
+      expect(row.find("dd", text: "spec/models/invoice_spec.rb and spec/models/ledger_spec.rb", visible: :all)).to be_present
     end
 
     # The claim boundary, and the reason this panel is allowed to exist at all. A shared description
@@ -396,11 +401,12 @@ RSpec.describe "Repository repeated descriptions", type: :request do
   end
 
   describe "which run it reads" do
-    # Anchored on the LATEST run, exactly as every panel above it is, and specifically not on
-    # `?branch=` — that ask re-anchors the "Suite growth" chart alone, and a reader who opened a
-    # branch's trajectory did not ask this panel to describe a different run.
-    # @intent: {"entity": "GET /repositories/:id", "action": "ignore branch ask", "behavior": "with feature and main runs ingested, asking branch=feature/x still lists the main run's on-main description", "layer": "request"}
-    it "reads the latest run and does not follow the branch ask" do
+    # Anchored on the run THE PAGE reads, exactly as every section beside it is. In the console that
+    # run is chosen by the one global filter: `?branch=` re-anchors the whole page (it used to move
+    # the "Suite growth" chart alone), so a reader who picked a branch gets that branch's run in this
+    # panel too, and a panel that quietly described another run would contradict the verdict above it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "follow branch ask", "behavior": "with feature and main runs ingested, asking branch=feature/x lists the feature run's on-the-feature-branch description and no ask lists the newest run's", "layer": "request"}
+    it "reads the run the page reads, which the branch filter chooses" do
       repository = create_repository(user: @user)
       ingest(repository,
              [example_spec(name: "on the feature branch", duration: 9.0, line_number: 1),
@@ -412,7 +418,9 @@ RSpec.describe "Repository repeated descriptions", type: :request do
              commit_sha: "feedfacecafe0011", branch: "main")
 
       get repository_path(repository, branch: "feature/x")
+      expect(row_names).to eq(["on the feature branch"])
 
+      get repository_path(repository)
       expect(row_names).to eq(["on main"])
     end
   end

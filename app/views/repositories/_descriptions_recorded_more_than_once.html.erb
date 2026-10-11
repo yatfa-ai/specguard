@@ -17,10 +17,10 @@
             every figure on this panel — each group's examples and timings, the group count, the
             examples recorded and those carrying no description — is that layer's alone.
           </p>
-          <p class="text-xs" id="repeated-descriptions-clear-layer">
+          <p class="text-xs">
             <%= link_to "Clear layer filter",
                         drill_down_path(@repository, layer: nil, anchor: "repeated-descriptions"),
-                        class: "rc-link" %>
+                        id: "repeated-descriptions-clear-layer", class: "rc-link" %>
           </p>
         <% end %>
         <% if @repeated_descriptions.layer_empty? %>
@@ -115,7 +115,7 @@
                         body: layers_stack(group.layer_counts),
                         actions: [["Every example under it", drill_down_path(@repository, repeated_description: group.name, anchor: "duplicates"), :primary]]) do %>
                     <td>
-                      <%= row_open(group.name) %>
+                      <%= row_open(group.name, current: group.name == @repeated_description_request) %>
                       <span class="rc-sec mono">in <%= group.files_seen.first(2).join(", ") %><%= " +#{group.files_seen.size - 2} more" if group.files_seen.size > 2 %></span>
                     </td>
                     <td class="num" data-sort="<%= group.recorded_count %>"><%= group.recorded_count %></td>

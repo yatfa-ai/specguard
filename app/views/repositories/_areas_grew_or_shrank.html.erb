@@ -38,7 +38,7 @@
                     facts: [["Examples then", area.previous_count_label], ["Examples now", area.latest_count_label],
                             ["Change", area.change_label], ["Reading", area.change_reading]],
                     actions: [["Which files moved", drill_down_path(@repository, spec_directory: area.path, anchor: "changes"), :primary]]) do %>
-                <td><%= row_open(area.path, mono: true) %></td>
+                <td><%= row_open(area.path, mono: true, current: area.path == @spec_directory_request) %></td>
                 <td class="num mute" data-sort="<%= area.previous_count %>"><%= area.previous_count_label %></td>
                 <td class="num mute" data-sort="<%= area.latest_count %>"><%= area.latest_count_label %></td>
                 <td class="num" data-sort="<%= area.change %>" aria-label="<%= area.change_reading %>"><%= delta_tag(area.change_label, tone: area.change.zero? ? :flat : :info) %></td>

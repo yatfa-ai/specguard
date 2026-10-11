@@ -97,6 +97,14 @@ RSpec.describe "Repository repeated description examples", type: :request do
   # One description carried by three examples across two files, one carried by two, and one carried
   # by a single example — so every assertion about "this description's examples" has other rows to be
   # wrong about, and `HAVING COUNT(*) > 1` has something real to exclude.
+  # A ranking row's handle (the button that opens the drawer) and the drawer's "Every example under
+  # it" action, which is the link into this drill-in.
+  def ranking_row(description) = ranking_panel.all("tbody tr", visible: :all).find { |tr| tr.first("td").first(".row-open").text(:all).squish == description }
+
+  def ranking_handle(description) = ranking_row(description).first(".row-open")
+
+  def ranking_action(description) = ranking_row(description).find("a", exact_text: "Every example under it", visible: :all)
+
   def two_group_run
     repository = create_repository(user: @user)
     ingest(repository, [example_spec(name: looped, duration: 4.0, line_number: 1),
@@ -117,10 +125,10 @@ RSpec.describe "Repository repeated description examples", type: :request do
     it "links each ranked description to its own examples" do
       get repository_path(two_group_run)
 
-      href = ranking_panel.find("a", text: looped)[:href]
+      href = ranking_action(looped)[:href]
 
       expect(href).to include("repeated_description=#{CGI.escape(looped)}")
-      expect(href).to include("#repeated-description-examples")
+      expect(href).to end_with("#duplicates")
     end
 
     # A list of choices with one of them taken. The drill-down sits a long way down the page, so a
@@ -129,8 +137,8 @@ RSpec.describe "Repository repeated description examples", type: :request do
     it "marks the open description in the panel it was opened from" do
       get repository_path(two_group_run, repeated_description: looped)
 
-      expect(ranking_panel.find("a", text: looped)["aria-current"]).to eq("true")
-      expect(ranking_panel.find("a", text: other)["aria-current"]).to be_nil
+      expect(ranking_handle(looped)["aria-current"]).to eq("true")
+      expect(ranking_handle(other)["aria-current"]).to be_nil
     end
 
     # `?branch=` anchors the "Suite growth" panel and nothing else. Opening a description must not
@@ -139,7 +147,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     it "carries a branch ask through the link rather than dropping it" do
       get repository_path(two_group_run, branch: "main")
 
-      expect(ranking_panel.find("a", text: looped)[:href]).to include("branch=main")
+      expect(ranking_action(looped)[:href]).to include("branch=main")
     end
 
     # The reciprocity every drill-down link on this page keeps: opening one panel is not a request to
@@ -148,7 +156,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     it "carries an open file and an open area through the link" do
       get repository_path(two_group_run, spec_file: order_spec, spec_directory: "spec/models")
 
-      href = ranking_panel.find("a", text: looped)[:href]
+      href = ranking_action(looped)[:href]
 
       expect(href).to include("spec_file=#{CGI.escape(order_spec)}")
       expect(href).to include("spec_directory=#{CGI.escape('spec/models')}")
@@ -162,7 +170,9 @@ RSpec.describe "Repository repeated description examples", type: :request do
     it "carries an open description through the file panel's links and its way out" do
       get repository_path(two_group_run, repeated_description: looped, spec_file: order_spec)
 
-      expect(Capybara.string(response.body).find("#spec-file-durations").find("a", text: order_spec)[:href])
+      file_row = Capybara.string(response.body).find("#spec-file-durations").all("tbody tr", visible: :all)
+                         .find { |tr| tr.first("td").text(:all).squish == order_spec }
+      expect(file_row.find("a", exact_text: "Examples in this file", visible: :all)[:href])
         .to include("repeated_description=#{CGI.escape(looped)}")
       expect(Capybara.string(response.body).find("#spec-file-examples").find_link("Close file")[:href])
         .to include("repeated_description=#{CGI.escape(looped)}")
@@ -381,7 +391,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
       href = ran_in_link(panel.first("tbody tr"))[:href]
 
       expect(href).to include("spec_file=#{CGI.escape(order_spec)}")
-      expect(href).to include("#spec-file-examples")
+      expect(href).to end_with("#slow")
     end
 
     # Following a member's file must not close the description it was followed FROM — otherwise the
@@ -692,10 +702,13 @@ RSpec.describe "Repository repeated description examples", type: :request do
   end
 
   # The ranking was taken from `@latest_test_run`, so the drill-down must be too — anything else
-  # answers about rows the reader did not click. `?branch=` follows the "Suite growth" panel alone.
+  # answers about rows the reader did not click. In the console `?branch=` is the page-wide filter
+  # and re-anchors `@latest_test_run` itself (it used to move a chart alone), so the invariant is
+  # unchanged and its subject moved: the examples are the ones of THE RUN THE PAGE IS READING,
+  # whichever branch that is, and the ranking beside them is that run's too.
   describe "which run the examples come from" do
-    # @intent: {"entity": "GET /repositories/:id", "action": "read latest run", "behavior": "with runs on feature and main, asking branch=feature still lists the main run's 7.00s rows for the description", "layer": "request"}
-    it "answers about the latest run even when a branch was asked for" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "read the branch's run", "behavior": "with runs on feature and main, asking branch=feature lists the feature run's 3.00s rows for the description and asking branch=main lists the main run's 7.00s rows, each beside the ranking of that same run", "layer": "request"}
+    it "answers about the run the page is reading, which ?branch= chooses" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: looped, duration: 3.0, line_number: 1),
                           example_spec(name: looped, duration: 3.0, line_number: 2)],
@@ -705,6 +718,23 @@ RSpec.describe "Repository repeated description examples", type: :request do
              branch: "main", commit_sha: "feedfacecafe0002")
 
       get repository_path(repository, repeated_description: looped, branch: "feature")
+      expect(rows.map { |row| row[:duration] }).to eq(["3.00s", "3.00s"])
+
+      get repository_path(repository, repeated_description: looped, branch: "main")
+      expect(rows.map { |row| row[:duration] }).to eq(["7.00s", "7.00s"])
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "read the newest run by default", "behavior": "with no branch asked, the examples are the newest run's", "layer": "request"}
+    it "answers about the newest run when no branch was asked for" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: looped, duration: 3.0, line_number: 1),
+                          example_spec(name: looped, duration: 3.0, line_number: 2)],
+             branch: "feature", commit_sha: "feedfacecafe0001")
+      ingest(repository, [example_spec(name: looped, duration: 7.0, line_number: 1),
+                          example_spec(name: looped, duration: 7.0, line_number: 2)],
+             branch: "main", commit_sha: "feedfacecafe0002")
+
+      get repository_path(repository, repeated_description: looped)
 
       expect(rows.map { |row| row[:duration] }).to eq(["7.00s", "7.00s"])
     end

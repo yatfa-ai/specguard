@@ -64,11 +64,14 @@ RSpec.describe "Repository slowest tests — ?layer=", type: :request do
       expect(href).to include("layer=#{name}").and end_with("#slowest-examples")
       expect(href).to include("spec_file=").and include("branch=main").and include("commit_sha=panellayer01")
     end
-    # The figures read exactly as the plain label wrote them.
-    expect(page.find("#layer-durations").text.gsub(/\s+/, " "))
-      .to include("request 13.50s (2 of 3 timed)").and include("unit")
-    expect(page.find("#layer-durations").text.gsub(/\s+/, " "))
-      .to include(SpecDirectoryDurations.layer_durations_label(run.layer_durations, run.layer_counts))
+    # The figures are the ones the plain label used to join into a sentence, now one table row per
+    # layer: the same `layer_durations_parts` source, so a layer's row says what its clause said.
+    table = page.find("#layer-durations")
+    cells = table.all("tbody tr").to_h { |row| row.all("td").first(3).then { |name, time, timed| [name.text.squish, [time.text.squish, timed.text.squish]] } }
+    expect(cells["request"]).to eq(["13.50s", "2 of 3"])
+    SpecDirectoryDurations.layer_durations_parts(run.layer_durations, run.layer_counts).each do |layer, figures|
+      expect(figures).to include(cells.fetch(layer.to_s).last.sub(" of ", " of ")) if figures.include?("timed")
+    end
   end
 
   # @intent: { entity: "GET /repositories/:id", action: "keep the layer when drilling", behavior: "with a layer active, opening a spec file keeps the layer in the link", layer: "request" }

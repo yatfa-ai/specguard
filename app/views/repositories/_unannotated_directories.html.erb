@@ -46,7 +46,7 @@
                               ["Not readable by SpecGuard", number_with_delimiter(directory.unreadable_count)],
                               ["Examples recorded", number_with_delimiter(directory.recorded_count)]],
                       actions: [["The unannotated tests here", drill_down_path(@repository, spec_directory: directory.path, anchor: "annotations"), :primary]]) do %>
-                  <td><%= row_open(directory.path, mono: true) %></td>
+                  <td><%= row_open(directory.path, mono: true, current: directory.path == @spec_directory_request) %></td>
                   <td class="num mute" data-sort="<%= directory.authored_count %>"><%= number_with_delimiter(directory.authored_count) %></td>
                   <td class="num mute" data-sort="<%= directory.derived_count %>"><%= number_with_delimiter(directory.derived_count) %></td>
                   <td class="num" data-sort="<%= directory.unreadable_count %>"><%= number_with_delimiter(directory.unreadable_count) %></td>

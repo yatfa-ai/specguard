@@ -29,7 +29,7 @@
                       body: tag.div(outcome_strip(window_runs, outcomes), class: "py-1"),
                       actions: [["Run by run", drill_down_path(@repository, unstable_test: test.name, unstable_test_from: "unstable-tests", anchor: "unstable"), :primary]]) do %>
                   <td>
-                    <%= row_open(test.name) %>
+                    <%= row_open(test.name, current: test.name == @unstable_test_request) %>
                     <% if test.multi_file? %><span class="rc-sec mono">recorded under <%= test.files_seen.to_sentence %></span><% end %>
                     <% if test.renamed? %><span class="rc-sec mono">recorded as <%= test.descriptions.to_sentence %></span><% end %>
                     <%= declared_layers_label(test.declared_layers) %>
