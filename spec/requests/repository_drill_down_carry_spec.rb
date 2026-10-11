@@ -246,7 +246,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # exact text of exactly one anchor on this panel and is not the open file, so the cell it proves
     # is a real choice rather than a link that happened to carry an ask it also sets.
     { name: "open a file from Slowest tests across the window",
-      panel: "#slowest-tests-window", row: "settles the balance", link: "Examples in refund_spec.rb",
+      panel: "#slowest-tests-window", row: "settles the balance", link: "Examples in spec/models/refund_spec.rb",
       sets: { spec_file: "spec/models/refund_spec.rb" } },
     # Each of the two entry points STAMPS its own panel id as the test's origin, so the "Close test"
     # control can return the reader to the ranking they actually picked the test from rather than to
