@@ -208,15 +208,18 @@
   color-scheme: dark;
   --color-base-100: #0f172a;
   --color-base-200: #020617;
-  --color-base-300: #1e293b;
+  /* Triage of the dark-theme role collisions: base-300 / accent-content / neutral / error-content ARE the
+     raised surface, solid label, secondary and background roles in this theme — declared as aliases of
+     the app tokens rather than as a second copy of the same hex that could drift apart. */
+  --color-base-300: var(--app-surface-raised);
   --color-base-content: #f8fafc;
   --color-primary: #0b4fd0;
   --color-primary-content: #ffffff;
   --color-secondary: #29364d;
   --color-secondary-content: #f8fafc;
   --color-accent: #0062fc;
-  --color-accent-content: #ffffff;
-  --color-neutral: #29364d;
+  --color-accent-content: var(--app-solid-label);
+  --color-neutral: var(--app-secondary);
   --color-neutral-content: #f8fafc;
   --color-info: #01bad5;
   --color-info-content: #020617;
@@ -225,7 +228,7 @@
   --color-warning: #f0a020;
   --color-warning-content: #020617;
   --color-error: #f26368;
-  --color-error-content: #020617;
+  --color-error-content: var(--app-background);
   --radius-selector: var(--app-radius-pill);
   --radius-field: var(--app-radius-control);
   --radius-box: var(--app-radius-card);
