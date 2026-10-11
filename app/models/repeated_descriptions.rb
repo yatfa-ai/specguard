@@ -51,8 +51,21 @@
 # an empty ranking over a suite whose every description is unique are the same empty list, and only
 # the first of them is silence.
 class RepeatedDescriptions
-  def self.for(test_run, limit: SpecObservation::REPEATED_DESCRIPTIONS_LIMIT)
-    tuples = SpecObservation.repeated_descriptions_in(test_run, limit: limit)
+  # `layer:` finds the descriptions repeated WITHIN ONE declared layer (`SpecObservation::DECLARED_LAYER_KEYS`):
+  # the layer rides into both reads before the grouping, so every figure on this object — each
+  # group's counts, `group_count`, the `repeated_*` totals and the presence counts — is the LAYER's,
+  # and a description with one example in each of two layers is repeated in neither. `nil` (the
+  # default) is the all-layer read, unchanged to the query.
+  #
+  # With a layer asked, "did this run record anything at all" can no longer be read off the presence
+  # counts — a layer with no examples would look like a run with no rows, and the surface would blank
+  # a block holding a real, empty answer. That question is the RUN's, answered by
+  # `TestRun#intent_readings.recorded?` (the memoized run-grain aggregate every page already issues),
+  # on `SlowestExamples`' terms. It is deliberately NOT read when no layer is asked: the unasked path
+  # decides `#recorded?` as it always has and issues nothing new.
+  def self.for(test_run, limit: SpecObservation::REPEATED_DESCRIPTIONS_LIMIT, layer: nil)
+    run_recorded = layer.nil? ? nil : test_run.intent_readings.recorded?
+    tuples = SpecObservation.repeated_descriptions_in(test_run, limit: limit, layer: layer)
     rows = tuples.map do |name, total, recorded, timed, file_paths, _groups, _repeated, _repeated_timed, *layers|
       # The five trailing operands ride in `SpecObservation::DECLARED_LAYER_KEYS` order — the closed
       # layer enum, then undeclared — and are zipped by that list, never by position at the call site.
@@ -69,11 +82,12 @@ class RepeatedDescriptions
     # recorded and timed totals SILENTLY. `fetch` raises where `.last` would guess.
     first = tuples.first
     window = first ? WINDOW_INDEXES.map { |index| first.fetch(index) } : []
-    presence = SpecObservation.description_presence_in(test_run)
+    presence = SpecObservation.description_presence_in(test_run, layer: layer)
 
     new(rows: rows, group_count: window[0].to_i,
         repeated_recorded_count: window[1].to_i, repeated_timed_count: window[2].to_i,
-        recorded_count: presence[:recorded_count], unnamed_row_count: presence[:unnamed_count])
+        recorded_count: presence[:recorded_count], unnamed_row_count: presence[:unnamed_count],
+        layer: layer, run_recorded: run_recorded)
   end
 
   # Where `COUNT(*) OVER ()`, `SUM(COUNT(*)) OVER ()` and `SUM(COUNT(duration_seconds)) OVER ()` sit in
@@ -82,7 +96,9 @@ class RepeatedDescriptions
   WINDOW_INDEXES = [5, 6, 7].freeze
 
   def initialize(rows:, group_count:, repeated_recorded_count:, repeated_timed_count:,
-                 recorded_count:, unnamed_row_count:)
+                 recorded_count:, unnamed_row_count:, layer: nil, run_recorded: nil)
+    @layer = layer&.to_s
+    @run_recorded = run_recorded
     @rows = rows
     @group_count = group_count
     @repeated_recorded_count = repeated_recorded_count
@@ -90,6 +106,12 @@ class RepeatedDescriptions
     @recorded_count = recorded_count
     @unnamed_row_count = unnamed_row_count
   end
+
+  # The declared layer the descriptions were grouped within (`"request"`, `"undeclared"` …), or nil
+  # for the all-layer ranking. Every figure on this object is the LAYER's when this is set.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
 
   # The ranking, costliest first. Never longer than the limit it was built with.
   attr_reader :rows
@@ -129,7 +151,14 @@ class RepeatedDescriptions
   # `UnstableTests` draws, at this grain: "this run reported no tests", "this run reported no
   # descriptions" and "nothing was repeated" are three different facts and the panel says them
   # differently.
-  def recorded? = recorded_count.positive?
+  #
+  # A RUN-level question even when a layer is asked: a layer with no examples is an empty answer
+  # (see {#layer_empty?}), not a run that recorded nothing — `recorded_count` is then the layer's.
+  def recorded? = layer? ? @run_recorded : recorded_count.positive?
+
+  # A layer was asked and the run recorded NO example that declared it — the empty answer the panel
+  # words differently from "this run reported no descriptions". Only meaningful with a layer asked.
+  def layer_empty? = layer? && recorded_count.zero?
 
   # At least one row carried a description, so the grouping had something to group. False for a
   # producer that sends no `name` at all — `Ingest::ObservationRecorder#attributes` writes it

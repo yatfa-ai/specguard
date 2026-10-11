@@ -7,6 +7,9 @@
 #   - `spec_files`: the "Heaviest spec files" rollup, where the layer rides into the query before
 #     `LIMIT` so the rollup is ranked by that layer's own time;
 #   - `spec_directories`: the "Heaviest spec directories" rollup, ranked the same way;
+#   - `repeated_descriptions` (and its `repeated_description_examples` drill-in): the "Descriptions this
+#     run recorded more than once" rollup, where the layer rides into the query before the grouping, so
+#     a group is a description repeated WITHIN that layer and every figure is the layer's (SPGD-1763);
 #   - `slowest_tests`: the window-grain ranking (candidate step);
 #   - `unstable_tests`: the window-grain ranking (candidate step: the tests that FAILED in an example
 #     of that layer — SPGD-1755);

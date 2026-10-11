@@ -623,7 +623,12 @@ class RepositoryDashboard
     # Guarded identically, and on nothing else. TWO queries, neither growing with the size of the
     # suite: the grouped ranking, and the description-presence counts it must exclude before it can
     # group (see `SpecObservation.description_presence_in` for why those cannot ride the same read).
-    @repeated_descriptions = RepeatedDescriptions.for(@latest_test_run) if @latest_test_run
+    #
+    # `layer: @layer_request` (assigned above) finds the descriptions repeated WITHIN that declared
+    # layer, in the query before the grouping, so the panel and `latest_run.repeated_descriptions`
+    # agree row for row. The same two statements, plus (only when a layer is asked) the memoized
+    # run-level `intent_readings` read that decides whether the run recorded anything at all.
+    @repeated_descriptions = RepeatedDescriptions.for(@latest_test_run, layer: @layer_request) if @latest_test_run
     # The suite-wide near-duplicate census, read from its STORED row — ONE indexed statement
     # against `near_duplicate_censuses` for the whole page, however many clusters it holds, and
     # `nil` when nothing was ever stored. Never `NearDuplicateClusters.for`: that is the live,
@@ -676,7 +681,7 @@ class RepositoryDashboard
     @repeated_description_request = requested_repeated_description
     if @latest_test_run && @repeated_description_request
       @repeated_description_examples =
-        RepeatedDescriptionExamples.for(@latest_test_run, @repeated_description_request)
+        RepeatedDescriptionExamples.for(@latest_test_run, @repeated_description_request, layer: @layer_request)
     end
     # One area out of THAT rollup, opened: not which areas the wall clock went into but WHICH SPEC
     # FILES are in the one the reader picked. The middle rung of the drill-in, and the rung that was
