@@ -608,6 +608,10 @@
   .rc-ext:hover { color: var(--app-accent-ink); text-decoration: underline; text-underline-offset: 3px; }
   .rc-sec { display: block; font-size: var(--text-xs); color: var(--app-text-secondary); margin-top: 0.125rem; overflow-wrap: anywhere; }
   .rc-sec.mono { font-family: var(--font-mono); }
+  /* A secondary note inside a numeric cell (the "assembled from N shard reports" sentence) must wrap:
+     `td.num` is nowrap for the figure, and an inherited nowrap made the note set a ~565px column that
+     pushed the Runs table past its card and gave the page a horizontal scrollbar. */
+  .dt td.num .rc-sec { white-space: normal; min-width: 7rem; max-width: 16rem; margin-left: auto; text-align: right; }
   .rc-intent { display: block; margin-top: 0.25rem; font-size: var(--text-xs); color: var(--app-text-secondary); }
   .rc-intent .mono { font-family: var(--font-mono); color: var(--app-text); }
 
