@@ -93,6 +93,17 @@
               this area reported a duration, so there is no wall clock to attribute to any file in
               it.
             <% end %>
+            <%# With `?layer=` asked the area holds only that layer's examples — exactly the rows the
+                layer-ranked "Heaviest spec directories" row counted — so every figure here is that
+                layer's and "the same fraction the row states" stays true where the area is a row. %>
+            <% if @spec_directory_files.layer? %>
+              Only the <%= @spec_directory_files.layer %>-layer examples — those that declared
+              <code><%= @spec_directory_files.layer %></code> as their layer in their own
+              <code>@intent</code>, never inferred from the path — are counted here.
+              <%= link_to "Clear layer filter",
+                          drill_down_path(@repository, layer: nil, anchor: "spec-directory-files"),
+                          id: "spec-directory-files-clear-layer", class: "rc-link" %>
+            <% end %>
             Declared layers across this whole area, not only the files listed:
             <%= @spec_directory_files.layer_counts_label %>.
             An example that never ran has no duration to report, so a missing timing is a faithful
@@ -118,6 +129,22 @@
               </tr>
             <% end %>
           <% end %>
+        <% elsif @spec_directory_files.layer_empty? %>
+          <%# A layer was asked and the run DID record examples in this area, but none of them declared
+              that layer — an empty answer, never "this run recorded no examples in this area". %>
+          <div id="spec-directory-files-layer-empty">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No example in this directory declared this layer",
+                  description: "This run recorded examples in #{@spec_directory_files.path}, but none " \
+                               "of them declared #{@spec_directory_files.layer} as its layer in its own " \
+                               "@intent (the layer is never inferred from the path)."
+                ) %>
+            <p class="text-xs">
+              <%= link_to "Clear layer filter",
+                          drill_down_path(@repository, layer: nil, anchor: "spec-directory-files"),
+                          id: "spec-directory-files-clear-layer", class: "rc-link" %>
+            </p>
+          </div>
         <% else %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No spec files in this directory",

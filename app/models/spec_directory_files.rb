@@ -46,8 +46,25 @@
 # directory deleted since, a path with a typo in it. `.for` returns an object with no rows and the
 # surface says so — the same shape `SpecFileExamples` answers one rung down.
 class SpecDirectoryFiles
-  def self.for(test_run, path, limit: SpecObservation::SPEC_DIRECTORY_FILES_LIMIT)
-    tuples = SpecObservation.files_in_directory(test_run, path, limit: limit)
+  # `layer:` opens the area as the layer-ranked "Heaviest spec directories" rollup counted it — only
+  # the examples in it that declared that layer (`SpecObservation::DECLARED_LAYER_KEYS`) — so the
+  # area's counts equal the clicked row's and each file's counts are the layer's. `nil` is the
+  # all-layer area, unchanged.
+  #
+  # A layer that none of the area's examples declared leaves no rows, and "no example declared this
+  # layer in an area the run DID record" is a different fact from "the run recorded nothing in this
+  # area". Only in that empty-and-asked case is one whole-area existence read issued to tell them
+  # apart; the unasked path and the asked non-empty path take no extra query.
+  def self.for(test_run, path, limit: SpecObservation::SPEC_DIRECTORY_FILES_LIMIT, layer: nil)
+    tuples = SpecObservation.files_in_directory(test_run, path, limit: limit, layer: layer)
+    area_exists =
+      if layer.nil? || tuples.any?
+        nil
+      else
+        SpecObservation.where(test_run_id: test_run.id)
+                       .where(SpecObservation.sanitize_sql_array(["#{SpecObservation::DIRECTORY_EXPRESSION} = ?", path]))
+                       .exists?
+      end
     keys = SpecObservation::DECLARED_LAYER_KEYS
     rows = tuples.map do |file_path, total, recorded, timed, _files, _area_recorded, _area_timed, *rest|
       # The trailing operands are zipped by the shared key list, never read by index: the file's own
@@ -63,11 +80,15 @@ class SpecDirectoryFiles
     layer_counts = keys.each_with_index.to_h { |key, index| [key, area_layers[index].to_i] }
 
     new(path: path, rows: rows, file_count: file_count.to_i,
-        recorded_count: area_recorded.to_i, timed_count: area_timed.to_i, layer_counts: layer_counts)
+        recorded_count: area_recorded.to_i, timed_count: area_timed.to_i, layer_counts: layer_counts,
+        layer: layer, area_recorded: area_exists)
   end
 
-  def initialize(path:, rows:, file_count:, recorded_count:, timed_count:, layer_counts: nil)
+  def initialize(path:, rows:, file_count:, recorded_count:, timed_count:, layer_counts: nil,
+                 layer: nil, area_recorded: nil)
     @path = path
+    @layer = layer&.to_s
+    @area_recorded = area_recorded
     @rows = rows
     @file_count = file_count
     @recorded_count = recorded_count
@@ -84,6 +105,16 @@ class SpecDirectoryFiles
 
   # The area's mix spelled for the panel, through the one spelling `SpecDirectoryDurations::Row` uses.
   def layer_counts_label = SpecDirectoryDurations.layer_counts_label(layer_counts)
+
+  # The declared layer this area was narrowed to, or nil for the all-layer area.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
+
+  # A layer was asked and the run DID record examples in this area, but none of them declared that
+  # layer — an empty answer the panel words differently from an area the run never wrote. False
+  # without a layer, and false whenever there are rows.
+  def layer_empty? = layer? && rows.empty? && @area_recorded == true
 
   # The area that was asked for, as it was asked for. Held even when nothing came back, because the
   # empty state has to name it — "no spec files" without a subject is a sentence about nothing.

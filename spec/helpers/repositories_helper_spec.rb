@@ -154,4 +154,17 @@ RSpec.describe RepositoriesHelper, type: :helper do
       expect(helper.declared_layer_label(observed("request"))).to eq("request")
     end
   end
+
+  describe "#spec_directory_listed_in_rollup?" do
+    let(:rollup) do
+      Struct.new(:rows, :layer) { def layer? = !layer.nil? }.new([Struct.new(:path).new("spec/models")], "request")
+    end
+
+    # @intent: { entity: "RepositoriesHelper", action: "decide whether an open area is a rollup row", behavior: "a layer-ranked rollup no longer withholds the cross-reference: true for an area that is a row, false for one that is not, and false for a nil rollup", layer: "unit" }
+    it "answers by membership of the rollup's rows under a layer ask, and false for a nil rollup" do
+      expect(helper.spec_directory_listed_in_rollup?(rollup, "spec/models")).to be(true)
+      expect(helper.spec_directory_listed_in_rollup?(rollup, "spec/other")).to be(false)
+      expect(helper.spec_directory_listed_in_rollup?(nil, "spec/models")).to be(false)
+    end
+  end
 end

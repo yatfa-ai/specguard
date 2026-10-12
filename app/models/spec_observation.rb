@@ -2435,14 +2435,22 @@ class SpecObservation < ApplicationRecord
   # `SUM(...) OVER ()` — so the area's mix is counted before the `LIMIT`, by the rule `recorded_count`
   # follows. Same grouped read, no extra query, no index; positions 0-6 keep their meaning.
   #
+  # == `layer:`
+  #
+  # Narrows the area to the examples that declared ONE layer ({DECLARED_LAYER_KEYS}) through
+  # {.in_declared_layer} — the predicate the layer-ranked "Heaviest spec directories" rollup counts
+  # with — before the grouping. The windows and the per-layer counts evaluate after the WHERE, so the
+  # area's file, recorded, timed and layer counts equal that rollup row's. `nil` (the default) is the
+  # unnarrowed read, byte-identical to before.
+  #
   # @return [Array<Array>] `[spec_file_path, total_seconds, recorded_count, timed_count, file_count,
   #   directory_recorded_count, directory_timed_count, *file_layer_counts, *directory_layer_counts]`
   #   per file, heaviest first. Positions 4-6 are the same figures on every row: how many files the
   #   area holds, and how many examples it holds and timed — all counted before the `LIMIT`; the last
   #   five are likewise area-wide.
-  def self.files_in_directory(test_run, directory, limit: SPEC_DIRECTORY_FILES_LIMIT)
-    where(test_run_id: test_run.id)
-      .where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", directory]))
+  def self.files_in_directory(test_run, directory, limit: SPEC_DIRECTORY_FILES_LIMIT, layer: nil)
+    in_declared_layer(where(test_run_id: test_run.id)
+                        .where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", directory])), layer)
       .group(:spec_file_path)
       .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), spec_file_path: :asc)
       .limit(limit)

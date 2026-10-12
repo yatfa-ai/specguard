@@ -13,6 +13,9 @@
 #   - `spec_file_examples`: the "Examples in this spec file" drill-in, which opens a file holding only the
 #     examples of that layer, so its counts equal the layer-ranked `spec_files` row for the same file
 #     (SPGD-1770);
+#   - `spec_directory_files`: the "Spec files in this directory" drill-in, which opens an area holding
+#     only the examples of that layer, so its counts equal the layer-ranked `spec_directories` row for
+#     the same area (SPGD-1776);
 #   - `slowest_tests`: the window-grain ranking (candidate step);
 #   - `unstable_tests`: the window-grain ranking (candidate step: the tests that FAILED in an example
 #     of that layer — SPGD-1755);

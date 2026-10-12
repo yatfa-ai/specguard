@@ -962,6 +962,17 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # Extended by SPGD-1776 as its own example, the existing one above left untouched: the layer
+      # predicate is a filter on the area's rows, so the by-run index stays the access path when a
+      # declared layer is asked.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the one-directory drill-down still plans off the by-run index when a declared layer is asked", layer: "unit" }
+      it "reads the one-directory drill-down off an index when a declared layer is asked" do
+        plan = plan_for_actual_sql("spec_observations") { described_class.files_in_directory(run, "spec/d3", layer: "request") }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
       # The same certification for the read that spans TWO runs, and the reason it ships without a
       # migration. Twice the rows is not a different shape: it narrows on `test_run_id` with an `IN`
       # list of two, which `index_spec_observations_on_test_run_id` serves exactly as it serves one,
@@ -2523,6 +2534,49 @@ RSpec.describe SpecObservation do
         expect(asked.size).to eq(1)
         expect(bare.first).not_to include("intent_layer")
         expect(asked.first).to include("intent_layer = $").or include("intent_layer = 'request'")
+      end
+    end
+
+    describe ".files_in_directory layer:" do
+      # @intent: { entity: "SpecObservation", action: "open one area's files within a layer", behavior: "files_in_directory narrows the area to the layer's examples so its file, recorded, timed and layer counts equal the layer-ranked by-directory row, and the undeclared layer selects NULL rows by the stored declaration not the path", layer: "request" }
+      it "opens an area narrowed to the layer, its windows equal the by-directory row's counts" do
+        observe(run, duration: 3.0, line_number: 1, spec_file_path: "spec/requests/x_spec.rb", intent_layer: "request")
+        observe(run, duration: nil, line_number: 2, spec_file_path: "spec/requests/x_spec.rb", intent_layer: "request")
+        observe(run, duration: 1.0, line_number: 3, spec_file_path: "spec/requests/y_spec.rb", intent_layer: "request")
+        observe(run, duration: 5.0, line_number: 4, spec_file_path: "spec/requests/y_spec.rb", intent_layer: "unit")
+        observe(run, duration: 9.0, line_number: 5, spec_file_path: "spec/requests/z_spec.rb", intent_layer: "unit")
+        observe(run, duration: 1.0, line_number: 6, spec_file_path: "spec/requests/w_spec.rb", intent_layer: nil)
+
+        rollup = described_class.directory_durations_in(run, layer: "request").find { |row| row.first == "spec/requests" }
+        asked = described_class.files_in_directory(run, "spec/requests", layer: "request")
+
+        expect(asked.map(&:first)).to eq(%w[spec/requests/x_spec.rb spec/requests/y_spec.rb])
+        # Area recorded and timed — and the area's five layer counts — equal the rollup row.
+        expect(asked.first[4..6]).to eq([2, 3, 2])
+        expect(asked.first[5..6]).to eq([rollup[2], rollup[3]])
+        expect(asked.first.last(5)).to eq(rollup.last(5))
+        expect(asked.map { |row| row[2] }).to eq([2, 1])
+        expect(described_class.files_in_directory(run, "spec/requests").size).to eq(4)
+        expect(described_class.files_in_directory(run, "spec/requests", layer: nil).size).to eq(4)
+        expect(described_class.files_in_directory(run, "spec/requests", layer: "undeclared").map(&:first))
+          .to eq(["spec/requests/w_spec.rb"])
+        expect(described_class.files_in_directory(run, "spec/requests", layer: "system")).to eq([])
+      end
+
+      # MUTATION CHECK for this slice: removing the `in_declared_layer` wrap from `.files_in_directory` turns this red.
+      # @intent: { entity: "SpecObservation", action: "open one area's files within a layer", behavior: "an unasked files_in_directory issues the identical statement as before the keyword existed, and an asked one is still one statement that adds the shared layer predicate", layer: "unit" }
+      it "adds only the shared predicate, in one statement, and none when unasked" do
+        run
+        bare = executed_sql { described_class.files_in_directory(run, "spec/a").to_a }
+        explicit_nil = executed_sql { described_class.files_in_directory(run, "spec/a", layer: nil).to_a }
+        asked = executed_sql { described_class.files_in_directory(run, "spec/a", layer: "request").to_a }
+
+        expect(explicit_nil).to eq(bare)
+        expect(bare.size).to eq(1)
+        expect(asked.size).to eq(1)
+        where_clause = ->(sql) { sql[/ FROM .*? GROUP BY/m] }
+        expect(where_clause.(bare.first)).not_to include("intent_layer")
+        expect(where_clause.(asked.first)).to include("intent_layer = $").or include("intent_layer = 'request'")
       end
     end
 
