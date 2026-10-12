@@ -470,20 +470,28 @@ module RepositoriesHelper
   def spec_file_examples_scope_sentence(examples)
     recorded = number_with_delimiter(examples.recorded_count)
     shown = number_with_delimiter(examples.rows.size)
-    plural = "example".pluralize(examples.recorded_count)
+    # With `?layer=` asked every figure is that declared layer's, so the noun says so: "request-layer
+    # examples". Unasked it is the plain "example" and the sentences are byte-identical to before.
+    noun = spec_file_examples_noun(examples)
+    plural = noun.pluralize(examples.recorded_count)
 
     if examples.any_timed?
       return "All #{recorded} #{plural} this run recorded in it, slowest first." unless examples.truncated?
       return spec_file_examples_mixed_tail_sentence(examples) if examples.lists_untimed?
 
-      "The #{shown} slowest of the #{recorded} examples this run recorded in it, slowest first."
+      "The #{shown} slowest of the #{recorded} #{noun.pluralize(2)} this run recorded in it, slowest first."
     elsif examples.truncated?
-      "The first #{shown} of the #{recorded} examples this run recorded in it, in the order this " \
+      "The first #{shown} of the #{recorded} #{noun.pluralize(2)} this run recorded in it, in the order this " \
         "run recorded them — nothing here was timed, so there is no order to rank them in."
     else
       "All #{recorded} #{plural} this run recorded in it, in the order this run recorded them — " \
         "nothing here was timed, so there is no order to rank them in."
     end
+  end
+
+  # "example", or "request-layer example" when the opened file was narrowed to a declared layer.
+  def spec_file_examples_noun(examples)
+    examples.layer? ? "#{examples.layer}-layer example" : "example"
   end
 
   # == The opened repeated description's basis sentence
@@ -813,7 +821,7 @@ module RepositoriesHelper
   # file this page does not have. Said as one number — "the 50 slowest" — every one of those three
   # facts is lost and the first is stated backwards.
   def spec_file_examples_mixed_tail_sentence(examples)
-    "The #{number_with_delimiter(examples.shown_timed_count)} timed examples of the " \
+    "The #{number_with_delimiter(examples.shown_timed_count)} timed #{spec_file_examples_noun(examples).pluralize(2)} of the " \
       "#{number_with_delimiter(examples.recorded_count)} this run recorded in it, slowest first, " \
       "then #{number_with_delimiter(examples.shown_untimed_count)} of the " \
       "#{number_with_delimiter(examples.untimed_count)} that reported no duration and nothing " \

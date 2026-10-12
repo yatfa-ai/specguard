@@ -560,7 +560,7 @@ class RepositoryDashboard
     # ask: see `SpecFileExamples`.
     @spec_file_request = requested_spec_file
     if @latest_test_run && @spec_file_request
-      @spec_file_examples = SpecFileExamples.for(@latest_test_run, @spec_file_request)
+      @spec_file_examples = SpecFileExamples.for(@latest_test_run, @spec_file_request, layer: @layer_request)
     end
     # The rung above that one, off the same rows of the same run: not which FILES the wall clock
     # went into but which AREAS. Not derivable from the panel above either — a by-file top ten

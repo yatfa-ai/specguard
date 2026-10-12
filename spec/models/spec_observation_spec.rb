@@ -696,6 +696,13 @@ RSpec.describe SpecObservation do
 
         expect(plan).to include("index_spec_observations_on_test_run_id_and_spec_file_path")
         expect(plan).not_to match(/Seq Scan on spec_observations/)
+
+        # Extended by SPGD-1770: the layer predicate is a filter on the file's rows, so the by-file
+        # index stays the access path when a declared layer is asked.
+        layered = plan_for_actual_sql("spec_observations") { described_class.in_file(run, "spec/d3/f3_spec.rb", layer: "request").to_a }
+
+        expect(layered).to include("index_spec_observations_on_test_run_id_and_spec_file_path")
+        expect(layered).not_to match(/Seq Scan on spec_observations/)
       end
 
       # The same certification for the description drill-down beside it, and the assertion is
@@ -2479,6 +2486,43 @@ RSpec.describe SpecObservation do
         expect(where_clause.(bare.first)).not_to include("intent_layer")
         expect(where_clause.(asked.first)).to include("intent_layer = $").or include("intent_layer = 'request'")
         expect(asked.first).to include("GROUP BY")
+      end
+    end
+
+    describe ".in_file layer:" do
+      # @intent: { entity: "SpecObservation", action: "open one file's examples within a layer", behavior: "in_file narrows the file to the layer's examples so its population windows equal the layer-ranked by-file row's counts, and the undeclared layer selects NULL rows by the stored declaration not the path", layer: "request" }
+      it "opens a file narrowed to the layer, its windows equal the by-file row's counts" do
+        observe(run, duration: 3.0, line_number: 1, spec_file_path: "spec/requests/x_spec.rb", intent_layer: "request")
+        observe(run, duration: nil, line_number: 2, spec_file_path: "spec/requests/x_spec.rb", intent_layer: "request")
+        observe(run, duration: 5.0, line_number: 3, spec_file_path: "spec/requests/x_spec.rb", intent_layer: "unit")
+        observe(run, duration: 1.0, line_number: 4, spec_file_path: "spec/requests/x_spec.rb", intent_layer: nil)
+
+        row = described_class.file_durations_in(run, layer: "request").first
+        rows = described_class.in_file(run, "spec/requests/x_spec.rb", layer: "request").to_a
+
+        expect(rows.map(&:intent_layer).uniq).to eq(["request"])
+        expect(rows.size).to eq(2)
+        expect(rows.first.file_recorded_count).to eq(row[2])
+        expect(rows.first.file_timed_count).to eq(row[3])
+        expect(described_class.in_file(run, "spec/requests/x_spec.rb").to_a.size).to eq(4)
+        expect(described_class.in_file(run, "spec/requests/x_spec.rb", layer: nil).to_a.size).to eq(4)
+        expect(described_class.in_file(run, "spec/requests/x_spec.rb", layer: "undeclared").map(&:line_number)).to eq([4])
+        expect(described_class.in_file(run, "spec/requests/x_spec.rb", layer: "system").to_a).to eq([])
+      end
+
+      # MUTATION CHECK for this slice: removing the `in_declared_layer` wrap from `.in_file` turns this red.
+      # @intent: { entity: "SpecObservation", action: "open one file's examples within a layer", behavior: "an unasked in_file issues the identical statement as before the keyword existed, and an asked one is still one statement that adds the shared layer predicate", layer: "unit" }
+      it "adds only the shared predicate, in one statement, and none when unasked" do
+        run
+        bare = executed_sql { described_class.in_file(run, "spec/a_spec.rb").to_a }
+        explicit_nil = executed_sql { described_class.in_file(run, "spec/a_spec.rb", layer: nil).to_a }
+        asked = executed_sql { described_class.in_file(run, "spec/a_spec.rb", layer: "request").to_a }
+
+        expect(explicit_nil).to eq(bare)
+        expect(bare.size).to eq(1)
+        expect(asked.size).to eq(1)
+        expect(bare.first).not_to include("intent_layer")
+        expect(asked.first).to include("intent_layer = $").or include("intent_layer = 'request'")
       end
     end
 

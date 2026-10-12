@@ -47,14 +47,41 @@
 # deleted since, a path with a typo in it. `.for` returns an object with no rows and the surface
 # says so — the same shape `#recorded?` answers one grain up.
 class SpecFileExamples
-  def self.for(test_run, path, limit: SpecObservation::FILE_EXAMPLES_LIMIT)
-    new(path: path, rows: SpecObservation.in_file(test_run, path, limit: limit).to_a)
+  # `layer:` opens the file as the layer-ranked "Heaviest spec files" rollup counted it — only the
+  # examples in it that declared that layer (`SpecObservation::DECLARED_LAYER_KEYS`) — so the file's
+  # `recorded_count` / `timed_count` equal the clicked row's. `nil` is the all-layer file, unchanged.
+  #
+  # A layer that none of the file's examples declared leaves no rows, and "no examples declared this
+  # layer in a file the run DID record" is a different fact from "the run recorded nothing in this
+  # file". Only in that empty-and-asked case is one whole-file existence read issued to tell them
+  # apart; the unasked path and the asked non-empty path take no extra query.
+  def self.for(test_run, path, limit: SpecObservation::FILE_EXAMPLES_LIMIT, layer: nil)
+    rows = SpecObservation.in_file(test_run, path, limit: limit, layer: layer).to_a
+    file_recorded =
+      if layer.nil? || rows.any?
+        nil
+      else
+        SpecObservation.where(test_run_id: test_run.id, spec_file_path: path).exists?
+      end
+    new(path: path, rows: rows, layer: layer, file_recorded: file_recorded)
   end
 
-  def initialize(path:, rows:)
+  def initialize(path:, rows:, layer: nil, file_recorded: nil)
     @path = path
     @rows = rows
+    @layer = layer&.to_s
+    @file_recorded = file_recorded
   end
+
+  # The declared layer this file was narrowed to, or nil for the all-layer file.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
+
+  # A layer was asked and the run DID record this file, but none of its examples declared that layer —
+  # an empty answer the panel words differently from a file the run never wrote. False without a
+  # layer, and false whenever there are rows.
+  def layer_empty? = layer? && rows.empty? && @file_recorded == true
 
   # The file that was asked for, as it was asked for. Held even when nothing came back, because the
   # empty state has to name it — "no examples" without a subject is a sentence about nothing.

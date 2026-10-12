@@ -1007,8 +1007,16 @@ class SpecObservation < ApplicationRecord
   # second aggregate. Those two are ATTRIBUTES of the returned records rather than a separate
   # value, which makes this relation one to load and read — `SpecFileExamples` is its one caller —
   # rather than one to count or paginate further.
-  def self.in_file(test_run, spec_file_path, limit: FILE_EXAMPLES_LIMIT)
-    where(test_run_id: test_run.id, spec_file_path: spec_file_path)
+  #
+  # `layer:` narrows the file to the examples that declared ONE layer ({DECLARED_LAYER_KEYS}), through
+  # {.in_declared_layer} — the predicate the layer-ranked "Heaviest spec files" rollup counts with — so
+  # a file opened out of a layer-ranked row holds exactly the rows that row counted: the `FILE_POPULATION_COUNTS`
+  # windows are evaluated AFTER the WHERE, so the drill-in's `file_recorded_count` / `file_timed_count`
+  # equal the clicked row's `recorded_count` / `timed_count` with no second query. The `(test_run_id,
+  # spec_file_path)` equality still leads, so the by-file index stays the access path and the layer is a
+  # filter on that file's rows. `nil` (the default) is the unnarrowed read, byte-identical to before.
+  def self.in_file(test_run, spec_file_path, limit: FILE_EXAMPLES_LIMIT, layer: nil)
+    in_declared_layer(where(test_run_id: test_run.id, spec_file_path: spec_file_path), layer)
       .select(Arel.sql("spec_observations.*, #{FILE_POPULATION_COUNTS}"))
       .order(Arel.sql("duration_seconds DESC NULLS LAST"), id: :asc)
       .limit(limit)
