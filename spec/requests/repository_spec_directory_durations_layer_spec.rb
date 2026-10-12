@@ -88,23 +88,32 @@ RSpec.describe "Repository heaviest spec directories — ?layer=", type: :reques
   end
 
   # The cross-reference sentence at the open-area panel claims the rollup row "states the same
-  # fraction". Under a layer the rollup row states the LAYER's fraction while the open area stays
-  # all-layer, so the claim would be false.
-  # @intent: { entity: "GET /repositories/:id", action: "withhold a false cross-reference", behavior: "with a layer-narrowed rollup the open area's coverage basis does not claim to state the same fraction as the rollup row, while the un-narrowed page still does", layer: "request" }
-  it "withholds the same-fraction cross-reference when the rollup is layer-narrowed" do
+  # fraction". Under a layer (SPGD-1776) the open area is narrowed to that layer too, so the claim is
+  # true wherever the area is a row of the rollup, and still withheld where it is not.
+  # @intent: { entity: "GET /repositories/:id", action: "cross-reference the layer-narrowed rollup row", behavior: "with a layer asked the open area states the layer's fraction and the same-fraction sentence renders only when the area is a row of the layer-ranked rollup", layer: "request" }
+  it "renders the same-fraction cross-reference under a layer only for an area that is a rollup row" do
     sentence = "the same fraction the row for this area states in the panel above"
-    # Make the open area partly untimed so the "durations cover" branch (the one that carries the claim) renders.
-    observe(run, path: "spec/slow_requests/b_spec.rb", line: 1, duration: nil, layer: "unit")
+    # A sixth request example, untimed, so the "durations cover" branch (the one carrying the claim) renders.
+    observe(run, path: "spec/slow_requests/b_spec.rb", line: 1, duration: nil, layer: "request")
+    # A unit example in the same area: the request-layer fraction must ignore it.
+    observe(run, path: "spec/slow_requests/b_spec.rb", line: 2, duration: nil, layer: "unit")
 
     get repository_path(repository, spec_directory: "spec/slow_requests", layer: "request")
-    expect(page).to have_css("#spec-directory-files")
-    expect(page.find("#spec-directory-files").text.gsub(/\s+/, " ")).not_to include(sentence)
-    expect(page.find("#spec-directory-files").text.gsub(/\s+/, " ")).to include("durations cover 5 of 6")
+    text = page.find("#spec-directory-files").text.gsub(/\s+/, " ")
+    expect(text).to include("durations cover 5 of 6").and include(sentence)
+    row = panel.all("tbody tr").find { it.first("td").text.strip == "spec/slow_requests" }
+    expect(row.all("td")[1].text.strip).to eq("5 of 6")
 
-    # Un-narrowed, the area is on the page (top ten) only if it ranks; open a listed area to pin the positive.
-    get repository_path(repository, spec_directory: "spec/unit00")
+    # An area that is not a row of the layer-ranked rollup keeps the cross-reference withheld.
+    observe(run, path: "spec/unit10/b_spec.rb", line: 2, duration: nil, layer: "unit")
+    get repository_path(repository, spec_directory: "spec/unit10", layer: "unit", limit: 1)
+    expect(panel.all("tbody tr").map { it.first("td").text.strip }).not_to include("spec/unit10")
     open_text = page.find("#spec-directory-files").text.gsub(/\s+/, " ")
-    expect(open_text).not_to include(sentence) # complete area: a different branch, no fraction claim at all
+    expect(open_text).to include("durations cover")
+    expect(open_text).not_to include(sentence)
+
+    # Unasked, a listed area still carries it.
+    get repository_path(repository, spec_directory: "spec/unit00")
     observe(run, path: "spec/unit00/b_spec.rb", line: 2, duration: nil, layer: "unit")
     get repository_path(repository, spec_directory: "spec/unit00")
     expect(page.find("#spec-directory-files").text.gsub(/\s+/, " ")).to include(sentence)

@@ -519,9 +519,9 @@ class RunDrillInSerializer
   def serialized_spec_directory_files(test_run)
     return nil if requested_spec_directory.nil?
 
-    files = SpecDirectoryFiles.for(test_run, requested_spec_directory)
+    files = SpecDirectoryFiles.for(test_run, requested_spec_directory, layer: requested_layer)
 
-    {
+    body = {
       # The ask, restated as the server read it — never echoed from the raw parameter, on
       # `history_window.branch`'s rule: a malformed shape is no ask at all and reaches no block, so
       # what is served here is always the path the rows were actually gathered under.
@@ -547,6 +547,12 @@ class RunDrillInSerializer
       layer_counts: files.layer_counts,
       limit: SpecObservation::SPEC_DIRECTORY_FILES_LIMIT
     }
+    # Under `?layer=` the area holds only the examples of that declared layer, so `rows` and the
+    # area's counts equal the layer-ranked `spec_directories` row for this area. A layer none of the
+    # area's examples declared is `rows: []` with the layer echoed. Echoed ONLY when asked (key ABSENT
+    # otherwise, including for a malformed ask, which `requested_layer` reads as nil).
+    body[:layer] = files.layer if files.layer?
+    body
   end
 
   # WHICH EXAMPLES ONE FILE HOLDS — the bottom rung of area → file → example, and the move an agent

@@ -709,7 +709,7 @@ class RepositoryDashboard
     # ask: see `SpecDirectoryFiles`.
     @spec_directory_request = requested_spec_directory
     if @latest_test_run && @spec_directory_request
-      @spec_directory_files = SpecDirectoryFiles.for(@latest_test_run, @spec_directory_request)
+      @spec_directory_files = SpecDirectoryFiles.for(@latest_test_run, @spec_directory_request, layer: @layer_request)
     end
     # THE LAST RUNG OF THE ANNOTATION LADDER, and the one this page never had: not WHICH AREAS carry
     # the run's annotation debt but WHICH TESTS. The Overview panel prints that debt at run grain as
