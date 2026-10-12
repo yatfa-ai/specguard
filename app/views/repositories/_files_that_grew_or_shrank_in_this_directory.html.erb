@@ -37,6 +37,8 @@
 <% if @spec_directory_file_growth&.comparable? %>
       <%= render UI::PanelComponent.new(title: "Files that grew or shrank in this directory",
                                         id: "spec-directory-file-growth", class: "rc-drill") do %>
+        <%= render "repositories/run_pair_layer_note", growth: @spec_directory_file_growth,
+                   clear_id: "spec-directory-file-growth-clear-layer", anchor: "changes" %>
         <% if @spec_directory_file_growth.recorded? && @spec_directory_file_growth.any_movement? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-file-growth-basis") do %>
             <span class="font-mono text-app-content-secondary"><%= @spec_directory_file_growth.path %></span>
@@ -66,7 +68,8 @@
             subdirectory of it is its own area rather than part of this list.
             Counted off the
             <%= number_with_delimiter(@spec_directory_file_growth.previous_recorded_count) %> and
-            <%= number_with_delimiter(@spec_directory_file_growth.latest_recorded_count) %> example
+            <%= number_with_delimiter(@spec_directory_file_growth.latest_recorded_count) %>
+            <%= @spec_directory_file_growth.layer? ? "#{@spec_directory_file_growth.layer}-layer " : "" %>example
             rows the two runs recorded in this area — this area's own rows, not the suite totals the
             panel above is counted over and not the suite size on the Summary.
           <% end %>
@@ -96,6 +99,14 @@
                              "either run recorded in #{@spec_directory_file_growth.path} holds the " \
                              "same number of examples in both, so nothing in this area grew or " \
                              "shrank between them."
+              ) %>
+        <% elsif @spec_directory_file_growth.layer? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No #{@spec_directory_file_growth.layer}-layer examples in this directory",
+                description: "Neither this run nor the previous run on this branch has an example " \
+                             "in #{@spec_directory_file_growth.path} that declared " \
+                             "#{@spec_directory_file_growth.layer} as its layer, so no file of it " \
+                             "gained or lost any. The area may still hold examples of other layers."
               ) %>
         <% else %>
           <%= render UI::EmptyStateComponent.new(

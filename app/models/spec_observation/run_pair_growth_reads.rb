@@ -6,7 +6,8 @@
 # this module, so every caller keeps spelling them `SpecObservation.<method>` and the receiver is
 # still the model class (`where`, `sanitize_sql_array` and the constants resolve as before).
 #
-# MOVE ONLY. Every method body and comment below is byte-identical to what it was in
+# MOVE ONLY (as of the move; SPGD-1780 later added `layer:` to all four — see each method's
+# `layer:` section). Every method body and comment below is byte-identical to what it was in
 # `app/models/spec_observation.rb`; the sole code edit is `def self.x` -> `def x`, and the emitted
 # SQL did not change. The comments still say "above", "below" and `{.foo}`, and those coordinates
 # are RELATIVE TO THE OLD FILE — they were not rewritten, so read a position word as pointing into
@@ -87,15 +88,26 @@ class SpecObservation < ApplicationRecord
     # outright and buys it a sort. This read has no `DISTINCT` aggregate and does still hash — the
     # two facts simply stopped being the same fact, so it is stated here on its own evidence.
     #
+    # == `layer:` narrows every figure to ONE declared layer (SPGD-1780)
+    #
+    # `nil` — the default — is the un-narrowed read, byte-identical SQL to before the keyword
+    # existed. A {DECLARED_LAYER_KEYS} member (String or Symbol) wraps the scope in
+    # {SpecObservation.in_declared_layer} BEFORE the grouping, so the per-area counts, the sums, the
+    # ranking and every `... OVER ()` window total are that layer's own, from the one grouped
+    # statement and with no second query. The window totals are therefore the LAYER's recorded and
+    # timed populations: a zero on one side means "that run has no examples of this layer", NOT
+    # "that run recorded nothing" — which is why the presenters decide their refusal states at run
+    # grain when a layer is asked, and not from these totals.
+    #
     # @return [Array<Array>] `[directory, previous_count, latest_count, directory_count,
     #   previous_recorded, latest_recorded]` per directory, ranked by absolute movement. The last
     #   three are the same figures on every row: how many areas the two runs touched between them,
     #   and how many rows each run recorded in total — all three counted before the `LIMIT`.
-    def directory_growth_between(test_run, previous_test_run, limit: MOVED_DIRECTORIES_LIMIT)
+    def directory_growth_between(test_run, previous_test_run, limit: MOVED_DIRECTORIES_LIMIT, layer: nil)
       latest = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", test_run.id])
       previous = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", previous_test_run.id])
 
-      where(test_run_id: [test_run.id, previous_test_run.id])
+      in_declared_layer(where(test_run_id: [test_run.id, previous_test_run.id]), layer)
         .group(Arel.sql(DIRECTORY_EXPRESSION))
         .order(Arel.sql("ABS(#{latest} - #{previous}) DESC"), Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
         .limit(limit)
@@ -157,17 +169,28 @@ class SpecObservation < ApplicationRecord
     # from a scan that was already happening. The grouping is on a plain column here rather than on an
     # expression, which is if anything the easier of the two shapes.
     #
+    # == `layer:` narrows every figure to ONE declared layer (SPGD-1780)
+    #
+    # `nil` — the default — is the un-narrowed read, byte-identical SQL to before the keyword
+    # existed. A {DECLARED_LAYER_KEYS} member (String or Symbol) wraps the scope in
+    # {SpecObservation.in_declared_layer} BEFORE the grouping, so the per-area counts, the sums, the
+    # ranking and every `... OVER ()` window total are that layer's own, from the one grouped
+    # statement and with no second query. The window totals are therefore the LAYER's recorded and
+    # timed populations: a zero on one side means "that run has no examples of this layer", NOT
+    # "that run recorded nothing" — which is why the presenters decide their refusal states at run
+    # grain when a layer is asked, and not from these totals.
+    #
     # @return [Array<Array>] `[spec_file_path, previous_count, latest_count, file_count,
     #   previous_recorded, latest_recorded]` per file, ranked by absolute movement with a path
     #   tiebreak. The last three are the same figures on every row: how many files the two runs
     #   touched in this area between them, and how many rows each run recorded in it — all three
     #   counted before the `LIMIT`, so a capped list cannot disagree with the sentence describing it.
     def file_growth_between(test_run, previous_test_run, directory,
-                                 limit: SPEC_DIRECTORY_FILE_GROWTH_LIMIT)
+                                 limit: SPEC_DIRECTORY_FILE_GROWTH_LIMIT, layer: nil)
       latest = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", test_run.id])
       previous = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", previous_test_run.id])
 
-      where(test_run_id: [test_run.id, previous_test_run.id])
+      in_declared_layer(where(test_run_id: [test_run.id, previous_test_run.id]), layer)
         .where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", directory]))
         .group(:spec_file_path)
         .order(Arel.sql("ABS(#{latest} - #{previous}) DESC"), spec_file_path: :asc)
@@ -235,13 +258,24 @@ class SpecObservation < ApplicationRecord
     # can never be an `Index Only Scan` — neither can `.directory_durations_in`, and
     # spec/models/spec_observation_spec.rb records that tradeoff for both.
     #
+    # == `layer:` narrows every figure to ONE declared layer (SPGD-1780)
+    #
+    # `nil` — the default — is the un-narrowed read, byte-identical SQL to before the keyword
+    # existed. A {DECLARED_LAYER_KEYS} member (String or Symbol) wraps the scope in
+    # {SpecObservation.in_declared_layer} BEFORE the grouping, so the per-area counts, the sums, the
+    # ranking and every `... OVER ()` window total are that layer's own, from the one grouped
+    # statement and with no second query. The window totals are therefore the LAYER's recorded and
+    # timed populations: a zero on one side means "that run has no examples of this layer", NOT
+    # "that run recorded nothing" — which is why the presenters decide their refusal states at run
+    # grain when a layer is asked, and not from these totals.
+    #
     # @return [Array<Array>] `[directory, previous_seconds, latest_seconds, previous_recorded,
     #   latest_recorded, previous_timed, latest_timed, directory_count, previous_recorded_total,
     #   latest_recorded_total, previous_timed_total, latest_timed_total]` per directory, ranked by
     #   absolute movement in seconds. Either `_seconds` is nil where that side timed nothing in that
     #   area. The last five are the same figures on every row, all counted before the `LIMIT`.
     def directory_runtime_growth_between(test_run, previous_test_run,
-                                              limit: RETIMED_DIRECTORIES_LIMIT)
+                                              limit: RETIMED_DIRECTORIES_LIMIT, layer: nil)
       latest_seconds = sanitize_sql_array(["SUM(duration_seconds) FILTER (WHERE test_run_id = ?)", test_run.id])
       previous_seconds = sanitize_sql_array(["SUM(duration_seconds) FILTER (WHERE test_run_id = ?)",
                                              previous_test_run.id])
@@ -251,7 +285,7 @@ class SpecObservation < ApplicationRecord
       previous_timed = sanitize_sql_array(["COUNT(duration_seconds) FILTER (WHERE test_run_id = ?)",
                                            previous_test_run.id])
 
-      where(test_run_id: [test_run.id, previous_test_run.id])
+      in_declared_layer(where(test_run_id: [test_run.id, previous_test_run.id]), layer)
         .group(Arel.sql(DIRECTORY_EXPRESSION))
         .order(Arel.sql("ABS(#{latest_seconds} - #{previous_seconds}) DESC NULLS LAST"),
                Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
@@ -346,6 +380,17 @@ class SpecObservation < ApplicationRecord
     # `Index Only Scan`; spec/models/spec_observation_spec.rb records that tradeoff here as it does
     # for its two parents.
     #
+    # == `layer:` narrows every figure to ONE declared layer (SPGD-1780)
+    #
+    # `nil` — the default — is the un-narrowed read, byte-identical SQL to before the keyword
+    # existed. A {DECLARED_LAYER_KEYS} member (String or Symbol) wraps the scope in
+    # {SpecObservation.in_declared_layer} BEFORE the grouping, so the per-area counts, the sums, the
+    # ranking and every `... OVER ()` window total are that layer's own, from the one grouped
+    # statement and with no second query. The window totals are therefore the LAYER's recorded and
+    # timed populations: a zero on one side means "that run has no examples of this layer", NOT
+    # "that run recorded nothing" — which is why the presenters decide their refusal states at run
+    # grain when a layer is asked, and not from these totals.
+    #
     # @return [Array<Array>] `[spec_file_path, previous_seconds, latest_seconds, previous_recorded,
     #   latest_recorded, previous_timed, latest_timed, file_count, previous_recorded_total,
     #   latest_recorded_total, previous_timed_total, latest_timed_total]` per file, ranked by absolute
@@ -353,7 +398,7 @@ class SpecObservation < ApplicationRecord
     #   nothing in that file. The last five are the same figures on every row — this AREA's — all
     #   counted before the `LIMIT`.
     def file_runtime_growth_between(test_run, previous_test_run, directory,
-                                         limit: SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT)
+                                         limit: SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT, layer: nil)
       latest_seconds = sanitize_sql_array(["SUM(duration_seconds) FILTER (WHERE test_run_id = ?)", test_run.id])
       previous_seconds = sanitize_sql_array(["SUM(duration_seconds) FILTER (WHERE test_run_id = ?)",
                                              previous_test_run.id])
@@ -363,7 +408,7 @@ class SpecObservation < ApplicationRecord
       previous_timed = sanitize_sql_array(["COUNT(duration_seconds) FILTER (WHERE test_run_id = ?)",
                                            previous_test_run.id])
 
-      where(test_run_id: [test_run.id, previous_test_run.id])
+      in_declared_layer(where(test_run_id: [test_run.id, previous_test_run.id]), layer)
         .where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", directory]))
         .group(:spec_file_path)
         .order(Arel.sql("ABS(#{latest_seconds} - #{previous_seconds}) DESC NULLS LAST"), spec_file_path: :asc)

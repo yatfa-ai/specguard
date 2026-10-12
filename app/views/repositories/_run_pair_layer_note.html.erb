@@ -1,0 +1,18 @@
+<%# == The ONE statement of a declared-layer narrowing on a run-over-run growth panel (SPGD-1780)
+        `?layer=` narrows "Areas that grew or shrank", "Areas that got slower or faster" and "Files
+        that grew or shrank in this directory" to the examples that declared that layer in their own
+        `@intent` — never inferred from the path — so every count, sum and ranking on the panel is the
+        layer's, and an area that gained request examples while losing unit examples reads as a gain
+        rather than ±0. Said once per panel, outside the "How to read this" note, so it is also on the
+        page when the panel has no table to caption (a layer empty in both runs, a refused comparison).
+        Locals: `growth` (responds to `layer?`/`layer`), `clear_id` (DOM id for the link), `anchor`
+        (where the clear link lands). %>
+<% if growth.layer? %>
+  <p class="text-sm text-app-content-secondary" id="<%= clear_id.sub(/-clear-layer\z/, "") %>-layer-scope">
+    Only the <%= growth.layer %>-layer examples — those that declared
+    <code><%= growth.layer %></code> as their layer in their own <code>@intent</code>, never
+    inferred from the path — are counted here, in both runs.
+    <%= link_to "Clear layer filter", drill_down_path(@repository, layer: nil, anchor: anchor),
+                id: clear_id, class: "rc-link" %>
+  </p>
+<% end %>
