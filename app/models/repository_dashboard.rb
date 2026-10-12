@@ -770,7 +770,7 @@ class RepositoryDashboard
     # ONE query when there is a comparison to make, none when there is not, and neither grows with
     # the size of the suite: see `SpecDirectoryGrowth`.
     if @latest_test_run && @previous_test_run
-      @spec_directory_growth = SpecDirectoryGrowth.for(@latest_test_run, @previous_test_run)
+      @spec_directory_growth = SpecDirectoryGrowth.for(@latest_test_run, @previous_test_run, layer: @layer_request)
       # The declared-layer MIX against the same previous run — the "Declared layers" row's delta
       # line. The gate is `LayerRunGrowth`'s own and runs before any read of the previous run's mix.
       @layer_run_growth = LayerRunGrowth.for(@latest_test_run, @previous_test_run)
@@ -801,7 +801,7 @@ class RepositoryDashboard
       if @spec_directory_request
         @spec_directory_file_growth = SpecDirectoryFileGrowth.for(
           @latest_test_run, @previous_test_run, @spec_directory_request,
-          growth: @spec_directory_growth
+          growth: @spec_directory_growth, layer: @layer_request
         )
       end
       # The same two runs and the same areas, ranked by an INDEPENDENT quantity: not which area
@@ -823,7 +823,7 @@ class RepositoryDashboard
       # ONE query when there is a comparison to make, none when there is not, and neither grows
       # with the size of the suite: see `SpecDirectoryRuntimeGrowth`.
       @spec_directory_runtime_growth =
-        SpecDirectoryRuntimeGrowth.for(@latest_test_run, @previous_test_run)
+        SpecDirectoryRuntimeGrowth.for(@latest_test_run, @previous_test_run, layer: @layer_request)
     end
     # The first question this page asks that MATCHES A TEST TO ITSELF across runs: which tests
     # changed their outcome over the window the "Suite growth" panel above is already drawn on.

@@ -99,11 +99,12 @@ class SpecDirectoryFileGrowth
   # whether these runs are comparable, and so this costs no second gate — see the class comment for
   # why the last two of its six states are not re-derivable at this grain in any case.
   def self.for(test_run, previous_test_run, path, growth:,
-               limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT)
-    return new(path: path, state: growth.state) unless growth.comparable?
+               limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT, layer: nil)
+    layer = layer&.to_s
+    return new(path: path, state: growth.state, layer: layer) unless growth.comparable?
 
     from_tuples(path, SpecObservation.file_growth_between(test_run, previous_test_run, path,
-                                                          limit: limit))
+                                                          limit: limit, layer: layer), layer)
   end
 
   # The three window totals ride on every row and are identical on all of them, so they are read off
@@ -112,7 +113,7 @@ class SpecDirectoryFileGrowth
   # state — a group exists here if and only if a row exists — so it needs no separate count to
   # detect, and it is `#recorded?` rather than a state of its own: the six states are about the RUNS
   # and this is about the AREA.
-  def self.from_tuples(path, tuples)
+  def self.from_tuples(path, tuples, layer = nil)
     rows = tuples.map do |file_path, previous, latest, *|
       Row.new(path: file_path, previous_count: previous.to_i, latest_count: latest.to_i)
     end
@@ -120,12 +121,13 @@ class SpecDirectoryFileGrowth
     _path, _previous, _latest, file_count, previous_recorded, latest_recorded = tuples.first
 
     new(path: path, state: :comparable, rows: rows, file_count: file_count.to_i,
-        previous_recorded_count: previous_recorded.to_i, latest_recorded_count: latest_recorded.to_i)
+        previous_recorded_count: previous_recorded.to_i, latest_recorded_count: latest_recorded.to_i, layer: layer)
   end
   private_class_method :from_tuples
 
   def initialize(path:, state:, rows: [], file_count: 0, previous_recorded_count: 0,
-                 latest_recorded_count: 0)
+                 latest_recorded_count: 0, layer: nil)
+    @layer = layer&.to_s
     @path = path
     @state = state
     @rows = rows
@@ -160,6 +162,14 @@ class SpecDirectoryFileGrowth
   attr_reader :previous_recorded_count, :latest_recorded_count
 
   def comparable? = state == :comparable
+
+  # The declared layer this drill-in was narrowed to (a String), or nil when it was not (SPGD-1780).
+  # It moves with the parent rollup because one `?spec_directory=` opens both from a layer-narrowed
+  # row; with a layer, this area's figures are that layer's and equal the rollup row's. The state is
+  # still the PARENT's verdict, unchanged.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
 
   # Either run recorded at least one example in this area. False for an area that is a typo, a stale
   # bookmark, or a directory both runs are innocent of — distinct from every one of the six

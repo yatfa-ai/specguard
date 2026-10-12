@@ -95,13 +95,35 @@ class SpecDirectoryRuntimeGrowth
   #
   # The remaining states are decidable only from the rows, and cost the one query the comparison
   # costs anyway.
-  def self.for(test_run, previous_test_run, limit: SpecObservation::RETIMED_DIRECTORIES_LIMIT)
-    return new(state: :latest_unmeasured) unless test_run.suite_size_measured?
-    return new(state: :previous_unmeasured) unless previous_test_run.suite_size_measured?
-    return new(state: :assembled_differently) unless test_run.assembled_like?(previous_test_run)
+  #
+  # `layer:` (SPGD-1780) narrows the comparison to ONE declared layer — nil, the default, is the
+  # un-narrowed comparison, byte-identical to before. With a layer asked the read's window totals are
+  # the LAYER's, so they can no longer distinguish "this run recorded / timed nothing" from "this run
+  # has no examples of this layer". The RECORDED states are therefore decided at RUN grain off
+  # `TestRun#intent_readings` (memoized, no new query), and the TIMED states fire only on a side that
+  # HAS examples of the layer (`TestRun#layer_counts`) and timed none of them — a layer-empty side is a
+  # legitimately new or removed area, not an untimed one. See {.from_tuples}.
+  def self.for(test_run, previous_test_run, limit: SpecObservation::RETIMED_DIRECTORIES_LIMIT, layer: nil)
+    layer = layer&.to_s
+    return new(state: :latest_unmeasured, layer: layer) unless test_run.suite_size_measured?
+    return new(state: :previous_unmeasured, layer: layer) unless previous_test_run.suite_size_measured?
+    return new(state: :assembled_differently, layer: layer) unless test_run.assembled_like?(previous_test_run)
+
+    sides = nil
+    if layer
+      previous_recorded = previous_test_run.intent_readings.recorded?
+      latest_recorded = test_run.intent_readings.recorded?
+      return new(state: :neither_recorded, layer: layer) unless previous_recorded || latest_recorded
+      return new(state: :previous_unrecorded, layer: layer) unless previous_recorded
+      return new(state: :latest_unrecorded, layer: layer) unless latest_recorded
+
+      sides = { previous_has_layer: previous_test_run.layer_counts.fetch(layer.to_sym, 0).positive?,
+                latest_has_layer: test_run.layer_counts.fetch(layer.to_sym, 0).positive? }
+    end
 
     from_tuples(
-      SpecObservation.directory_runtime_growth_between(test_run, previous_test_run, limit: limit)
+      SpecObservation.directory_runtime_growth_between(test_run, previous_test_run, limit: limit, layer: layer),
+      layer, sides
     )
   end
 
@@ -119,7 +141,7 @@ class SpecDirectoryRuntimeGrowth
   # no timings" is owed the figure that makes it actionable — it recorded 4,102 examples and timed
   # none of them — and the read has already paid for it; withholding it would leave the reader with
   # a sentence they cannot size.
-  def self.from_tuples(tuples)
+  def self.from_tuples(tuples, layer = nil, sides = nil)
     _path, _prev_s, _latest_s, _prev_rec, _latest_rec, _prev_timed, _latest_timed,
       directory_count, previous_recorded, latest_recorded, previous_timed, latest_timed = tuples.first
 
@@ -127,12 +149,25 @@ class SpecDirectoryRuntimeGrowth
                previous_recorded_count: previous_recorded.to_i, latest_recorded_count: latest_recorded.to_i,
                previous_timed_count: previous_timed.to_i, latest_timed_count: latest_timed.to_i }
 
-    return new(state: :neither_recorded, **totals) if previous_recorded.to_i.zero? && latest_recorded.to_i.zero?
-    return new(state: :previous_unrecorded, **totals) if previous_recorded.to_i.zero?
-    return new(state: :latest_unrecorded, **totals) if latest_recorded.to_i.zero?
-    return new(state: :neither_timed, **totals) if previous_timed.to_i.zero? && latest_timed.to_i.zero?
-    return new(state: :previous_untimed, **totals) if previous_timed.to_i.zero?
-    return new(state: :latest_untimed, **totals) if latest_timed.to_i.zero?
+    if layer
+      # Recorded states were decided at run grain in {.for}. Untimed only on a side that HAS
+      # examples of the layer: an empty side is a new / removed area, and a layer empty on both is a
+      # defined, comparable, empty answer.
+      previous_has = sides.fetch(:previous_has_layer)
+      latest_has = sides.fetch(:latest_has_layer)
+      previous_untimed = previous_has && previous_timed.to_i.zero?
+      latest_untimed = latest_has && latest_timed.to_i.zero?
+      return new(state: :neither_timed, layer: layer, **totals) if previous_untimed && latest_untimed
+      return new(state: :previous_untimed, layer: layer, **totals) if previous_untimed
+      return new(state: :latest_untimed, layer: layer, **totals) if latest_untimed
+    else
+      return new(state: :neither_recorded, **totals) if previous_recorded.to_i.zero? && latest_recorded.to_i.zero?
+      return new(state: :previous_unrecorded, **totals) if previous_recorded.to_i.zero?
+      return new(state: :latest_unrecorded, **totals) if latest_recorded.to_i.zero?
+      return new(state: :neither_timed, **totals) if previous_timed.to_i.zero? && latest_timed.to_i.zero?
+      return new(state: :previous_untimed, **totals) if previous_timed.to_i.zero?
+      return new(state: :latest_untimed, **totals) if latest_timed.to_i.zero?
+    end
 
     rows = tuples.map do |path, prev_seconds, latest_seconds, prev_rec, latest_rec, prev_t, latest_t, *|
       Row.new(path: path, previous_seconds: prev_seconds, latest_seconds: latest_seconds,
@@ -140,12 +175,13 @@ class SpecDirectoryRuntimeGrowth
               previous_timed_count: prev_t.to_i, latest_timed_count: latest_t.to_i)
     end
 
-    new(state: :comparable, rows: rows, **totals)
+    new(state: :comparable, rows: rows, layer: layer, **totals)
   end
   private_class_method :from_tuples
 
   def initialize(state:, rows: [], directory_count: 0, previous_recorded_count: 0,
-                 latest_recorded_count: 0, previous_timed_count: 0, latest_timed_count: 0)
+                 latest_recorded_count: 0, previous_timed_count: 0, latest_timed_count: 0, layer: nil)
+    @layer = layer&.to_s
     @state = state
     @rows = rows
     @directory_count = directory_count
@@ -183,6 +219,17 @@ class SpecDirectoryRuntimeGrowth
   attr_reader :previous_timed_count, :latest_timed_count
 
   def comparable? = state == :comparable
+
+  # The declared layer this comparison was narrowed to (a String), or nil when it was not — in which
+  # case every figure on this object is the un-narrowed one. With a layer, `directory_count` and the
+  # recorded / timed counts are the LAYER's.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
+
+  # A layer was asked and NEITHER run has a single example of it: comparable, and empty. Distinct
+  # from every refusal state — both runs recorded per-example rows, the layer just has none.
+  def layer_empty? = layer? && comparable? && rows.empty?
 
   # There are areas the comparison covered that the list does not show.
   def truncated? = directory_count > rows.size

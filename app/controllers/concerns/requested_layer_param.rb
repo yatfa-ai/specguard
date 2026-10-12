@@ -16,6 +16,10 @@
 #   - `spec_directory_files`: the "Spec files in this directory" drill-in, which opens an area holding
 #     only the examples of that layer, so its counts equal the layer-ranked `spec_directories` row for
 #     the same area (SPGD-1776);
+#   - `directory_run_growth`, `directory_runtime_growth` (the run-over-run area comparisons) and their
+#     `directory_run_file_growth` / `directory_runtime_file_growth` drill-ins: every count and sum is
+#     that layer's, so an area gaining request examples while losing unit ones reads as a gain
+#     (SPGD-1780);
 #   - `slowest_tests`: the window-grain ranking (candidate step);
 #   - `unstable_tests`: the window-grain ranking (candidate step: the tests that FAILED in an example
 #     of that layer — SPGD-1755);

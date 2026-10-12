@@ -1,7 +1,18 @@
     <% if @spec_directory_runtime_growth %>
       <%= render UI::PanelComponent.new(title: "Areas that got slower or faster",
                                         id: "spec-directory-runtime-growth") do %>
-        <% if @spec_directory_runtime_growth.comparable? && @spec_directory_runtime_growth.anything_to_show? %>
+        <%= render "repositories/run_pair_layer_note", growth: @spec_directory_runtime_growth,
+                   clear_id: "spec-directory-runtime-growth-clear-layer", anchor: "changes" %>
+        <% if @spec_directory_runtime_growth.layer_empty? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No #{@spec_directory_runtime_growth.layer}-layer examples in either run",
+                description: "Neither this run nor the previous run on this branch has an example " \
+                             "that declared #{@spec_directory_runtime_growth.layer} as its layer, so " \
+                             "there is no #{@spec_directory_runtime_growth.layer}-layer time to " \
+                             "compare area by area. Both runs recorded per-example detail; the layer " \
+                             "is simply absent from both."
+              ) %>
+        <% elsif @spec_directory_runtime_growth.comparable? && @spec_directory_runtime_growth.anything_to_show? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-runtime-growth-basis") do %>
             <% if @spec_directory_runtime_growth.truncated? %>
               The <%= number_with_delimiter(@spec_directory_runtime_growth.rows.size) %>
@@ -117,6 +128,7 @@
                                "(#{@previous_test_run.commit_sha.first(7)}) reported no timings — " \
                                "it recorded " \
                                "#{number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count)} " \
+                               "#{@spec_directory_runtime_growth.layer? ? "#{@spec_directory_runtime_growth.layer}-layer " : ""}" \
                                "examples and a duration for none of them — so there is nothing to " \
                                "measure this run's areas against. Every area would otherwise read " \
                                "as time newly appearing."
@@ -126,6 +138,7 @@
                   title: "No comparison to draw",
                   description: "This run reported no timings — it recorded " \
                                "#{number_with_delimiter(@spec_directory_runtime_growth.latest_recorded_count)} " \
+                               "#{@spec_directory_runtime_growth.layer? ? "#{@spec_directory_runtime_growth.layer}-layer " : ""}" \
                                "examples and a duration for none of them — so its areas cannot be " \
                                "timed. Every area of the previous run would otherwise read as time " \
                                "disappearing, which is a reporting gap and not a speedup."
@@ -134,7 +147,7 @@
             <%= render UI::EmptyStateComponent.new(
                   title: "No comparison to draw",
                   description: "Neither this run nor the previous run on this branch reported a " \
-                               "duration for any example, so there is no time to compare area by " \
+                               "duration for any#{@spec_directory_runtime_growth.layer? ? " #{@spec_directory_runtime_growth.layer}-layer" : ""} example, so there is no time to compare area by " \
                                "area. Both recorded their examples; neither client sent timings " \
                                "with them."
                 ) %>

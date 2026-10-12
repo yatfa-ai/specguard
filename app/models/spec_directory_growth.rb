@@ -76,34 +76,63 @@ class SpecDirectoryGrowth
   #
   # The remaining three states are decidable only from the rows, and cost the one query the
   # comparison costs anyway.
-  def self.for(test_run, previous_test_run, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT)
-    return new(state: :latest_unmeasured) unless test_run.suite_size_measured?
-    return new(state: :previous_unmeasured) unless previous_test_run.suite_size_measured?
-    return new(state: :assembled_differently) unless test_run.assembled_like?(previous_test_run)
+  #
+  # `layer:` (SPGD-1780) narrows the comparison to ONE declared layer — nil, the default, is the
+  # un-narrowed comparison, byte-identical to before the keyword existed. With a layer asked, the
+  # window totals the read returns are the LAYER's, so they can no longer tell "this run recorded
+  # nothing" from "this run has no examples of this layer" — and the second is exactly the push
+  # this feature exists to explain ("we just added the first request tests"). The two RECORDED
+  # states are therefore decided at RUN grain instead, off `TestRun#intent_readings` (the memoized
+  # aggregate the page has already issued for the latest run), and short-circuit the query exactly
+  # as the three gates above do. A layer empty in the previous run only is `comparable` with every
+  # area `new_area?`; empty in the latest only, every area `removed_area?`; empty in BOTH is
+  # `comparable` with no rows ({#layer_empty?}) — a defined answer, not `neither_recorded`.
+  def self.for(test_run, previous_test_run, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT, layer: nil)
+    layer = layer&.to_s
+    return new(state: :latest_unmeasured, layer: layer) unless test_run.suite_size_measured?
+    return new(state: :previous_unmeasured, layer: layer) unless previous_test_run.suite_size_measured?
+    return new(state: :assembled_differently, layer: layer) unless test_run.assembled_like?(previous_test_run)
 
-    from_tuples(SpecObservation.directory_growth_between(test_run, previous_test_run, limit: limit))
+    if layer
+      previous_recorded = previous_test_run.intent_readings.recorded?
+      latest_recorded = test_run.intent_readings.recorded?
+      return new(state: :neither_recorded, layer: layer) unless previous_recorded || latest_recorded
+      return new(state: :previous_unrecorded, layer: layer) unless previous_recorded
+      return new(state: :latest_unrecorded, layer: layer) unless latest_recorded
+    end
+
+    from_tuples(SpecObservation.directory_growth_between(test_run, previous_test_run, limit: limit, layer: layer),
+                layer)
   end
 
   # The three window totals ride on every row and are identical on all of them, so they are read
   # off the first; `to_i` on the nil of an empty read, where zero areas and zero rows on both sides
   # is the honest count. An empty read is exactly the "neither run recorded rows" state — a group
-  # exists here if and only if a row exists — so it needs no separate count to detect.
-  def self.from_tuples(tuples)
+  # exists here if and only if a row exists — so it needs no separate count to detect. WITH A LAYER
+  # that inference is not available (an empty read is then "neither run has examples of the
+  # layer"), which is why {.for} has already decided the recorded states at run grain and this
+  # reads only the comparable answer.
+  def self.from_tuples(tuples, layer = nil)
     _path, _previous, _latest, directory_count, previous_recorded, latest_recorded = tuples.first
-    return new(state: :neither_recorded) if previous_recorded.to_i.zero? && latest_recorded.to_i.zero?
-    return new(state: :previous_unrecorded) if previous_recorded.to_i.zero?
-    return new(state: :latest_unrecorded) if latest_recorded.to_i.zero?
+    unless layer
+      return new(state: :neither_recorded) if previous_recorded.to_i.zero? && latest_recorded.to_i.zero?
+      return new(state: :previous_unrecorded) if previous_recorded.to_i.zero?
+      return new(state: :latest_unrecorded) if latest_recorded.to_i.zero?
+    end
 
     rows = tuples.map do |path, previous, latest, *|
       Row.new(path: path, previous_count: previous.to_i, latest_count: latest.to_i)
     end
 
     new(state: :comparable, rows: rows, directory_count: directory_count.to_i,
-        previous_recorded_count: previous_recorded.to_i, latest_recorded_count: latest_recorded.to_i)
+        previous_recorded_count: previous_recorded.to_i, latest_recorded_count: latest_recorded.to_i,
+        layer: layer)
   end
   private_class_method :from_tuples
 
-  def initialize(state:, rows: [], directory_count: 0, previous_recorded_count: 0, latest_recorded_count: 0)
+  def initialize(state:, rows: [], directory_count: 0, previous_recorded_count: 0, latest_recorded_count: 0,
+                 layer: nil)
+    @layer = layer&.to_s
     @state = state
     @rows = rows
     @directory_count = directory_count
@@ -136,6 +165,18 @@ class SpecDirectoryGrowth
   attr_reader :previous_recorded_count, :latest_recorded_count
 
   def comparable? = state == :comparable
+
+  # The declared layer this comparison was narrowed to (a `SpecObservation::DECLARED_LAYER_KEYS`
+  # member as a String), or nil when it was not — in which case every figure on this object is the
+  # un-narrowed one. With a layer, `directory_count` and both recorded counts are the LAYER's.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
+
+  # A layer was asked and NEITHER run has a single example of it: comparable, and empty. Distinct
+  # from every refusal state — both runs recorded per-example rows, the layer just has none in
+  # either — so the panel can say "no <layer> examples in either run" instead of a table of nothing.
+  def layer_empty? = layer? && comparable? && rows.empty?
 
   # There are areas the comparison covered that the list does not show.
   def truncated? = directory_count > rows.size

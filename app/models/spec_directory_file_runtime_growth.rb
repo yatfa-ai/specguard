@@ -160,11 +160,12 @@ class SpecDirectoryFileRuntimeGrowth
   # runs are comparable, and so this costs no second gate — see the class comment for why six of its
   # nine states are not re-derivable at this grain in any case.
   def self.for(test_run, previous_test_run, path, growth:,
-               limit: SpecObservation::SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT)
-    return new(path: path, state: growth.state) unless growth.comparable?
+               limit: SpecObservation::SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT, layer: nil)
+    layer = layer&.to_s
+    return new(path: path, state: growth.state, layer: layer) unless growth.comparable?
 
     from_tuples(path, SpecObservation.file_runtime_growth_between(test_run, previous_test_run, path,
-                                                                  limit: limit))
+                                                                  limit: limit, layer: layer), layer)
   end
 
   # The five window totals ride on every row and are identical on all of them, so they are read off
@@ -178,7 +179,7 @@ class SpecDirectoryFileRuntimeGrowth
   # six absence states off them; this one reads the same five figures and returns `:comparable`
   # regardless, because at this grain those totals are one AREA's and the six states they would spell
   # are claims about the RUNS. See the class comment.
-  def self.from_tuples(path, tuples)
+  def self.from_tuples(path, tuples, layer = nil)
     rows = tuples.map do |file_path, prev_seconds, latest_seconds, prev_rec, latest_rec, *|
       Row.new(path: file_path, previous_seconds: prev_seconds, latest_seconds: latest_seconds,
               previous_recorded_count: prev_rec.to_i, latest_recorded_count: latest_rec.to_i)
@@ -189,12 +190,13 @@ class SpecDirectoryFileRuntimeGrowth
 
     new(path: path, state: :comparable, rows: rows, file_count: file_count.to_i,
         previous_recorded_count: previous_recorded.to_i, latest_recorded_count: latest_recorded.to_i,
-        previous_timed_count: previous_timed.to_i, latest_timed_count: latest_timed.to_i)
+        previous_timed_count: previous_timed.to_i, latest_timed_count: latest_timed.to_i, layer: layer)
   end
   private_class_method :from_tuples
 
   def initialize(path:, state:, rows: [], file_count: 0, previous_recorded_count: 0,
-                 latest_recorded_count: 0, previous_timed_count: 0, latest_timed_count: 0)
+                 latest_recorded_count: 0, previous_timed_count: 0, latest_timed_count: 0, layer: nil)
+    @layer = layer&.to_s
     @path = path
     @state = state
     @rows = rows
@@ -243,6 +245,14 @@ class SpecDirectoryFileRuntimeGrowth
   attr_reader :previous_timed_count, :latest_timed_count
 
   def comparable? = state == :comparable
+
+  # The declared layer this drill-in was narrowed to (a String), or nil when it was not (SPGD-1780).
+  # It moves with the parent rollup because one `?spec_directory=` opens both from a layer-narrowed
+  # row; with a layer, this area's figures are that layer's and equal the rollup row's. The state is
+  # still the PARENT's verdict, unchanged.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
 
   # There are files the comparison covered that the list does not show.
   def truncated? = file_count > rows.size

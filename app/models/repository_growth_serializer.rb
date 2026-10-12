@@ -16,9 +16,9 @@
 # variables, so a second serializer would re-issue the previous-run `shard_totals` and layer reads
 # and move the `observation_reads` pins. The overview memoizes it; do not build one per call.
 #
-# What it reads back from the overview is exactly five methods, delegated privately below:
-# `latest_test_run`, `previous_test_run`, `history_runs`, `requested_branch` and
-# `requested_spec_directory`. It holds no `repository` and no `params` of its own and issues no SQL.
+# What it reads back from the overview is exactly six methods, delegated privately below:
+# `latest_test_run`, `previous_test_run`, `history_runs`, `requested_branch`,
+# `requested_spec_directory` and `requested_layer`. It holds no `repository` and no `params` of its own and issues no SQL.
 class RepositoryGrowthSerializer
   def initialize(overview:)
     @overview = overview
@@ -327,7 +327,7 @@ class RepositoryGrowthSerializer
   def serialized_directory_run_growth_window
     growth = spec_directory_growth
 
-    {
+    window = {
       order: "abs_change_desc,path_asc",
       tie_break_served: true,
       basis: "previous_run_on_branch",
@@ -338,6 +338,11 @@ class RepositoryGrowthSerializer
       anchor_commit_sha: latest_test_run&.commit_sha,
       baseline_commit_sha: previous_test_run&.commit_sha
     }
+
+    # Echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block beside
+    # this is `null` — still says which layer's comparison was refused. Absent otherwise.
+    window[:layer] = growth.layer if growth&.layer?
+    window
   end
 
   # The contract block for `layer_growth` — the declared-layer mix over the `?branch=` window, the
@@ -562,7 +567,7 @@ class RepositoryGrowthSerializer
 
     return nil unless growth&.comparable?
 
-    {
+    body = {
       rows: growth.rows.map { |row| serialized_directory_growth_row(row) },
       directory_count: growth.directory_count,
       truncated: growth.truncated?,
@@ -570,6 +575,13 @@ class RepositoryGrowthSerializer
       anchor_recorded_count: growth.latest_recorded_count,
       limit: SpecObservation::MOVED_DIRECTORIES_LIMIT
     }
+
+    # `?layer=` ASKED (SPGD-1780): the declared layer every figure above was narrowed to, echoed so
+    # they are not misread as the area's whole population. ABSENT — not `null` — when no layer was
+    # asked, so an unasked body (and a malformed ask, which the clamp reads as no ask) is
+    # byte-identical to before the parameter reached this block.
+    body[:layer] = growth.layer if growth.layer?
+    body
   end
 
   # One area's RUNTIME movement between two runs, its two operands, and the three different absences
@@ -680,7 +692,7 @@ class RepositoryGrowthSerializer
   def serialized_directory_runtime_growth_window
     growth = spec_directory_runtime_growth
 
-    {
+    window = {
       order: "abs_change_desc_nulls_last,path_asc",
       tie_break_served: true,
       basis: "previous_run_on_branch",
@@ -691,6 +703,11 @@ class RepositoryGrowthSerializer
       anchor_commit_sha: latest_test_run&.commit_sha,
       baseline_commit_sha: previous_test_run&.commit_sha
     }
+
+    # Echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block beside
+    # this is `null` — still says which layer's comparison was refused. Absent otherwise.
+    window[:layer] = growth.layer if growth&.layer?
+    window
   end
 
   # WHICH AREAS OF THE SUITE GOT SLOWER OR FASTER IN THE LATEST PUSH — the agent-readable half of the
@@ -753,7 +770,7 @@ class RepositoryGrowthSerializer
 
     return nil unless growth&.comparable?
 
-    {
+    body = {
       rows: growth.rows.map { |row| serialized_directory_runtime_growth_row(row) },
       directory_count: growth.directory_count,
       truncated: growth.truncated?,
@@ -763,6 +780,13 @@ class RepositoryGrowthSerializer
       anchor_timed_count: growth.latest_timed_count,
       limit: SpecObservation::RETIMED_DIRECTORIES_LIMIT
     }
+
+    # `?layer=` ASKED (SPGD-1780): the declared layer every figure above was narrowed to, echoed so
+    # they are not misread as the area's whole population. ABSENT — not `null` — when no layer was
+    # asked, so an unasked body (and a malformed ask, which the clamp reads as no ask) is
+    # byte-identical to before the parameter reached this block.
+    body[:layer] = growth.layer if growth.layer?
+    body
   end
 
   # The contract the PER-FILE growth rows below are served under — and, when they are `null`, which
@@ -816,7 +840,7 @@ class RepositoryGrowthSerializer
   def serialized_directory_run_file_growth_window
     growth = spec_directory_growth
 
-    {
+    window = {
       path: requested_spec_directory,
       order: "abs_change_desc,path_asc",
       tie_break_served: true,
@@ -825,6 +849,11 @@ class RepositoryGrowthSerializer
       comparable: growth&.comparable? || false,
       limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT
     }
+
+    # Echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block beside
+    # this is `null` — still says which layer's comparison was refused. Absent otherwise.
+    window[:layer] = growth.layer if growth&.layer?
+    window
   end
 
   # WHICH FILES OF THE ASKED-FOR AREA GREW OR SHRANK IN THE LATEST PUSH — the agent-readable half of
@@ -865,13 +894,20 @@ class RepositoryGrowthSerializer
 
     return nil unless growth&.comparable?
 
-    {
+    body = {
       rows: growth.rows.map { |row| serialized_directory_file_growth_row(row) },
       file_count: growth.file_count,
       truncated: growth.truncated?,
       baseline_recorded_count: growth.previous_recorded_count,
       anchor_recorded_count: growth.latest_recorded_count
     }
+
+    # `?layer=` ASKED (SPGD-1780): the declared layer every figure above was narrowed to, echoed so
+    # they are not misread as the area's whole population. ABSENT — not `null` — when no layer was
+    # asked, so an unasked body (and a malformed ask, which the clamp reads as no ask) is
+    # byte-identical to before the parameter reached this block.
+    body[:layer] = growth.layer if growth.layer?
+    body
   end
 
   # One spec file's movement between two runs, and BOTH OPERANDS it was taken across — never one of
@@ -978,7 +1014,7 @@ class RepositoryGrowthSerializer
   def serialized_directory_runtime_file_growth_window
     growth = spec_directory_runtime_growth
 
-    {
+    window = {
       path: requested_spec_directory,
       order: "abs_change_desc_nulls_last,path_asc",
       tie_break_served: true,
@@ -987,6 +1023,11 @@ class RepositoryGrowthSerializer
       comparable: growth&.comparable? || false,
       limit: SpecObservation::SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT
     }
+
+    # Echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block beside
+    # this is `null` — still says which layer's comparison was refused. Absent otherwise.
+    window[:layer] = growth.layer if growth&.layer?
+    window
   end
 
   # WHICH FILES OF THE ASKED-FOR AREA GOT SLOWER OR FASTER IN THE LATEST PUSH — the cell that
@@ -1042,7 +1083,7 @@ class RepositoryGrowthSerializer
 
     return nil unless growth&.comparable?
 
-    {
+    body = {
       rows: growth.rows.map { |row| serialized_directory_file_runtime_growth_row(row) },
       file_count: growth.file_count,
       truncated: growth.truncated?,
@@ -1051,6 +1092,13 @@ class RepositoryGrowthSerializer
       baseline_timed_count: growth.previous_timed_count,
       anchor_timed_count: growth.latest_timed_count
     }
+
+    # `?layer=` ASKED (SPGD-1780): the declared layer every figure above was narrowed to, echoed so
+    # they are not misread as the area's whole population. ABSENT — not `null` — when no layer was
+    # asked, so an unasked body (and a malformed ask, which the clamp reads as no ask) is
+    # byte-identical to before the parameter reached this block.
+    body[:layer] = growth.layer if growth.layer?
+    body
   end
 
   # One spec file's RUNTIME movement between two runs, its two operands, and the three different
@@ -1117,7 +1165,7 @@ class RepositoryGrowthSerializer
   attr_reader :overview
 
   delegate :latest_test_run, :previous_test_run, :requested_spec_directory, :requested_branch,
-           :history_runs, to: :overview, private: true
+           :requested_layer, :history_runs, to: :overview, private: true
 
   # The run-over-run presenter, or `nil` when there are not two runs to hand it — memoized across
   # the nil with `defined?` for the reason `unstable_tests` states, and under the same double read
@@ -1143,7 +1191,7 @@ class RepositoryGrowthSerializer
     return @spec_directory_growth if defined?(@spec_directory_growth)
 
     @spec_directory_growth =
-      latest_test_run && previous_test_run && SpecDirectoryGrowth.for(latest_test_run, previous_test_run)
+      latest_test_run && previous_test_run && SpecDirectoryGrowth.for(latest_test_run, previous_test_run, layer: requested_layer)
   end
 
   # The run-over-run declared-layer-mix presenter, or `nil` when there are not two runs to hand it.
@@ -1199,7 +1247,7 @@ class RepositoryGrowthSerializer
 
     @spec_directory_runtime_growth =
       latest_test_run && previous_test_run &&
-      SpecDirectoryRuntimeGrowth.for(latest_test_run, previous_test_run)
+      SpecDirectoryRuntimeGrowth.for(latest_test_run, previous_test_run, layer: requested_layer)
   end
 
   # The per-file drill-in for the ONE area a caller asked about, or `nil` when nobody asked or there
@@ -1238,7 +1286,7 @@ class RepositoryGrowthSerializer
     @spec_directory_file_growth =
       if requested_spec_directory && spec_directory_growth
         SpecDirectoryFileGrowth.for(latest_test_run, previous_test_run, requested_spec_directory,
-                                    growth: spec_directory_growth)
+                                    growth: spec_directory_growth, layer: requested_layer)
       end
   end
 
@@ -1285,7 +1333,7 @@ class RepositoryGrowthSerializer
     @spec_directory_file_runtime_growth =
       if requested_spec_directory && spec_directory_runtime_growth
         SpecDirectoryFileRuntimeGrowth.for(latest_test_run, previous_test_run, requested_spec_directory,
-                                           growth: spec_directory_runtime_growth)
+                                           growth: spec_directory_runtime_growth, layer: requested_layer)
       end
   end
 
