@@ -39,6 +39,17 @@
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-file-examples-basis") do %>
             <span class="font-mono text-app-content-secondary"><%= @spec_file_examples.path %></span>
             — <%= spec_file_examples_scope_sentence(@spec_file_examples) %>
+            <%# With `?layer=` asked the file holds only that layer's examples — exactly the rows the
+                layer-ranked "Heaviest spec files" row counted — so "the same fraction the row states"
+                below stays true, and every figure here is that layer's. %>
+            <% if @spec_file_examples.layer? %>
+              Only the examples that declared <code><%= @spec_file_examples.layer %></code>
+              as their layer in their own <code>@intent</code> (never inferred from the path) are
+              counted here, which is the population the row for this file counts in the panel above.
+              <%= link_to "Clear layer filter",
+                          drill_down_path(@repository, layer: nil, anchor: "spec-file-examples"),
+                          id: "spec-file-examples-clear-layer", class: "rc-link" %>
+            <% end %>
             <% if @spec_file_examples.complete? %>
               <% if @spec_file_examples.truncated? %>
                 Every one of the
@@ -99,6 +110,22 @@
               <% end %>
             <% end %>
           <% end %>
+        <% elsif @spec_file_examples.layer_empty? %>
+          <%# A layer was asked and the run DID record this file, but none of its examples declared that
+              layer — an empty answer, never "this run recorded no examples in this file". %>
+          <div id="spec-file-examples-layer-empty">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No example in this file declared this layer",
+                  description: "This run recorded examples in #{@spec_file_examples.path}, but none " \
+                               "of them declared #{@spec_file_examples.layer} as its layer in its own " \
+                               "@intent (the layer is never inferred from the path)."
+                ) %>
+            <p class="text-xs">
+              <%= link_to "Clear layer filter",
+                          drill_down_path(@repository, layer: nil, anchor: "spec-file-examples"),
+                          id: "spec-file-examples-clear-layer", class: "rc-link" %>
+            </p>
+          </div>
         <% else %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No examples for this file",

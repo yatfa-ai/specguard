@@ -130,8 +130,8 @@ RSpec.describe "GET /api/v1/repository — ?layer= on slowest_examples", type: :
     expect(slowest(query: { layer: "request" })).to be_nil
   end
 
-  # @intent: { entity: "Slowest examples ranking", action: "re-anchor with the run", behavior: "layer composes with commit_sha and re-anchors with the run, and narrows no other drill-in block", layer: "request" }
-  it "re-anchors with ?commit_sha= and narrows no other block" do
+  # @intent: { entity: "Slowest examples ranking", action: "re-anchor with the run", behavior: "layer composes with commit_sha and re-anchors with the run, and the unasked file drill-in stays the all-layer file", layer: "request" }
+  it "re-anchors with ?commit_sha= and composes with the file drill-in" do
     newer = create_test_run(repository: repository, commit_sha: "layerask0004", branch: "main",
                             total_specs_count: 1, duration_seconds: 1.0, created_at: 1.hour.from_now)
     observe(newer, line: 1, duration: 3.0, layer: "request", path: "spec/new_spec.rb")
@@ -146,8 +146,12 @@ RSpec.describe "GET /api/v1/repository — ?layer= on slowest_examples", type: :
 
     with_file = latest_run(query: { layer: "request", commit_sha: "layerask0001",
                                     spec_file: "spec/mixed/unit_spec.rb" })
-    expect(with_file["spec_file_examples"]["recorded_count"]).to eq(12)
-    expect(with_file["spec_file_examples"]["rows"].map { it["intent_layer"] }.uniq).to eq(["unit"])
+    # SPGD-1770: the file drill-in now takes the layer ask too. `spec/mixed/unit_spec.rb` holds only unit
+    # examples, so under `layer=request` it is an empty answer with the layer echoed, not the all-layer file.
+    expect(with_file["spec_file_examples"]).to include("rows" => [], "recorded_count" => 0, "layer" => "request")
+    all_layers = latest_run(query: { commit_sha: "layerask0001", spec_file: "spec/mixed/unit_spec.rb" })
+    expect(all_layers["spec_file_examples"]["recorded_count"]).to eq(12)
+    expect(all_layers["spec_file_examples"]["rows"].map { it["intent_layer"] }.uniq).to eq(["unit"])
     expect(with_file["slowest_examples"]["layer"]).to eq("request")
   end
 

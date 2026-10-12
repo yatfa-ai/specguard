@@ -618,9 +618,9 @@ class RunDrillInSerializer
   def serialized_spec_file_examples(test_run)
     return nil if requested_spec_file.nil?
 
-    examples = SpecFileExamples.for(test_run, requested_spec_file)
+    examples = SpecFileExamples.for(test_run, requested_spec_file, layer: requested_layer)
 
-    {
+    body = {
       # The ask, restated as the server read it — never echoed from the raw parameter, on
       # `history_window.branch`'s rule: a malformed shape is no ask at all and reaches no block, so
       # what is served here is always the path the rows were actually gathered under.
@@ -656,6 +656,13 @@ class RunDrillInSerializer
       timed_count: examples.timed_count,
       limit: SpecObservation::FILE_EXAMPLES_LIMIT
     }
+    # Under `?layer=` the file holds only the examples of that declared layer, so `rows`,
+    # `recorded_count` and `timed_count` equal the layer-ranked `spec_files` row for this file. A layer
+    # none of the file's examples declared is `rows: []` with the layer echoed — never `null`. Echoed
+    # ONLY when asked (key ABSENT otherwise, including for a malformed ask, which `requested_layer`
+    # reads as nil), on `serialized_repeated_description_examples`' rule.
+    body[:layer] = examples.layer if examples.layer?
+    body
   end
 
   # WHICH EXAMPLES SAY ONE THING — the drill-in out of `repeated_descriptions` above, and the last

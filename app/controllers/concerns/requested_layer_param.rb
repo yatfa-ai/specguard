@@ -10,6 +10,9 @@
 #   - `repeated_descriptions` (and its `repeated_description_examples` drill-in): the "Descriptions this
 #     run recorded more than once" rollup, where the layer rides into the query before the grouping, so
 #     a group is a description repeated WITHIN that layer and every figure is the layer's (SPGD-1763);
+#   - `spec_file_examples`: the "Examples in this spec file" drill-in, which opens a file holding only the
+#     examples of that layer, so its counts equal the layer-ranked `spec_files` row for the same file
+#     (SPGD-1770);
 #   - `slowest_tests`: the window-grain ranking (candidate step);
 #   - `unstable_tests`: the window-grain ranking (candidate step: the tests that FAILED in an example
 #     of that layer — SPGD-1755);
