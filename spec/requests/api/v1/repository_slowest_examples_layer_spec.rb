@@ -2,8 +2,9 @@
 
 require "rails_helper"
 
-# `?layer=` on `GET /api/v1/repository` (SPGD-1685) — narrows ONLY `latest_run.slowest_examples` to one
-# DECLARED layer, so "the request layer holds most of the machine time" (`layer_durations`) has a route
+# `?layer=` on `GET /api/v1/repository` (SPGD-1685) — narrows `latest_run.slowest_examples` to one
+# DECLARED layer (the other blocks it narrows are listed in the `RequestedLayerParam` header, not
+# here), so "the request layer holds most of the machine time" (`layer_durations`) has a route
 # to WHICH tests. The layer is what each example's `@intent` declared, never inferred from the path.
 #
 # The fixture holds all four enum layers plus undeclared, with durations interleaved across layers so the
