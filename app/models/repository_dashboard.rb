@@ -64,9 +64,9 @@ class RepositoryDashboard
   # `.presence` on one of them is a 500 on a URL anyone can type.
   include RequestedSpecFileParam
 
-  # `?layer=` read as one declared-layer key, narrowing the "Slowest tests" panel and the candidate
-  # step of "Slowest tests across the window" (SPGD-1726). See
-  # `RequestedLayerParam`; `RepositoryOverview` reads the same ask for `slowest_examples`.
+  # `?layer=` read as one declared-layer key. Which panels it narrows is listed in the
+  # `RequestedLayerParam` header — add new panels there, not here. `RepositoryOverview` reads the
+  # same ask for the API.
   include RequestedLayerParam
 
   # `?spec_directory=` read as a spec directory path, for the drill-down under the "Heaviest spec
@@ -521,8 +521,9 @@ class RepositoryDashboard
     #
     # Two bounded queries, neither growing with the size of the suite: see `SlowestExamples`.
     #
-    # `?layer=` narrows this one panel (and nothing else) to a declared layer. The RAW ask is kept in
-    # `@layer_request` for the panel's links, on the idiom of `@spec_file_request`.
+    # `?layer=` narrows to a declared layer; which readers take it is listed in the
+    # `RequestedLayerParam` header — add new ones there, not here. The RAW ask is kept in
+    # `@layer_request` for the page's links, on the idiom of `@spec_file_request`.
     @layer_request = requested_layer
     @slowest_examples = SlowestExamples.for(@latest_test_run, layer: @layer_request) if @latest_test_run
     # The other half of the same question, off the same rows of the same run: not which individual

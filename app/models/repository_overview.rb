@@ -75,11 +75,10 @@ class RepositoryOverview
   # `RequestedSpecFileParam`, which holds that reasoning in full.
   include RequestedSpecFileParam
 
-  # `?layer=` read as one declared-layer key, to narrow ONLY the run-grain `slowest_examples` block
-  # below to that layer's examples. Shared with `RepositoryDashboard`, which reads the same parameter
-  # under the same guard for the "Slowest tests" panel. Independent of every other ask here — it does
-  # not narrow `spec_file_examples`, `spec_directory_files`, `unannotated_examples` or
-  # `repeated_description_examples`. See `RequestedLayerParam`, which holds the guard's reasoning.
+  # `?layer=` read as one declared-layer key. Shared with `RepositoryDashboard`, which reads the same
+  # parameter under the same guard. Which blocks it narrows is listed in the `RequestedLayerParam`
+  # header — add new blocks there, not here. It is independent of every other ask here. See
+  # `RequestedLayerParam`, which also holds the guard's reasoning.
   include RequestedLayerParam
 
   # `?repeated_description=` read as a test description, to open ONE GROUP of the by-description

@@ -81,8 +81,9 @@ module RepositoriesHelper
     # heaviest") still beats a carried widening through the ordinary `merge` below.
     asks[:limit] = @limit_request if @limit_request
     asks[:window] = @window_request if @window_request
-    # `?layer=` rides the same conditional carry for the same reason: it narrows the "Slowest tests"
-    # panel only, and opening a file or an area must not silently drop the layer the reader chose —
+    # `?layer=` rides the same conditional carry for the same reason (which panels it narrows is
+    # listed in the `RequestedLayerParam` header): opening a file or an area must not silently drop
+    # the layer the reader chose —
     # while a default page's links stay byte-identical because no `layer:` is emitted without an ask.
     asks[:layer] = @layer_request if @layer_request
 
