@@ -321,6 +321,13 @@ class RepositoryOverview
       # See `serialized_layer_runtime_window_growth_window`.
       layer_runtime_window_growth_window: growth.serialized_layer_runtime_window_growth_window,
       layer_runtime_window_growth: growth.serialized_layer_runtime_window_growth,
+      # BESIDE `layer_runtime_window_growth`, the AREA grain of the same window comparison: the summed
+      # example TIME per directory at the window's two ENDPOINTS (`basis: "two_endpoints"`). An area
+      # whose specs crept 40s -> 110s reads +-0 on `directory_growth` and a few seconds on
+      # `directory_runtime_growth`; this names it. Null (and `grouped: false`) without `?branch=`;
+      # `?layer=` narrows it. See `serialized_directory_runtime_window_growth_window`.
+      directory_runtime_window_growth_window: growth.serialized_directory_runtime_window_growth_window,
+      directory_runtime_window_growth: growth.serialized_directory_runtime_window_growth,
       # BESIDE `directory_growth` and NEVER IN PLACE OF IT — a different comparison over the same
       # grain, not a refinement of that one. The pair above compares the two ENDPOINTS of a
       # thirty-run branch window and is served only when `?branch=` named the branch to walk; this

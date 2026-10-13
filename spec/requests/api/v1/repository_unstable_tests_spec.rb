@@ -805,7 +805,9 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect([area.length, file.length, example.length, description.length, flakiness.length])
         .to eq([1, 1, 2, 2, 5])
       expect(growth.length).to eq(2)
-      expect(runtime_growth.length).to eq(1)
+      # TWO since SPGD-1788: the run-over-run runtime pair's read plus `directory_runtime_window_growth`'s,
+      # which is the same statement over the window's two ends and so joins the same grain.
+      expect(runtime_growth.length).to eq(2)
       # THREE, not one — SPGD-758's fixtures resolve inline (an unresolved row is an exclusion
       # from the flakiness matching rather than a key), so the slowest-tests panel over the same
       # window passes its resolver gate and pays its candidate and composition reads where these
@@ -817,9 +819,9 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       # reads the resolving fixtures now pay: eighteen — and NINETEEN since SPGD-1681, whose
       # `layer_run_growth` reads the previous run's layer mix when the pair is comparable —
       # and TWENTY-ONE since SPGD-1744, whose `layer_growth` reads the layer mix of the window's two
-      # endpoint runs.
+      # endpoint runs — and TWENTY-TWO since SPGD-1788's `directory_runtime_window_growth` (above).
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(21)
+        .to eq(22)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
