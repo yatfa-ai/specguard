@@ -991,6 +991,77 @@ class RepositoryGrowthSerializer
     body
   end
 
+  # The contract block for `directory_file_growth` — the FILE grain of `directory_growth`: which
+  # spec files of the ONE asked-for area grew or shrank ACROSS THE `?branch=` WINDOW. The window
+  # sibling of `directory_run_file_growth_window` (which compares the last push only) and the file
+  # sibling of `directory_growth_window` (which stops at the area). Same two ENDPOINTS, same
+  # `basis: "two_endpoints"`: a file that gained forty examples in run 12 and lost them again in run
+  # 25 reads `change: 0`, and a MOVED file reads as one file `removed_file` beside one `new_file`.
+  #
+  # Served UNCONDITIONALLY, on the key-always-present rule of its siblings. `path` is the ask
+  # restated and the discriminator: `null` means no `?spec_directory=` was asked; `grouped` is
+  # whether BOTH the window parent was built (`?branch=` given) AND an area was asked, so it is
+  # exactly `state != null`. Without either, `state`/`anchor_commit_sha`/`baseline_commit_sha`/
+  # `runs_back` are `null` and NO query ran.
+  #
+  # `state` / `comparable` are THE WINDOW PARENT'S verdict (`SpecDirectoryWindowGrowth`, eight
+  # states), carried by the file object verbatim; the shas and `runs_back` are the baseline the
+  # SHARED {WindowBaseline} walk landed on, so they equal `directory_growth_window`'s for one request.
+  # `runs_back` is gated on `baseline_run` (nil in the four walk states) for the reason
+  # `serialized_directory_growth` states: it defaults to 0 and would otherwise assert a one-run
+  # comparison that was never taken. `layer` is echoed only when asked, in every state of a grouped
+  # block, so a refused block still says which layer's comparison was refused.
+  def serialized_directory_file_growth_window
+    growth = spec_directory_window_file_growth
+    baseline = growth&.baseline_run
+
+    window = {
+      path: requested_spec_directory,
+      order: "abs_change_desc,path_asc",
+      tie_break_served: true,
+      basis: "two_endpoints",
+      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch: requested_branch,
+      grouped: !growth.nil?,
+      state: growth&.state,
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: growth&.anchor_run&.commit_sha,
+      baseline_commit_sha: baseline&.commit_sha,
+      runs_back: baseline && growth.runs_back,
+      limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT
+    }
+
+    window[:layer] = growth.layer if growth&.layer?
+    window
+  end
+
+  # WHICH FILES OF THE ASKED-FOR AREA GREW OR SHRANK ACROSS THE BRANCH WINDOW — `null` in EVERY
+  # non-comparable state, without `?branch=` and without `?spec_directory=`; never a block of zeros.
+  # The body of `directory_run_file_growth`, one window wide, read off the SAME object the
+  # "Files that grew or shrank across the window" panel renders. Rows via
+  # `serialized_directory_file_growth_row` (shared verbatim with the last-push block).
+  # `file_count` is the AREA's, counted before the `LIMIT`; `baseline_recorded_count` /
+  # `anchor_recorded_count` are the area's own rows, not the parent's whole-run figures. When the
+  # list is not truncated the files' `change`s sum to that area's `directory_growth` row `change`.
+  # ONE read of `spec_observations` when comparable and asked, none otherwise.
+  def serialized_directory_file_growth
+    growth = spec_directory_window_file_growth
+
+    return nil unless growth&.comparable?
+
+    body = {
+      rows: growth.rows.map { |row| serialized_directory_file_growth_row(row) },
+      file_count: growth.file_count,
+      truncated: growth.truncated?,
+      baseline_recorded_count: growth.baseline_recorded_count,
+      anchor_recorded_count: growth.anchor_recorded_count
+    }
+
+    # ABSENT, not `null`, when no layer was asked: an unasked body stays the unnarrowed one.
+    body[:layer] = growth.layer if growth.layer?
+    body
+  end
+
   # One spec file's movement between two runs, and BOTH OPERANDS it was taken across — never one of
   # the labels the row builds for the panel. `SpecDirectoryFileGrowth::Row` carries `change_label`,
   # `change_reading`, `previous_count_label` and `latest_count_label`, which are typographic and
@@ -1452,6 +1523,22 @@ class RepositoryGrowthSerializer
     @spec_directory_window_growth =
       requested_branch &&
       SpecDirectoryWindowGrowth.for(history_runs.oldest_first, branch: requested_branch, layer: requested_layer)
+  end
+
+  # The window's per-FILE drill-in for the ONE area a caller asked about, or `nil` unless `?branch=`
+  # AND `?spec_directory=` were both asked — memoized across the nil with `defined?`. Guarded here
+  # and not by widening the model, for the reason {#spec_directory_file_growth} states about its own
+  # guard: `.for` takes the parent window object and refuses on its first line when it is not
+  # comparable (in memory, zero reads), so comparability is NOT re-asked here. A comparable window
+  # with an asked area adds exactly one grouped read.
+  def spec_directory_window_file_growth
+    return @spec_directory_window_file_growth if defined?(@spec_directory_window_file_growth)
+
+    @spec_directory_window_file_growth =
+      if requested_branch && requested_spec_directory && spec_directory_window_growth
+        SpecDirectoryWindowFileGrowth.for(requested_spec_directory, window_growth: spec_directory_window_growth,
+                                                                    layer: requested_layer)
+      end
   end
 
   # The window's area TIME presenter, or `nil` without `?branch=` — gated, oriented and layered

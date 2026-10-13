@@ -23,6 +23,9 @@
 #   - `directory_growth`: the branch-WINDOW area comparison ("Areas that grew or shrank over the
 #     window", served with `?branch=`), narrowed the same way across the window's two endpoint runs,
 #     so its area changes sum to `layer_growth.layers[<layer>].change` (SPGD-1782);
+#   - `directory_file_growth`: the branch-WINDOW file drill-in of that area comparison (served with
+#     `?branch=` and `?spec_directory=`), narrowed the same way, so its file changes sum to the layer-narrowed
+#     `directory_growth` row for the area (SPGD-1794);
 #   - `slowest_tests`: the window-grain ranking (candidate step);
 #   - `unstable_tests`: the window-grain ranking (candidate step: the tests that FAILED in an example
 #     of that layer — SPGD-1755);

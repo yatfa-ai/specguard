@@ -1,0 +1,103 @@
+<%# == WHICH FILES of one area moved ACROSS THE WINDOW — the rung below "Areas that grew or shrank
+        over the window", and the window twin of "Files that grew or shrank in this directory".
+        That panel compares the LAST PUSH only: a file that gained forty examples over thirty pushes
+        reads about zero there. This one hands the SAME file-grain read the window's two ends
+        (`SpecDirectoryWindowGrowth`'s baseline and anchor runs) instead of a run and its
+        predecessor — a composition, no new query.
+
+        Titled so it cannot be confused with the last-push panel when both are open. It compares
+        TWO ENDPOINTS and is not a series: a file that gained and lost the same amount between them
+        reads ±0, and a MOVED file reads as one file removed beside one new.
+
+        Renders ONLY where the window panel it drills out of is comparable (it inherits that verdict
+        and issues no read otherwise). Reached by the same `?spec_directory=` ask as every other
+        panel over the area; no "Close directory" of its own, on the sibling's argument. Same
+        visibility rule as the panels around it: read-only suite telemetry on
+        `current_repository(:view)`. %>
+<% if @spec_directory_window_file_growth&.comparable? %>
+      <% file_growth = @spec_directory_window_file_growth %>
+      <%= render UI::PanelComponent.new(title: "Files that grew or shrank across the window — this window's two ends compared, not a trend",
+                                        id: "spec-directory-window-file-growth", class: "rc-drill") do %>
+        <%= render "repositories/run_pair_layer_note", growth: file_growth, window: true,
+                   clear_id: "spec-directory-window-file-growth-clear-layer", anchor: "changes" %>
+        <% if file_growth.recorded? && file_growth.any_movement? %>
+          <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-window-file-growth-basis") do %>
+            <span class="font-mono text-app-content-secondary"><%= file_growth.path %></span>
+            —
+            <% if file_growth.truncated? %>
+              the <%= number_with_delimiter(file_growth.rows.size) %> spec files that moved most
+              across this window, of the
+              <%= number_with_delimiter(file_growth.file_count) %> either end recorded in this
+              area — largest movement first, in both directions.
+            <% else %>
+              all <%= number_with_delimiter(file_growth.file_count) %>
+              <%= "spec file".pluralize(file_growth.file_count) %> either end of this window
+              recorded in this area — largest movement first, in both directions.
+            <% end %>
+            <%= spec_directory_window_growth_baseline_sentence(file_growth) %>
+            <%= spec_directory_window_growth_span_sentence(file_growth) %>
+            Only the two ends are compared, so what a file did between them is not shown: a file
+            that gained and lost the same number of examples reads here as a file that did not move.
+            <% if file_growth.any_unmoved? %>
+              Where the movement runs out before the list does, files that did not move are listed
+              too, as ±0.
+            <% end %>
+            A file listed as new beside one listed as removed is what a RENAMED or relocated file
+            looks like from here — and so is a real addition beside a real deletion. This panel
+            counts each end's rows and pairs no example with any other example, so it cannot tell
+            the two apart and does not try; both files are named so a reader can.
+            This area is the immediate parent of the files listed, so a nested area such as a
+            subdirectory of it is its own area rather than part of this list.
+            Counted off the
+            <%= number_with_delimiter(file_growth.baseline_recorded_count) %> and
+            <%= number_with_delimiter(file_growth.anchor_recorded_count) %>
+            <%= file_growth.layer? ? "#{file_growth.layer}-layer " : "" %>example rows the two ends
+            recorded in this area — this area's own rows, not the suite size on the Summary.
+          <% end %>
+          <%= render UI::TableComponent.new(
+                columns: ["Spec file", { label: "Examples at baseline", end: true }, { label: "Examples now", end: true }, { label: "Change across window", end: true }],
+                describedby: "spec-directory-window-file-growth-basis", sortable: true) do %>
+            <% file_growth.rows.each do |file| %>
+              <tr>
+                <td class="font-mono text-xs [overflow-wrap:anywhere]">
+                  <% if file.removed_file? %><%= file.path %><% else %>
+                    <%= link_to file.path, drill_down_path(@repository, spec_file: file.path, spec_directory: file_growth.path, anchor: "slow"),
+                                class: "rc-link", aria: { current: file.path == @spec_file_request ? "true" : nil } %>
+                  <% end %>
+                </td>
+                <td class="num mute" data-sort="<%= file.previous_count %>"><%= file.baseline_count_label %></td>
+                <td class="num mute" data-sort="<%= file.latest_count %>"><%= file.anchor_count_label %></td>
+                <td class="num" data-sort="<%= file.change %>" aria-label="<%= file.change_reading %>"><%= delta_tag(file.change_label, tone: file.change.zero? ? :flat : :info) %></td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif file_growth.recorded? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No file moved across this window",
+                description: "Every one of the " \
+                             "#{number_with_delimiter(file_growth.file_count)} " \
+                             "#{'spec file'.pluralize(file_growth.file_count)} either end of this " \
+                             "window recorded in #{file_growth.path} holds the same number of " \
+                             "examples at both. #{spec_directory_window_growth_baseline_sentence(file_growth)} " \
+                             "Only those two ends were compared, so a file that grew and shrank back " \
+                             "in between is counted here as a file that did not move."
+              ) %>
+        <% elsif file_growth.layer? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No #{file_growth.layer}-layer examples in this directory",
+                description: "Neither end of this window has an example in #{file_growth.path} that " \
+                             "declared #{file_growth.layer} as its layer, so no file of it gained or " \
+                             "lost any across it. The area may still hold examples of other layers."
+              ) %>
+        <% else %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No spec files in this directory",
+                description: "Neither end of this window recorded any examples in " \
+                             "#{file_growth.path}. It may have been renamed or deleted before both " \
+                             "of them, or never have run at either — the “Areas that grew or " \
+                             "shrank over the window” table lists the areas whose example count " \
+                             "moved most between the two."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>
