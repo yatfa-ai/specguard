@@ -1,0 +1,39 @@
+    <% if @spec_directory_window_runtime_growth %>
+      <% window_growth = @spec_directory_window_runtime_growth %>
+      <%= render UI::PanelComponent.new(title: "Areas that got slower or faster over the window",
+                                        id: "spec-directory-window-runtime-growth") do %>
+        <%= render "repositories/run_pair_layer_note", growth: window_growth, window: true,
+                   clear_id: "spec-directory-window-runtime-growth-clear-layer", anchor: "changes" %>
+        <% if window_growth.layer_empty? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No #{window_growth.layer}-layer examples at either end of this window",
+                description: spec_directory_window_runtime_growth_layer_empty_description(window_growth)
+              ) %>
+        <% elsif window_growth.comparable? && window_growth.anything_to_show? %>
+          <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-window-runtime-growth-basis") do %>
+            <%= spec_directory_window_runtime_growth_basis(window_growth) %>
+          <% end %>
+          <%= render UI::TableComponent.new(
+                columns: ["Directory", { label: "Time at baseline", end: true }, { label: "Time now", end: true }, { label: "Change across window", end: true }, { label: "Timed", end: true }],
+                describedby: "spec-directory-window-runtime-growth-basis", sortable: true) do %>
+            <% window_growth.rows.each do |area| %>
+              <tr>
+                <td class="font-mono text-xs [overflow-wrap:anywhere]"><%= area.path %></td>
+                <td class="num mute" data-sort="<%= area.previous_seconds %>"><%= area.baseline_label %></td>
+                <td class="num mute" data-sort="<%= area.latest_seconds %>"><%= area.anchor_label %></td>
+                <td class="num" data-sort="<%= area.change %>" aria-label="<%= area.change_reading %>"><%= delta_tag(area.change_label, tone: area.change ? delta_tone_for(area.change, bigger_is_worse: true) : :flat) %></td>
+                <td class="num mute text-xs"><%= area.coverage_label %></td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif window_growth.comparable? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No area changed pace across this window",
+                description: spec_directory_window_runtime_growth_unmoved_description(window_growth)
+              ) %>
+        <% else %>
+          <% title, description = spec_directory_window_runtime_growth_refusal(window_growth) %>
+          <%= render UI::EmptyStateComponent.new(title: title, description: description) %>
+        <% end %>
+      <% end %>
+    <% end %>

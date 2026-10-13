@@ -803,6 +803,73 @@ class RepositoryGrowthSerializer
     body
   end
 
+  # The contract block for `directory_runtime_window_growth` — the area TIME movement over the
+  # `?branch=` window, the time sibling of `directory_growth_window` (same two ENDPOINTS, same
+  # `basis: "two_endpoints"`: an area slowed in run 12 and sped up in run 25 reads `change: 0.0`) and
+  # the window sibling of `directory_runtime_growth_window`. `grouped` is whether the presenter was
+  # CONSTRUCTED, so it is exactly `directory_runtime_window_growth_window.state != null`; without
+  # `?branch=` it is false, `state` is null, and NO query ran.
+  #
+  # `state` is `SpecDirectoryWindowRuntimeGrowth#state` (eleven); the two commit shas and `runs_back`
+  # name the baseline the SHARED {WindowBaseline} walk landed on, so they equal `directory_growth_window`'s,
+  # `layer_growth_window`'s and `layer_runtime_window_growth_window`'s for one window. `comparable` is
+  # exactly `directory_runtime_window_growth != null`. `order` is the runtime pair's string, with
+  # NULLS LAST: an area an end did not time sorts after every timed one.
+  #
+  # `runs_back` is gated on `baseline_run` (nil in the four walk states), on the rule
+  # `serialized_directory_growth` states at length: it defaults to 0 and would otherwise assert a
+  # one-run comparison that was never taken.
+  def serialized_directory_runtime_window_growth_window
+    growth = spec_directory_window_runtime_growth
+    baseline = growth&.baseline_run
+
+    window = {
+      order: "abs_change_desc_nulls_last,path_asc",
+      tie_break_served: true,
+      basis: "two_endpoints",
+      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch: requested_branch,
+      grouped: !growth.nil?,
+      state: growth&.state,
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: growth&.anchor_run&.commit_sha,
+      baseline_commit_sha: baseline&.commit_sha,
+      runs_back: baseline && growth.runs_back,
+      limit: SpecObservation::RETIMED_DIRECTORIES_LIMIT
+    }
+
+    # Echoed only when `?layer=` was asked AND the window was grouped, in every state, so a refused
+    # or null block still says which layer's comparison it was. Absent otherwise.
+    window[:layer] = growth.layer if growth&.layer?
+    window
+  end
+
+  # WHICH AREAS GOT SLOWER OR FASTER ACROSS THE BRANCH WINDOW — `null` in EVERY non-comparable state
+  # and without `?branch=`, never zeros. The body of `directory_runtime_growth`, one window wide:
+  # rows via `serialized_directory_runtime_growth_row` (operands and `change`, `null` where an end was
+  # not timed — never `0`), `directory_count` (before the cap), `truncated`, and all four
+  # denominators. ONE read of `spec_observations` when comparable, none otherwise.
+  def serialized_directory_runtime_window_growth
+    growth = spec_directory_window_runtime_growth
+
+    return nil unless growth&.comparable?
+
+    body = {
+      rows: growth.rows.map { |row| serialized_directory_runtime_growth_row(row) },
+      directory_count: growth.directory_count,
+      truncated: growth.truncated?,
+      baseline_recorded_count: growth.baseline_recorded_count,
+      anchor_recorded_count: growth.anchor_recorded_count,
+      baseline_timed_count: growth.baseline_timed_count,
+      anchor_timed_count: growth.anchor_timed_count,
+      limit: SpecObservation::RETIMED_DIRECTORIES_LIMIT
+    }
+
+    # ABSENT, not `null`, when no layer was asked: an unasked body stays the unnarrowed one.
+    body[:layer] = growth.layer if growth.layer?
+    body
+  end
+
   # The contract the PER-FILE growth rows below are served under — and, when they are `null`, which
   # of the two reasons applies. Served UNCONDITIONALLY, on the key-always-present rule the two
   # blocks above it argue for: a block that explains a `null` is worthless if it is itself absent
@@ -1385,6 +1452,19 @@ class RepositoryGrowthSerializer
     @spec_directory_window_growth =
       requested_branch &&
       SpecDirectoryWindowGrowth.for(history_runs.oldest_first, branch: requested_branch, layer: requested_layer)
+  end
+
+  # The window's area TIME presenter, or `nil` without `?branch=` — gated, oriented and layered
+  # exactly as {#spec_directory_window_growth} is (same `requested_branch` gate, same
+  # `history_runs.oldest_first` window, same shared {WindowBaseline} walk, same `requested_layer`),
+  # memoized across the nil. The walk is in-memory; a comparable window adds exactly one grouped read.
+  def spec_directory_window_runtime_growth
+    return @spec_directory_window_runtime_growth if defined?(@spec_directory_window_runtime_growth)
+
+    @spec_directory_window_runtime_growth =
+      requested_branch &&
+      SpecDirectoryWindowRuntimeGrowth.for(history_runs.oldest_first, branch: requested_branch,
+                                                                      layer: requested_layer)
   end
 
   # The window's declared-layer-mix presenter, or `nil` without `?branch=` — gated and oriented

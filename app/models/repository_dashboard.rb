@@ -929,6 +929,12 @@ class RepositoryDashboard
       @layer_window_growth = LayerWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
       # Its TIME sibling over the same two ends — durations ride the aggregate the line above reads.
       @layer_window_runtime_growth = LayerWindowRuntimeGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
+      # The AREA grain of that time movement over the same two ends — "Areas that got slower or faster
+      # over the window". The same shared baseline walk and the same `@layer_request`; ONE grouped read
+      # when comparable, none when the walk or the run-grain states decide it.
+      @spec_directory_window_runtime_growth =
+        SpecDirectoryWindowRuntimeGrowth.for(trajectory_runs, branch: @trajectory_run&.branch,
+                                                              layer: @layer_request)
       # The WALL CLOCK at the grain the two panels above already speak at, and the one grain this
       # page has never had. "Slowest tests" above is ONE run, and its own comment says why it stays
       # there: `example_id` is positional and not stable across refactors, so a ranking that spanned

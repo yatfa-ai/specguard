@@ -790,8 +790,12 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       # (a second run-readings-grain statement; see `ObservationGrainReads`). EIGHTEEN since
       # SPGD-1744: `layer_growth` reads the layer mix of the window's two endpoint runs (see
       # `repository_layer_growth_spec.rb` for the pin of those two).
+      # NINETEEN since SPGD-1788: `directory_runtime_window_growth` reads the window's two ends through
+      # `directory_runtime_growth_between`, a statement identical to the run-over-run runtime pair's, so it
+      # lands in the same runtime-growth grain (see `repository_directory_runtime_window_growth_spec.rb`
+      # for the pin of that one read).
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(18)
+        .to eq(19)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
