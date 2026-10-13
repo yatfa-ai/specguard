@@ -713,7 +713,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       expect(rows.map { |row| row[:outcome] }).to eq(["failed", "not reported"])
     end
 
-    # The two axes MEETING — the sentence `RepositoriesHelper#spec_file_examples_scope_sentence`
+    # The two axes MEETING — the sentence `DrillInExamplesHelper#spec_file_examples_scope_sentence`
     # says it exists for, and which no example above constructs: the truncation examples are all
     # timed and the untimed examples are all under the cap, so nothing stood where "the 50 slowest
     # of 340" could be written over a file nothing ranked.

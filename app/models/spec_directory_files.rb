@@ -175,7 +175,7 @@ class SpecDirectoryFiles
   # a NULL total and sorts to the tail. An area with one timed example and forty files therefore
   # renders one ranked row above thirty-nine the same page spells "not reported", under a caption
   # promising the whole list was ranked. The two axes are not independent where they MEET, which is
-  # the argument `RepositoriesHelper#spec_file_examples_scope_sentence` makes one rung down for why
+  # the argument `DrillInExamplesHelper#spec_file_examples_scope_sentence` makes one rung down for why
   # that grain needs five sentences and not four; there the two populations are a file's examples,
   # here they are an area's files.
   #
