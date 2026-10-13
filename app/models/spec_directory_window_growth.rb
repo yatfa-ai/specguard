@@ -117,25 +117,56 @@ class SpecDirectoryWindowGrowth
   #   window, with no structural reason to keep agreeing, on a page where each of them captions
   #   the others' branch.
   # @param branch [String, nil] the branch every figure is drawn on, for the caption.
-  def self.for(runs, branch: nil, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT)
+  # @param layer [String, Symbol, nil] ONE declared layer to narrow the comparison to (SPGD-1782) —
+  #   nil, the default, is the un-narrowed comparison, byte-identical to before the keyword existed.
+  #   The read already takes the keyword ({SpecObservation.directory_growth_between}, SPGD-1780) and
+  #   this passes it straight through: the per-area counts, the ranking and the three window totals
+  #   are then the LAYER's own, from the same one grouped statement.
+  #
+  #   With a layer asked those totals can no longer tell "this run recorded nothing" from "this run
+  #   has no examples of this layer", and the second is exactly the window this feature exists to
+  #   explain ("we added the first request tests this month"). The two RECORDED states are therefore
+  #   decided at RUN grain instead, off {TestRun#intent_readings} on each endpoint (a memoized
+  #   aggregate, no new query), and short-circuit the read as the walk's own states do. A layer empty
+  #   at the baseline only is `comparable` with every area `new_area?`; at the anchor only, every
+  #   area `removed_area?`; at BOTH, `comparable` with no rows ({#layer_empty?}) — a defined answer,
+  #   not `neither_recorded`. The walk's four states are unchanged and carry the layer so the
+  #   contract block can echo it.
+  def self.for(runs, branch: nil, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT, layer: nil)
+    layer = layer&.to_s
     baseline = WindowBaseline.for(runs)
     context = { branch: branch, window_run_count: baseline.window_run_count, anchor_run: baseline.anchor,
                 skipped_unmeasured_count: baseline.skipped_unmeasured_count,
-                skipped_assembled_differently_count: baseline.skipped_assembled_differently_count }
+                skipped_assembled_differently_count: baseline.skipped_assembled_differently_count,
+                layer: layer }
 
     # Not found: the state is the walk's own — see {WindowBaseline} for the three it can name and
     # the precedence between the two the walk produces. The walk is shared with {LayerWindowGrowth},
     # so the two presenters cannot land on different baselines for one window.
     return new(state: baseline.state, **context) unless baseline.found?
 
-    from_tuples(SpecObservation.directory_growth_between(baseline.anchor, baseline.run, limit: limit),
-                **context, baseline_run: baseline.run, runs_back: baseline.runs_back)
+    context = context.merge(baseline_run: baseline.run, runs_back: baseline.runs_back)
+
+    if layer
+      baseline_recorded = baseline.run.intent_readings.recorded?
+      anchor_recorded = baseline.anchor.intent_readings.recorded?
+      return new(state: :neither_recorded, **context) unless baseline_recorded || anchor_recorded
+      return new(state: :baseline_unrecorded, **context) unless baseline_recorded
+      return new(state: :anchor_unrecorded, **context) unless anchor_recorded
+    end
+
+    from_tuples(SpecObservation.directory_growth_between(baseline.anchor, baseline.run, limit: limit,
+                                                                                      layer: layer),
+                **context)
   end
 
   # The three window totals ride on every row of the aggregate and are identical on all of them, so
   # they are read off the first; `to_i` on the nil of an empty read, where zero areas and zero rows
   # on both sides is the honest count. An empty read is exactly the "neither run recorded rows"
-  # state — a group exists here if and only if a row exists — so it needs no separate count.
+  # state — a group exists here if and only if a row exists — so it needs no separate count. WITH A
+  # LAYER that inference is not available (an empty read is then "neither end has examples of the
+  # layer"), which is why {.for} has already decided the recorded states at run grain and this
+  # reads only the comparable answer.
   #
   # Every state carries the totals and the chosen baseline, not only the comparable one, on
   # `SpecDirectoryRuntimeGrowth`'s rule: a panel saying "the run at the far end of this window
@@ -149,10 +180,12 @@ class SpecDirectoryWindowGrowth
                baseline_recorded_count: baseline_recorded.to_i,
                anchor_recorded_count: anchor_recorded.to_i }
 
-    return new(state: :neither_recorded, **context, **totals) if baseline_recorded.to_i.zero? &&
-                                                                 anchor_recorded.to_i.zero?
-    return new(state: :baseline_unrecorded, **context, **totals) if baseline_recorded.to_i.zero?
-    return new(state: :anchor_unrecorded, **context, **totals) if anchor_recorded.to_i.zero?
+    unless context[:layer]
+      return new(state: :neither_recorded, **context, **totals) if baseline_recorded.to_i.zero? &&
+                                                                   anchor_recorded.to_i.zero?
+      return new(state: :baseline_unrecorded, **context, **totals) if baseline_recorded.to_i.zero?
+      return new(state: :anchor_unrecorded, **context, **totals) if anchor_recorded.to_i.zero?
+    end
 
     rows = tuples.map do |path, baseline, anchor, *|
       Row.new(path: path, previous_count: baseline.to_i, latest_count: anchor.to_i)
@@ -164,7 +197,9 @@ class SpecDirectoryWindowGrowth
 
   def initialize(state:, branch: nil, window_run_count: 0, anchor_run: nil, baseline_run: nil,
                  runs_back: 0, skipped_unmeasured_count: 0, skipped_assembled_differently_count: 0,
-                 rows: [], directory_count: 0, baseline_recorded_count: 0, anchor_recorded_count: 0)
+                 rows: [], directory_count: 0, baseline_recorded_count: 0, anchor_recorded_count: 0,
+                 layer: nil)
+    @layer = layer&.to_s
     @state = state
     @branch = branch
     @window_run_count = window_run_count
@@ -227,6 +262,21 @@ class SpecDirectoryWindowGrowth
   attr_reader :baseline_recorded_count, :anchor_recorded_count
 
   def comparable? = state == :comparable
+
+  # The declared layer this comparison was narrowed to (a `SpecObservation::DECLARED_LAYER_KEYS`
+  # member as a String), or nil when it was not — in which case every figure on this object is the
+  # un-narrowed one. With a layer, `directory_count` and both recorded counts are the LAYER's, and
+  # it is carried in EVERY state, the walk's refusals included, so the contract block can say which
+  # layer's comparison was refused.
+  attr_reader :layer
+
+  def layer? = !layer.nil?
+
+  # A layer was asked and NEITHER end of the window has a single example of it: comparable, and
+  # empty. Distinct from every refusal state — both ends recorded per-example rows, the layer just
+  # has none in either — so the panel can say "no <layer> examples at either end" instead of a
+  # table of nothing.
+  def layer_empty? = layer? && comparable? && rows.empty?
 
   # How many runs of the window the comparison actually SPANS, endpoints included. Equal to
   # `window_run_count` only where the walk stepped over nothing.

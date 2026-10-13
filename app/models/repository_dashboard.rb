@@ -923,7 +923,7 @@ class RepositoryDashboard
       # ONE query when there is a comparison to make, none when there is not, and neither grows with
       # the size of the suite or with the length of the window: see `SpecDirectoryWindowGrowth`.
       @spec_directory_window_growth =
-        SpecDirectoryWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
+        SpecDirectoryWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch, layer: @layer_request)
       # The declared-layer MIX across the SAME window (no new window query) — the one line under the
       # panel it sits beside. The same shared baseline walk, so it lands on the same run.
       @layer_window_growth = LayerWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)

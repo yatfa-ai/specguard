@@ -2,7 +2,19 @@
       <% window_growth = @spec_directory_window_growth %>
       <%= render UI::PanelComponent.new(title: "Areas that grew or shrank over the window",
                                         id: "spec-directory-window-growth") do %>
-        <% if window_growth.comparable? && window_growth.any_movement? %>
+        <%= render "repositories/run_pair_layer_note", growth: window_growth, window: true,
+                   clear_id: "spec-directory-window-growth-clear-layer", anchor: "changes" %>
+        <% if window_growth.layer_empty? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No #{window_growth.layer}-layer examples at either end of this window",
+                description: "Neither the run at the far end of this window nor the newest run has " \
+                             "an example that declared #{window_growth.layer} as its layer, so no " \
+                             "area gained or lost any across it. Both ends recorded per-example " \
+                             "detail; the layer is simply absent from both. " \
+                             "#{spec_directory_window_growth_baseline_sentence(window_growth)} " \
+                             "#{spec_directory_window_growth_span_sentence(window_growth)}"
+              ) %>
+        <% elsif window_growth.comparable? && window_growth.any_movement? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-window-growth-basis") do %>
             <% if window_growth.truncated? %>
               The <%= number_with_delimiter(window_growth.rows.size) %>
@@ -30,7 +42,8 @@
             long, that rename may be one nobody remembers.
             Counted off the
             <%= number_with_delimiter(window_growth.baseline_recorded_count) %> and
-            <%= number_with_delimiter(window_growth.anchor_recorded_count) %> example rows the two
+            <%= number_with_delimiter(window_growth.anchor_recorded_count) %>
+            <%= window_growth.layer? ? "#{window_growth.layer}-layer " : "" %>example rows the two
             ends recorded here, which may legitimately differ from the suite size on the Summary
             at the top of this page.
           <% end %>
@@ -52,7 +65,9 @@
                 description: "Every one of the " \
                              "#{number_with_delimiter(window_growth.directory_count)} " \
                              "#{'area'.pluralize(window_growth.directory_count)} the two ends of " \
-                             "this window recorded holds the same number of examples in both. " \
+                             "this window recorded holds the same number of " \
+                             "#{window_growth.layer? ? "#{window_growth.layer}-layer " : ""}" \
+                             "examples in both. " \
                              "#{spec_directory_window_growth_baseline_sentence(window_growth)} " \
                              "#{spec_directory_window_growth_span_sentence(window_growth)} Only " \
                              "those two ends were compared, so an area that grew and shrank back " \

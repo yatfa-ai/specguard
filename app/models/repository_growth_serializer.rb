@@ -61,7 +61,7 @@ class RepositoryGrowthSerializer
   # exactly the claim a caption would otherwise imply and nothing looked at. `covered_run_count`
   # says how far apart the two endpoints are; this says that two is all there are.
   def serialized_directory_growth_window
-    {
+    window = {
       order: "abs_change_desc,path_asc",
       tie_break_served: true,
       basis: "two_endpoints",
@@ -69,6 +69,13 @@ class RepositoryGrowthSerializer
       branch: requested_branch,
       grouped: !spec_directory_window_growth.nil?
     }
+
+    # Echoed only when `?layer=` was asked AND the window was grouped (SPGD-1782), in every state —
+    # walk-decided refusals included — so a block that is `null` or refused still says which layer's
+    # comparison it was. Absent otherwise: unasked, a clamped `layer=bogus`, and a layer asked
+    # without `?branch=` (nothing was narrowed, so nothing is claimed).
+    window[:layer] = spec_directory_window_growth.layer if spec_directory_window_growth&.layer?
+    window
   end
 
   # WHICH AREAS OF THE SUITE GREW OR SHRANK ACROSS THE BRANCH WINDOW — the agent-readable half of
@@ -190,7 +197,7 @@ class RepositoryGrowthSerializer
 
     baseline = growth.baseline_run
 
-    {
+    body = {
       state: growth.state,
       comparable: growth.comparable?,
       rows: growth.rows.map { |row| serialized_directory_growth_row(row) },
@@ -208,6 +215,13 @@ class RepositoryGrowthSerializer
       anchor_recorded_count: baseline && growth.anchor_recorded_count,
       limit: SpecObservation::MOVED_DIRECTORIES_LIMIT
     }
+
+    # `?layer=` ASKED (SPGD-1782): the declared layer every figure above was narrowed to, echoed so
+    # they are not misread as the area's whole population. ABSENT — not `null` — when no layer was
+    # asked, so an unasked body (and a malformed ask, which the clamp reads as no ask) is
+    # byte-identical to before the parameter reached this block.
+    body[:layer] = growth.layer if growth.layer?
+    body
   end
 
   # One area's movement across the window, and BOTH OPERANDS it was taken across — never one of the
@@ -1369,7 +1383,8 @@ class RepositoryGrowthSerializer
     return @spec_directory_window_growth if defined?(@spec_directory_window_growth)
 
     @spec_directory_window_growth =
-      requested_branch && SpecDirectoryWindowGrowth.for(history_runs.oldest_first, branch: requested_branch)
+      requested_branch &&
+      SpecDirectoryWindowGrowth.for(history_runs.oldest_first, branch: requested_branch, layer: requested_layer)
   end
 
   # The window's declared-layer-mix presenter, or `nil` without `?branch=` — gated and oriented
