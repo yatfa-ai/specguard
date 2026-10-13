@@ -51,12 +51,15 @@
                 columns: ["Directory", { label: "Examples at baseline", end: true }, { label: "Examples now", end: true }, { label: "Change across window", end: true }],
                 describedby: "spec-directory-window-growth-basis", sortable: true) do %>
             <% window_growth.rows.each do |area| %>
-              <tr>
-                <td class="font-mono text-xs [overflow-wrap:anywhere]"><%= area.path %></td>
+              <%= drawer_row(area.path, kind: "Area that moved", title: area.path,
+                    facts: [["Examples at baseline", area.baseline_count_label], ["Examples now", area.anchor_count_label],
+                            ["Change across window", area.change_label], ["Reading", area.change_reading]],
+                    actions: [["Which files moved across the window", drill_down_path(@repository, spec_directory: area.path, anchor: "changes"), :primary]]) do %>
+                <td><%= row_open(area.path, mono: true, current: area.path == @spec_directory_request) %></td>
                 <td class="num mute" data-sort="<%= area.previous_count %>"><%= area.baseline_count_label %></td>
                 <td class="num mute" data-sort="<%= area.latest_count %>"><%= area.anchor_count_label %></td>
                 <td class="num" data-sort="<%= area.change %>" aria-label="<%= area.change_reading %>"><%= delta_tag(area.change_label, tone: area.change.zero? ? :flat : :info) %></td>
-              </tr>
+              <% end %>
             <% end %>
           <% end %>
         <% elsif window_growth.comparable? %>

@@ -415,6 +415,17 @@ class RepositoryOverview
       # See `serialized_directory_run_file_growth_window`.
       directory_run_file_growth_window: growth.serialized_directory_run_file_growth_window,
       directory_run_file_growth: growth.serialized_directory_run_file_growth,
+      # THE WINDOW GRAIN OF THE PAIR ABOVE: not which files moved in the latest push but which moved
+      # ACROSS THE `?branch=` WINDOW (two endpoints, not a series). `directory_growth` says
+      # `spec/models 412 -> 459 (+47)` and stops at the area; a file that gained forty examples over
+      # thirty pushes reads about zero on `directory_run_file_growth`. The key name follows the
+      # family's paradigm — `file` inserted before `growth` drops the grain, so `directory_growth`
+      # becomes `directory_file_growth`. No new parameter: it reads the same `?spec_directory=`,
+      # gated on `?branch=` like `directory_growth`. When the list is not truncated the files'
+      # `change`s sum to that area's `directory_growth` row `change`. See
+      # `serialized_directory_file_growth_window`.
+      directory_file_growth_window: growth.serialized_directory_file_growth_window,
+      directory_file_growth: growth.serialized_directory_file_growth,
       # THE FOURTH AND LAST CELL of the {area, file} × {count, runtime} square this endpoint serves
       # growth over, and until now the only empty one. `directory_run_growth` is area×count,
       # `directory_runtime_growth` is area×runtime, the pair above is file×count — and an agent told
