@@ -20,6 +20,9 @@
 #     `directory_run_file_growth` / `directory_runtime_file_growth` drill-ins: every count and sum is
 #     that layer's, so an area gaining request examples while losing unit ones reads as a gain
 #     (SPGD-1780);
+#   - `directory_growth`: the branch-WINDOW area comparison ("Areas that grew or shrank over the
+#     window", served with `?branch=`), narrowed the same way across the window's two endpoint runs,
+#     so its area changes sum to `layer_growth.layers[<layer>].change` (SPGD-1782);
 #   - `slowest_tests`: the window-grain ranking (candidate step);
 #   - `unstable_tests`: the window-grain ranking (candidate step: the tests that FAILED in an example
 #     of that layer — SPGD-1755);

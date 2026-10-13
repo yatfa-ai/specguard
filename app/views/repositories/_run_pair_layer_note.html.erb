@@ -6,12 +6,15 @@
         rather than ±0. Said once per panel, outside the "How to read this" note, so it is also on the
         page when the panel has no table to caption (a layer empty in both runs, a refused comparison).
         Locals: `growth` (responds to `layer?`/`layer`), `clear_id` (DOM id for the link), `anchor`
-        (where the clear link lands). %>
+        (where the clear link lands), and optionally `window` (true on the branch-WINDOW panel,
+        "Areas that grew or shrank over the window", SPGD-1782 — whose comparison is the two ENDS of
+        the window and not a run and its predecessor, so the sentence says "at both ends of this
+        window" instead of "in both runs"). %>
 <% if growth.layer? %>
   <p class="text-sm text-app-content-secondary" id="<%= clear_id.sub(/-clear-layer\z/, "") %>-layer-scope">
     Only the <%= growth.layer %>-layer examples — those that declared
     <code><%= growth.layer %></code> as their layer in their own <code>@intent</code>, never
-    inferred from the path — are counted here, in both runs.
+    inferred from the path — are counted here, <%= local_assigns[:window] ? "at both ends of this window" : "in both runs" %>.
     <%= link_to "Clear layer filter", drill_down_path(@repository, layer: nil, anchor: anchor),
                 id: clear_id, class: "rc-link" %>
   </p>
