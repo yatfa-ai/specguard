@@ -168,6 +168,7 @@ class Api::V1::UserRepositoriesController < Api::BaseController
     preload_layer_counts(latest_runs.values)
     repositories = stale_first(repositories, latest_runs) if requested_sort == "stale"
     repositories = annotated_first(repositories, latest_runs) if requested_sort == "annotated"
+    repositories = pyramid_first(repositories, latest_runs) if requested_sort == "pyramid"
     verdicts = delivery_verdicts(repositories, latest_runs: latest_runs)
 
     # THE CALLER'S OWN CREDENTIAL GRANT, splatted in at the top level — served under an `sga_`

@@ -508,6 +508,7 @@ RSpec.describe "The public administration guide", type: :request do
       expect(published_page).to include("?role=shared")
       expect(published_page).to include("?sort=stale")
       expect(published_page).to include("?sort=annotated")
+      expect(published_page).to include("?sort=pyramid")
     end
 
     it "names the credential block by its path" do
@@ -580,6 +581,34 @@ RSpec.describe "The public administration guide", type: :request do
       get_repositories(user_api_key.raw_token, params: { sort: "annotated" })
 
       expect(full_names).to eq(["acme/my_ledger", "acme/billing-service", "acme/zeta-tools"])
+    end
+
+    # The pyramid claim: thinnest request+system share first, a repository with no measured mix
+    # last (never as 0%). billing-service is 50% (unit + request), my_ledger a measured 0% (unit
+    # only) and the never-ingested zeta-tools sorts last, so the pyramid order starts with
+    # my_ledger where name order starts with billing-service.
+    it "documents ?sort=pyramid the way the server answers it" do
+      declare = lambda do |run, layers|
+        layers.each_with_index do |layer, index|
+          run.spec_observations.create!(
+            repository: run.repository, example_id: "./spec/a_spec.rb[1:#{index}]",
+            file_path: "spec/a_spec.rb", spec_file_path: "spec/a_spec.rb", line_number: index + 1,
+            status: "unannotated", intent_layer: layer
+          )
+        end
+      end
+      declare.call(create_test_run(repository: owned, commit_sha: "gide1813a", total_specs_count: 2),
+                   %w[unit request])
+      declare.call(create_test_run(repository: shared, commit_sha: "gide1813b", total_specs_count: 2),
+                   %w[unit unit])
+
+      get_repositories(user_api_key.raw_token, params: { sort: "pyramid" })
+
+      expect(full_names).to eq(["acme/my_ledger", "acme/billing-service", "acme/zeta-tools"])
+
+      get_repositories(agent_api_key.raw_token, params: { sort: "pyramid" })
+
+      expect(full_names).to eq(["acme/billing-service", "acme/zeta-tools"])
     end
 
     # The clamp, from the reader's side: both role asks answer the whole granted set with a 200 —

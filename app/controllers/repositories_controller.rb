@@ -108,6 +108,7 @@ class RepositoriesController < ApplicationController
     @repositories = scope.includes(:user).order(:github_full_name)
     @repositories = stale_first(@repositories, latest_test_runs) if requested_sort == "stale"
     @repositories = annotated_first(@repositories, latest_test_runs) if requested_sort == "annotated"
+    @repositories = pyramid_first(@repositories, latest_test_runs) if requested_sort == "pyramid"
     @registration_grant_story = registration_grant_story
   end
 
