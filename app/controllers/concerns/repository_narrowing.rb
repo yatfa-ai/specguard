@@ -137,4 +137,43 @@ module RepositoryNarrowing
       [fraction.nil? ? 1 : 0, fraction || 0.0, repository.github_full_name]
     end
   end
+
+  # THE `?sort=pyramid` ORDERING — thinnest top-of-the-pyramid first: the latest run's
+  # `(request + system) / (unit + integration + request + system)` over `TestRun#layer_counts`,
+  # ascending, so a suite whose declared examples are all unit (a measured 0%) comes first.
+  #
+  # APPLIED OVER THE LOADED SET, exactly as `stale_first` and `annotated_first` are, and for the
+  # same reason: `layer_counts` is primed for the whole page in one grouped read by the caller
+  # (`preload_layer_counts`) before this runs, so reading it here costs no query on either surface.
+  #
+  # THE DENOMINATOR EXCLUDES `undeclared` ON PURPOSE. Counting it would rank a never-annotated
+  # suite as "no request tests" and make this ordering a second spelling of `?sort=annotated`,
+  # whose job that is. This one asks only about suites that DECLARED their layers.
+  #
+  # THE UNMEASURED LIMB IS LAST RATHER THAN SORTED AS ZERO: a repository with no run, a run with no
+  # per-example rows (`layer_counts` nil), or a run whose declared total is 0 (every example
+  # undeclared) has no share to rank — ranking it 0% would put a suite nobody measured ahead of one
+  # measured at 0 request/system tests. A measured 0 IS a real `0.0` and sorts first.
+  #
+  # THE TUPLE IS `[limb, Float, name]` ON EVERY BRANCH, as in `annotated_first`: limb `0` is
+  # measured, `1` unmeasured, and the unmeasured limb carries a `0.0` sentinel that is never
+  # compared against a measured share (limbs differ first; within limb `1` it is equal on both
+  # sides and the name decides) — so no `nil` is ever compared with a Float. `github_full_name`
+  # breaks ties so a `?sort=pyramid` URL is deterministic and shareable.
+  def pyramid_first(repositories, latest_runs)
+    repositories.sort_by do |repository|
+      share = pyramid_share(latest_runs[repository.id]&.layer_counts)
+      [share.nil? ? 1 : 0, share || 0.0, repository.github_full_name]
+    end
+  end
+
+  # The request+system share of a declared-layer mix, or nil when there is nothing declared to
+  # take a share of (no mix at all, or every example undeclared).
+  def pyramid_share(counts)
+    return nil if counts.nil?
+
+    top = counts.fetch(:request, 0) + counts.fetch(:system, 0)
+    declared = top + counts.fetch(:unit, 0) + counts.fetch(:integration, 0)
+    declared.zero? ? nil : top.fdiv(declared)
+  end
 end

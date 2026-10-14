@@ -409,10 +409,22 @@
               order.
             </td>
           </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">?sort=pyramid</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Reorders by the latest run's request and system share of its declared examples
+              (request + system over unit + integration + request + system; undeclared examples
+              are left out of the denominator): the thinnest top comes first, and a suite that
+              declared only unit tests is a real 0%. A repository with no run, a run with no
+              recorded examples, or a run whose examples are all undeclared has no share and
+              comes last — never ranked as 0%. Ties break on <code>full_name</code>, so the
+              same URL answers the same order.
+            </td>
+          </tr>
         <% end %>
         <p class="text-sm text-app-content-secondary">
           Under an <code>sga_</code> agent key these asks answer with a difference:
-          <code>?q=</code>, <code>?sort=stale</code> and <code>?sort=annotated</code> narrow and reorder the granted set
+          <code>?q=</code>, <code>?sort=stale</code>, <code>?sort=annotated</code> and <code>?sort=pyramid</code> narrow and reorder the granted set
           normally, while <code>?role=</code> draws an owner/member line that a credential
           speaking for nobody does not have. An agent key asking for <code>owned</code> or
           <code>shared</code> is answered with its whole granted set, exactly as if it had asked

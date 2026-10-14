@@ -840,6 +840,110 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
       end
     end
 
+    describe "?sort=pyramid — ordering by request+system share of declared layers, thinnest first" do
+      def observe(run, layer, count)
+        count.times do |index|
+          run.spec_observations.create!(
+            repository: run.repository, example_id: "./spec/a_spec.rb[1:#{layer}#{index}]",
+            file_path: "spec/a_spec.rb", spec_file_path: "spec/a_spec.rb", line_number: index + 1,
+            status: "unannotated", intent_layer: layer == :undeclared ? nil : layer.to_s
+          )
+        end
+      end
+
+      # alpha is 40% (6 unit + 4 request), bravo a measured 0% (10 unit), foxtrot 33% (2 unit,
+      # 2 integration, 1 request, 1 system), charlie declared nothing (all undeclared) and delta
+      # was never ingested. Pyramid order is bravo, foxtrot, alpha, then the
+      # unmeasured by name; it differs from name order (alpha first) and from annotated order
+      # (alpha 50% before bravo 100%).
+      def pyramid_fixture
+        repos = %w[alpha bravo charlie delta foxtrot golf].index_with do |name|
+          create_repository(user: person, github_full_name: "acme/#{name}")
+        end
+        alpha = create_test_run(repository: repos["alpha"], commit_sha: "cafe1813a", total_specs_count: 10,
+                                annotated_specs_count: 5)
+        observe(alpha, :unit, 6)
+        observe(alpha, :request, 4)
+        bravo = create_test_run(repository: repos["bravo"], commit_sha: "cafe1813b", total_specs_count: 10,
+                                annotated_specs_count: 10)
+        observe(bravo, :unit, 10)
+        charlie = create_test_run(repository: repos["charlie"], commit_sha: "cafe1813c", total_specs_count: 3)
+        observe(charlie, :undeclared, 3)
+        # foxtrot pins every term of the share: (1 request + 1 system) / (2 unit + 2 integration +
+        # 1 request + 1 system) = 33%. Counting integration as top-of-pyramid would make it 67%
+        # and dropping integration from the denominator 50% (both past alpha); dropping system
+        # from the numerator makes it 17% (ahead of golf).
+        foxtrot = create_test_run(repository: repos["foxtrot"], commit_sha: "cafe1813f", total_specs_count: 6,
+                                  annotated_specs_count: 6)
+        observe(foxtrot, :unit, 2)
+        observe(foxtrot, :integration, 2)
+        observe(foxtrot, :request, 1)
+        observe(foxtrot, :system, 1)
+        # golf (3 unit + 1 request = 25%) sits between bravo and foxtrot, so dropping system from
+        # the numerator (foxtrot -> 17%) moves foxtrot ahead of golf and goes red.
+        golf = create_test_run(repository: repos["golf"], commit_sha: "cafe1813g", total_specs_count: 4,
+                               annotated_specs_count: 4)
+        observe(golf, :unit, 3)
+        observe(golf, :request, 1)
+        repos
+      end
+
+      # @intent: { entity: "UserRepositoriesController", action: "order by pyramid share", behavior: "?sort=pyramid serves a measured 0% request+system share first, then 40%, then all-undeclared and never-ingested repositories last in name order", layer: "request" }
+      it "serves the thinnest top first, unmeasured and never-ingested last by name" do
+        pyramid_fixture
+
+        get_repositories(params: { sort: "pyramid" })
+
+        expect(response).to have_http_status(:ok)
+        expect(full_names.first(4)).to eq(["acme/bravo", "acme/golf", "acme/foxtrot", "acme/alpha"])
+        expect(full_names.drop(4)).to eq(["acme/billing-service", "acme/charlie", "acme/delta", "acme/ledger"])
+
+        get_repositories
+        expect(full_names.first(2)).to eq(["acme/alpha", "acme/billing-service"])
+        get_repositories(params: { sort: "annotated" })
+        expect(full_names.first(3)).to eq(["acme/charlie", "acme/alpha", "acme/bravo"])
+      end
+
+      it "puts an all-unit suite first and an all-undeclared suite last" do
+        pyramid_fixture
+
+        get_repositories(params: { sort: "pyramid" })
+
+        expect(full_names.first).to eq("acme/bravo")
+        expect(full_names.index("acme/charlie")).to be > full_names.index("acme/alpha")
+        expect(full_names.last).to eq("acme/ledger")
+      end
+
+      it "serves the same sequence under an sga_ agent key" do
+        pyramid_fixture
+
+        get_repositories(params: { sort: "pyramid" })
+        user_sequence = full_names
+
+        agent_key = create_agent_api_key(user: person, repositories: Repository.accessible_by(person).to_a,
+                                         permissions: [])
+        get_repositories(token: agent_key.raw_token, params: { sort: "pyramid" })
+
+        expect(response).to have_http_status(:ok)
+        expect(full_names).to eq(user_sequence)
+      end
+
+      it "costs the same number of queries as the unsorted call at three and at four repositories" do
+        repos = pyramid_fixture
+        repos["delta"].destroy!
+        user_api_key
+
+        unsorted = count_queries { get_repositories }
+        pyramid = count_queries { get_repositories(params: { sort: "pyramid" }) }
+        expect(pyramid).to eq(unsorted)
+
+        create_repository(user: person, github_full_name: "acme/echo")
+        unsorted = count_queries { get_repositories }
+        pyramid = count_queries { get_repositories(params: { sort: "pyramid" }) }
+        expect(pyramid).to eq(unsorted)
+      end
+    end
+
     describe "the three asks together" do
       it "compose — narrow, partition and order in one URL" do
         api_shared_stale = create_repository(user: stranger, github_full_name: "acme/api-legacy")

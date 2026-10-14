@@ -5207,6 +5207,92 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
     end
 
+    describe "?sort=pyramid — thinnest request+system share first" do
+      def observe_layers(run, layer, count)
+        count.times do |index|
+          run.spec_observations.create!(
+            repository: run.repository, example_id: "./spec/a_spec.rb[1:#{layer}#{index}]",
+            file_path: "spec/a_spec.rb", spec_file_path: "spec/a_spec.rb", line_number: index + 1,
+            status: "unannotated", intent_layer: layer == :undeclared ? nil : layer.to_s
+          )
+        end
+      end
+
+      # alpha 40% (6 unit + 4 request), bravo a measured 0% (10 unit), foxtrot 33% (all four
+      # declared layers), charlie all undeclared, delta never ingested. Pyramid order (bravo,
+      # foxtrot, alpha, charlie, delta) differs from name order
+      # (alpha first) and annotated order (charlie 0%, alpha 50%, bravo 100%).
+      def pyramid_fixture
+        repos = %w[alpha bravo charlie delta foxtrot golf].index_with do |name|
+          create_repository(user: @user, github_full_name: "acme/#{name}")
+        end
+        alpha = create_test_run(repository: repos["alpha"], commit_sha: "cafe1813a", total_specs_count: 10,
+                                annotated_specs_count: 5)
+        observe_layers(alpha, :unit, 6)
+        observe_layers(alpha, :request, 4)
+        bravo = create_test_run(repository: repos["bravo"], commit_sha: "cafe1813b", total_specs_count: 10,
+                                annotated_specs_count: 10)
+        observe_layers(bravo, :unit, 10)
+        charlie = create_test_run(repository: repos["charlie"], commit_sha: "cafe1813c", total_specs_count: 3)
+        observe_layers(charlie, :undeclared, 3)
+        # foxtrot pins every term of the share: (1 request + 1 system) / (2 unit + 2 integration +
+        # 1 request + 1 system) = 33%. Integration counted as top-of-pyramid gives 67%, system
+        # dropped from the numerator 17%, integration dropped from the denominator 50%.
+        foxtrot = create_test_run(repository: repos["foxtrot"], commit_sha: "cafe1813f", total_specs_count: 6,
+                                  annotated_specs_count: 6)
+        observe_layers(foxtrot, :unit, 2)
+        observe_layers(foxtrot, :integration, 2)
+        observe_layers(foxtrot, :request, 1)
+        observe_layers(foxtrot, :system, 1)
+        # golf (3 unit + 1 request = 25%) sits between bravo and foxtrot, so dropping system from
+        # the numerator (foxtrot -> 17%) moves foxtrot ahead of golf and goes red.
+        golf = create_test_run(repository: repos["golf"], commit_sha: "cafe1813g", total_specs_count: 4,
+                               annotated_specs_count: 4)
+        observe_layers(golf, :unit, 3)
+        observe_layers(golf, :request, 1)
+        repos
+      end
+
+      def paths_for(repos, *names)
+        names.map { |name| repository_path(repos[name]) }
+      end
+
+      # @intent: { entity: "RepositoriesController", action: "order cards by pyramid share", behavior: "?sort=pyramid renders a measured 0% request+system share first, then 40%, then the all-undeclared and never-ingested repositories last in name order", layer: "request" }
+      it "orders cards by ascending request+system share, unmeasured last" do
+        repos = pyramid_fixture
+
+        get repositories_path, params: { sort: "pyramid" }
+
+        expect(rendered_card_paths).to eq(paths_for(repos, "bravo", "golf", "foxtrot", "alpha", "charlie", "delta"))
+
+        get repositories_path, params: { sort: "annotated" }
+        expect(rendered_card_paths.first(3)).to eq(paths_for(repos, "charlie", "alpha", "bravo"))
+      end
+
+      it "offers the ordering in the sort select" do
+        create_repository(user: @user, github_full_name: "acme/one")
+
+        get repositories_path
+
+        expect(response.body).to include("Thinnest top first")
+        expect(response.body).to include(%(value="pyramid"))
+      end
+
+      it "costs the same number of queries as the annotated-sorted page at three and four repositories" do
+        repos = pyramid_fixture
+        repos["delta"].destroy!
+
+        annotated = count_queries { get repositories_path, params: { sort: "annotated" } }
+        pyramid = count_queries { get repositories_path, params: { sort: "pyramid" } }
+        expect(pyramid).to eq(annotated)
+
+        create_repository(user: @user, github_full_name: "acme/echo")
+        annotated = count_queries { get repositories_path, params: { sort: "annotated" } }
+        pyramid = count_queries { get repositories_path, params: { sort: "pyramid" } }
+        expect(pyramid).to eq(annotated)
+      end
+    end
+
     describe "the three asks together" do
       it "compose — search, ownership and order in one URL" do
         colleague = create_user(github_uid: "8888", github_handle: "colleague")
