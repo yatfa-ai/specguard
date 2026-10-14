@@ -465,6 +465,16 @@ class RepositoryOverview
       # See `serialized_directory_runtime_file_growth_window`.
       directory_runtime_file_growth_window: growth.serialized_directory_runtime_file_growth_window,
       directory_runtime_file_growth: growth.serialized_directory_runtime_file_growth,
+      # THE WINDOW GRAIN OF THE PAIR ABOVE, and the last empty cell of the {area, file} × {count, time}
+      # × {last push, branch window} grid: not which files changed TIME in the latest push but which
+      # changed time ACROSS THE `?branch=` WINDOW (two endpoints, not a series). A file that crept from
+      # 8s to 60s over thirty pushes moves a couple of seconds per push on `directory_runtime_file_growth`
+      # and is invisible there. Reads the same `?spec_directory=`, gated on `?branch=`; `?layer=` narrows
+      # it. When the list is not truncated the files' `change`s sum to that area's
+      # `directory_runtime_window_growth` row `change`. See
+      # `serialized_directory_runtime_window_file_growth_window`.
+      directory_runtime_window_file_growth_window: growth.serialized_directory_runtime_window_file_growth_window,
+      directory_runtime_window_file_growth: growth.serialized_directory_runtime_window_file_growth,
       # SERVED ON THE ASK AND NEVER WITHOUT IT — and, since SPGD-1474, served STORED: the census is
       # computed once per write that moves its inputs — at ingest, and on run deletion
       # ({RunsController#destroy}) — and persisted, so what the ask opens is a read of one stored

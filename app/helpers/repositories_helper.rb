@@ -657,7 +657,8 @@ module RepositoriesHelper
   DRILL_IN_ASKS = %i[spec_file spec_directory repeated_description unstable_test unstable_test_from].freeze
 
   def drill_in_open?
-    [@spec_file_examples, @spec_directory_files, @spec_directory_file_growth, @spec_directory_window_file_growth, @unannotated_examples,
+    [@spec_file_examples, @spec_directory_files, @spec_directory_file_growth, @spec_directory_window_file_growth,
+     @spec_directory_window_file_runtime_growth, @unannotated_examples,
      @repeated_description_examples, @unstable_test_runs].any?
   end
 
@@ -816,12 +817,14 @@ module RepositoriesHelper
     elsif @repeated_description_examples then "Repeated description"
     elsif @unannotated_examples && !@spec_file_examples then "Unannotated tests"
     elsif @spec_file_examples then "Spec file"
-    elsif @spec_directory_files || @spec_directory_file_growth then "Spec directory"
+    elsif @spec_directory_files || @spec_directory_file_growth || @spec_directory_window_file_growth ||
+          @spec_directory_window_file_runtime_growth then "Spec directory"
     end
   end
 
   def drill_in_title
     @unstable_test_runs&.name || @repeated_description_examples&.name || @spec_file_examples&.path ||
-      @spec_directory_files&.path || @spec_directory_file_growth&.path
+      @spec_directory_files&.path || @spec_directory_file_growth&.path ||
+      @spec_directory_window_file_growth&.path || @spec_directory_window_file_runtime_growth&.path
   end
 end

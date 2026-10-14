@@ -262,6 +262,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "directory_run_file_growth_window", "directory_run_file_growth",
                             "directory_file_growth_window", "directory_file_growth",
                             "directory_runtime_file_growth_window", "directory_runtime_file_growth",
+                            "directory_runtime_window_file_growth_window", "directory_runtime_window_file_growth",
                             "branches_window", "branches",
                             "near_duplicates", "near_duplicates_summary", "near_duplicate_cluster",
                             "near")
@@ -2896,6 +2897,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "directory_run_file_growth_window", "directory_run_file_growth",
                             "directory_file_growth_window", "directory_file_growth",
                             "directory_runtime_file_growth_window", "directory_runtime_file_growth",
+                            "directory_runtime_window_file_growth_window", "directory_runtime_window_file_growth",
                             "branches_window", "branches",
                             "near_duplicates", "near_duplicates_summary", "near_duplicate_cluster",
                             "near")

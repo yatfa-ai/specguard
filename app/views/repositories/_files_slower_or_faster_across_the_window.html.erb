@@ -1,0 +1,67 @@
+<%# == WHICH FILES of one area got SLOWER or FASTER ACROSS THE WINDOW — the rung below "Areas that got
+        slower or faster over the window", and the window twin of the last-push file TIME block
+        (`directory_runtime_file_growth`, API only). A file that crept from 8s to 60s over thirty
+        pushes moves a couple of seconds per push and is invisible on the last-push grain. This panel
+        hands the SAME file-time read the window's two ends (`SpecDirectoryWindowRuntimeGrowth`'s
+        baseline and anchor runs) — a composition, no new query.
+
+        Titled so it cannot be confused with the count panel beside it when both are open. It
+        compares TWO ENDPOINTS and is not a series: a file that slowed and sped back up between them
+        reads ±0, and a MOVED file reads as one file removed beside one new.
+
+        Renders ONLY where the window TIME panel it drills out of is comparable (it inherits that
+        verdict, all eleven states, and issues no read otherwise). Reached by the same
+        `?spec_directory=` ask as every other panel over the area; no "Close directory" of its own,
+        on the sibling's argument. Same visibility rule as the panels around it: read-only suite
+        telemetry on `current_repository(:view)`. %>
+<% if @spec_directory_window_file_runtime_growth&.comparable? %>
+      <% file_growth = @spec_directory_window_file_runtime_growth %>
+      <%= render UI::PanelComponent.new(title: "Files that got slower or faster across the window — this window's two ends compared, not a trend",
+                                        id: "spec-directory-window-file-runtime-growth", class: "rc-drill") do %>
+        <%= render "repositories/run_pair_layer_note", growth: file_growth, window: true,
+                   clear_id: "spec-directory-window-file-runtime-growth-clear-layer", anchor: "changes" %>
+        <% if file_growth.recorded? && file_growth.anything_to_show? %>
+          <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-window-file-runtime-growth-basis") do %>
+            <%= spec_directory_window_file_runtime_growth_basis(file_growth) %>
+          <% end %>
+          <%= render UI::TableComponent.new(
+                columns: ["Spec file", { label: "Time at baseline", end: true }, { label: "Time now", end: true }, { label: "Change across window", end: true }],
+                describedby: "spec-directory-window-file-runtime-growth-basis", sortable: true) do %>
+            <% file_growth.rows.each do |file| %>
+              <tr>
+                <td class="font-mono text-xs [overflow-wrap:anywhere]">
+                  <% if file.removed_file? %><%= file.path %><% else %>
+                    <%= link_to file.path, drill_down_path(@repository, spec_file: file.path, spec_directory: file_growth.path, anchor: "slow"),
+                                class: "rc-link", aria: { current: file.path == @spec_file_request ? "true" : nil } %>
+                  <% end %>
+                </td>
+                <td class="num mute" data-sort="<%= file.previous_seconds %>"><%= file.baseline_label %></td>
+                <td class="num mute" data-sort="<%= file.latest_seconds %>"><%= file.anchor_label %></td>
+                <td class="num" data-sort="<%= file.change %>" aria-label="<%= file.change_reading %>"><%= delta_tag(file.change_label, tone: file.change ? delta_tone_for(file.change, bigger_is_worse: true) : :flat) %></td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif file_growth.recorded? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No file changed pace across this window",
+                description: spec_directory_window_file_runtime_growth_unmoved_description(file_growth)
+              ) %>
+        <% elsif file_growth.layer? %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No #{file_growth.layer}-layer examples in this directory",
+                description: "Neither end of this window has an example in #{file_growth.path} that " \
+                             "declared #{file_growth.layer} as its layer, so no file of it has any " \
+                             "time to compare across it. The area may still hold examples of other layers."
+              ) %>
+        <% else %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No spec files in this directory",
+                description: "Neither end of this window recorded any examples in " \
+                             "#{file_growth.path}. It may have been renamed or deleted before both " \
+                             "of them, or never have run at either — the “Areas that got slower or " \
+                             "faster over the window” table lists the areas whose time moved most " \
+                             "between the two."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>

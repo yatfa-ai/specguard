@@ -945,6 +945,16 @@ class RepositoryDashboard
       @spec_directory_window_runtime_growth =
         SpecDirectoryWindowRuntimeGrowth.for(trajectory_runs, branch: @trajectory_run&.branch,
                                                               layer: @layer_request)
+      # ONE grain down, for the ONE area the reader asked about: which FILES of it got slower or faster
+      # across the window — the TIME twin of `@spec_directory_window_file_growth` above, the two ends
+      # compared, not a trend. Inherits the time parent's eleven-state verdict (zero reads when it
+      # refuses); one grouped read when comparable. Guarded on the ask and on the parent existing.
+      if @spec_directory_request && @spec_directory_window_runtime_growth
+        @spec_directory_window_file_runtime_growth =
+          SpecDirectoryWindowFileRuntimeGrowth.for(@spec_directory_request,
+                                                   window_growth: @spec_directory_window_runtime_growth,
+                                                   layer: @layer_request)
+      end
       # The WALL CLOCK at the grain the two panels above already speak at, and the one grain this
       # page has never had. "Slowest tests" above is ONE run, and its own comment says why it stays
       # there: `example_id` is positional and not stable across refactors, so a ranking that spanned
