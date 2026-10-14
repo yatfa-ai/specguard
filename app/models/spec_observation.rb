@@ -1433,6 +1433,25 @@ class SpecObservation < ApplicationRecord
     run_counts_in(test_run)[1]
   end
 
+  # The RUN-grain declared-layer mix for MANY runs in ONE grouped read — `{run_id => {unit:,
+  # integration:, request:, system:, undeclared:}}` in {DECLARED_LAYER_KEYS} order, each value
+  # exactly what {.layer_counts_in} would answer for that run. The list surfaces
+  # (`GET /api/v1/repositories`, the repositories grid) prime `TestRun#layer_counts` from it so a
+  # page of N cards pays one `spec_observations` statement instead of N.
+  #
+  # A run with no recorded rows has no group at all, so it is ABSENT from the result — and absent
+  # means NIL for the caller (`TestRun#preload_layer_counts` primes nil), the same "no detail
+  # stored, no mix to state" rule {.run_counts_in} follows; never five zeros. Empty ids ⇒ `{}` with
+  # no query. The predicates are {.directory_layer_count_expressions}, not retyped.
+  def self.run_layer_counts_for(test_run_ids)
+    return {} if test_run_ids.blank?
+
+    where(test_run_id: test_run_ids)
+      .group(:test_run_id)
+      .pluck(:test_run_id, *directory_layer_count_expressions)
+      .to_h { |id, *counts| [id, DECLARED_LAYER_KEYS.zip(counts.map(&:to_i)).to_h] }
+  end
+
   # The five {.directory_layer_count_expressions}, ALIASED for the run grain — `run_layer_<key>_count`.
   #
   # Aliased for the reason {RUN_READING_COUNTS} is: this projection rides the run-grain read, and

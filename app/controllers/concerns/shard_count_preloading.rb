@@ -74,4 +74,16 @@ module ShardCountPreloading
          .preload_machine_seconds(machine_seconds)
     end
   end
+
+  # Primes `TestRun#layer_counts` across a page of runs from ONE grouped `spec_observations` read
+  # (`SpecObservation.run_layer_counts_for`, served by `index_spec_observations_on_test_run_id`),
+  # so a grid of N cards and the `latest_run` of N list entries pay one statement, not N. A run
+  # with no recorded rows has no group and is primed NIL — "no mix to state", never five zeros.
+  # Early return on an empty list, so a page of no repositories pays nothing.
+  def preload_layer_counts(runs)
+    return runs if runs.empty?
+
+    mixes = SpecObservation.run_layer_counts_for(runs.map(&:id))
+    runs.each { |run| run.preload_layer_counts(mixes[run.id]) }
+  end
 end

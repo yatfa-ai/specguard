@@ -457,7 +457,10 @@
               <code>commit_sha</code>, <code>total_specs</code>,
               <code>annotated_specs</code>, <code>annotated_ratio</code> (a 0–1 fraction, never a
               percentage), <code>suite_size_measured</code>, <code>duration_seconds</code>, and
-              <code>shards</code>. A null and a zeroed block are different facts — never-reported
+              <code>shards</code>, and <code>layer_counts</code> (the declared-layer mix:
+              <code>unit</code>, <code>integration</code>, <code>request</code>,
+              <code>system</code>, <code>undeclared</code>; <code>null</code> when the run
+              recorded no per-example rows, never five zeros). A null and a zeroed block are different facts — never-reported
               is not the same thing as ran-and-found-nothing.
             </td>
           </tr>
