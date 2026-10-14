@@ -378,6 +378,7 @@ class RepositoriesController < ApplicationController
   def latest_test_runs
     @latest_test_runs ||= latest_test_runs_for(@repositories.map(&:id))
                           .tap { |runs| preload_shard_counts(runs.values) }
+                          .tap { |runs| preload_layer_counts(runs.values) }
   end
 
   # What one card says about its deliveries being REFUSED — the same object, answering the same two

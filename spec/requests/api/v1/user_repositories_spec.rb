@@ -372,7 +372,10 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
         "duration_seconds" => 42.5,
         # Null, not an empty or zeroed block: this run was delivered in one piece, and there is no
         # composition to explain. The detail endpoint serves the same null for the same run.
-        "shards" => nil
+        "shards" => nil,
+        # Appended after `shards`. This run recorded no per-example rows, so there is no mix to
+        # state: `null`, never five zeros.
+        "layer_counts" => nil
       )
     end
 
@@ -469,6 +472,79 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
           expect(detail_block[key]).to eq(value)
         end
       end
+    end
+  end
+
+  # SPGD-1805 — the declared-layer mix at list depth, primed for the whole page from ONE grouped
+  # `spec_observations` read. Mirrors the grid's guard in `repositories_spec.rb`.
+  describe "latest_run.layer_counts" do
+    def entry_for(full_name)
+      response.parsed_body["repositories"].find { |row| row["full_name"] == full_name }
+    end
+
+    def observe(run, layer:, line:)
+      run.spec_observations.create!(
+        repository: run.repository, example_id: "./spec/a_spec.rb[1:#{line}]",
+        file_path: "spec/a_spec.rb", spec_file_path: "spec/a_spec.rb", line_number: line,
+        status: "unannotated", intent_layer: layer
+      )
+    end
+
+    def mixed_fixture
+      with_mix = create_test_run(repository: owned, total_specs_count: 3)
+      %w[unit unit request].each_with_index { |layer, index| observe(with_mix, layer: layer, line: index + 1) }
+      undeclared = create_test_run(repository: shared, total_specs_count: 2)
+      2.times { |index| observe(undeclared, layer: nil, line: index + 1) }
+      with_mix
+    end
+
+    # @intent: { entity: "repository list latest_run", action: "serve the layer mix", behavior: "each entry's layer_counts equals the detail route's for the same run and sums to intent_readings.recorded; an all-undeclared suite shows its real mix", layer: "request" }
+    it "serves the run's mix, equal to the detail route's and summing to intent_readings.recorded" do
+      mixed_fixture
+
+      get_repositories
+
+      mix = entry_for("acme/billing-service")["latest_run"]["layer_counts"]
+      expect(mix).to eq("unit" => 2, "integration" => 0, "request" => 1, "system" => 0, "undeclared" => 0)
+      expect(entry_for("acme/ledger")["latest_run"]["layer_counts"])
+        .to eq("unit" => 0, "integration" => 0, "request" => 0, "system" => 0, "undeclared" => 2)
+
+      get "/api/v1/repositories/#{owned.id}", headers: { "Authorization" => "Bearer #{user_api_key.raw_token}" }
+      detail = response.parsed_body["latest_run"]
+      expect(detail["layer_counts"]).to eq(mix)
+      expect(mix.values.sum).to eq(detail["intent_readings"]["recorded"])
+    end
+
+    # @intent: { entity: "repository list latest_run", action: "serve null for an unrecorded run", behavior: "a run with no observations serves layer_counts null with the key present and a never-ingested repository serves latest_run null", layer: "request" }
+    it "serves null for a run that recorded no rows, and no run block for a never-ingested repository" do
+      mixed_fixture
+      empty = create_repository(user: person, github_full_name: "acme/empty")
+      create_test_run(repository: empty, total_specs_count: 1)
+
+      get_repositories
+
+      block = entry_for("acme/empty")["latest_run"]
+      expect(block.key?("layer_counts")).to be(true)
+      expect(block["layer_counts"]).to be_nil
+      expect(entry_for("acme/billing-service")["latest_run"].keys.last).to eq("layer_counts")
+    end
+
+    # @intent: { entity: "repository list", action: "batch the layer read", behavior: "the list issues exactly one spec_observations query with three repositories (one with no observations, one never ingested) and the same single query after a fourth is added", layer: "request" }
+    it "reads spec_observations once for the whole page, however many repositories it lists" do
+      mixed_fixture
+      empty = create_repository(user: person, github_full_name: "acme/empty")
+      create_test_run(repository: empty, total_specs_count: 1)
+      create_repository(user: person, github_full_name: "acme/never")
+
+      first = queries_against("spec_observations") { get_repositories }
+      expect(first.size).to eq(1)
+
+      fourth = create_repository(user: person, github_full_name: "acme/fourth")
+      observe(create_test_run(repository: fourth, total_specs_count: 1), layer: "system", line: 1)
+
+      second = queries_against("spec_observations") { get_repositories }
+      expect(second.size).to eq(1)
+      expect(entry_for("acme/fourth")["latest_run"]["layer_counts"]).to include("system" => 1)
     end
   end
 

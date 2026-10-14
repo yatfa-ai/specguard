@@ -488,6 +488,15 @@
               <% if annotated_share %>
                 <p class="text-xs text-app-muted"><%= annotated_share %></p>
               <% end %>
+              <%# The declared-layer mix (unit / integration / request / system / undeclared) as the
+                  same `.rc-stack` bar the Changes section draws, with no key. `run.layer_counts` is
+                  primed for the whole grid by one grouped read (`preload_layer_counts` in
+                  `latest_test_runs`), so this costs no query per card. Nil for a run that recorded
+                  no per-example rows, and the helper returns nil for an empty mix — no bar then. %>
+              <% layer_mix = layers_stack(run.layer_counts, key: false) %>
+              <% if layer_mix %>
+                <div class="mt-1"><%= layer_mix %></div>
+              <% end %>
               <%# What that run COST, beside what it contains. The badge above says how BIG each
                   suite is; nothing on this grid said what any of them is worth in CI minutes, which
                   is the question a page rendering N repositories at once exists to answer — the

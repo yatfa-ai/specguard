@@ -3180,6 +3180,49 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
     end
 
+    # SPGD-1805 — the declared-layer mix on each card, from one grouped read for the whole grid.
+    describe "the declared-layer mix on each card" do
+      def observe_layer(run, layer, line)
+        run.spec_observations.create!(
+          repository: run.repository, example_id: "./spec/a_spec.rb[1:#{line}]",
+          file_path: "spec/a_spec.rb", spec_file_path: "spec/a_spec.rb", line_number: line,
+          status: "unannotated", intent_layer: layer
+        )
+      end
+
+      # @intent: {"entity": "TestRun", "action": "show layer mix", "behavior": "a card whose run declared unit twice and request once draws a bar labelled unit 2, request 1 and a card with no observations draws none", "layer": "request"}
+      it "draws a labelled bar only for runs with a mix" do
+        with_mix = create_test_run(repository: create_repository(user: @user, github_full_name: "acme/mixed"),
+                                   total_specs_count: 3)
+        %w[unit unit request].each_with_index { |layer, index| observe_layer(with_mix, layer, index + 1) }
+        create_test_run(repository: create_repository(user: @user, github_full_name: "acme/bare"),
+                        total_specs_count: 1)
+
+        get repositories_path
+
+        bars = Capybara.string(response.body).all(".rc-stack")
+        expect(bars.size).to eq(1)
+        expect(bars.first["aria-label"]).to eq("unit 2, request 1")
+      end
+
+      # @intent: {"entity": "TestRun", "action": "batch layer read", "behavior": "the grid issues one spec_observations query with three repositories and still one after a fourth is added", "layer": "request"}
+      it "reads spec_observations once for the whole grid, however long the list is" do
+        %w[acme/one acme/two acme/three].each_with_index do |full_name, index|
+          run = create_test_run(repository: create_repository(user: @user, github_full_name: full_name),
+                                total_specs_count: 1, commit_sha: "cafe030#{index}")
+          observe_layer(run, index.zero? ? nil : "unit", 1)
+        end
+
+        expect(queries_against("spec_observations") { get repositories_path }.size).to eq(1)
+
+        run = create_test_run(repository: create_repository(user: @user, github_full_name: "acme/four"),
+                              total_specs_count: 1, commit_sha: "cafe0399")
+        observe_layer(run, "request", 1)
+
+        expect(queries_against("spec_observations") { get repositories_path }.size).to eq(1)
+      end
+    end
+
     # The grid renders N suites at once and said nothing about what any of them COST — the one
     # question a reader with eight repositories brings to a list of them, and the one their CI bill
     # is denominated in. The wall clock was already on every card object (`DISTINCT ON … test_runs.*`)

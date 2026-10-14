@@ -24,9 +24,11 @@
 #
 # Both depths serve the run-level scalars — `commit_sha`, `branch`, `total_specs`,
 # `annotated_specs`, `annotated_ratio`, `suite_size_measured`, `duration_seconds`, `ingested_at`
-# — and the shard facts NESTED under `shards`, mirroring the detail endpoint verbatim. The full
+# — the shard facts NESTED under `shards`, mirroring the detail endpoint verbatim, and the
+# run-wide declared-layer mix `layer_counts` (primed for the whole page by one grouped
+# `spec_observations` read; `null` for a run that recorded no per-example rows). The full
 # depth adds everything that answers *why this run took as long as it did*: `intent_readings`, the
-# four rollups, the five drill-ins, and — inside `shards` — the coverage pair, the wall-clock
+# time-by-layer `layer_durations`, the four rollups, the five drill-ins, and — inside `shards` — the coverage pair, the wall-clock
 # decomposition and the settling-window pair. Those stay off the list entry, and two of them are
 # arrays that an unpaginated list has no business fanning out per repository.
 #
@@ -142,7 +144,13 @@ class LatestRunSerializer
       # On a sharded run this is the MAX over the shards — the run's WALL CLOCK, not what the
       # suite cost. `shards.machine_seconds` below is the other half of that pair.
       duration_seconds: test_run.duration_seconds,
-      shards: list_shards
+      shards: list_shards,
+      # The run-wide DECLARED-LAYER mix — the SAME `TestRun#layer_counts` call the full depth
+      # serves, so the list entry and the detail page cannot name different mixes. Primed for the
+      # whole page by `ShardCountPreloading#preload_layer_counts` (one grouped read), so it costs
+      # no query per entry. `null` — never five zeros — when the run recorded no per-example rows.
+      # APPENDED after `shards`: every earlier list key keeps its position.
+      layer_counts: test_run.layer_counts
     }
   end
 

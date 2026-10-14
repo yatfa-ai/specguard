@@ -53,7 +53,26 @@ class TestRun < ApplicationRecord
   # when the run recorded no per-example rows. Taken from the SAME single aggregate row as
   # `intent_readings`, so it costs the page no query of its own. Operands only; the path is never
   # consulted, and an undeclared example is not an unreadable one.
-  def layer_counts = run_counts[1]
+  #
+  # Honours a primed memo (see {#preload_layer_counts}) — including a primed NIL — so a list of runs
+  # asks one grouped read for the whole page instead of one aggregate per run. Unprimed runs (every
+  # detail route) are unchanged.
+  def layer_counts
+    return @layer_counts if defined?(@layer_counts)
+
+    run_counts[1]
+  end
+
+  # Hand this run a declared-layer mix a caller has already counted for a whole page of runs
+  # (`ShardCountPreloading#preload_layer_counts`, from `SpecObservation.run_layer_counts_for`).
+  # Primes ONLY `layer_counts` — never `intent_readings` or `layer_durations`, which a grouped
+  # layer read did not measure — and `nil` primes nil: a run with no recorded rows has no mix, and
+  # must not fall back to a per-run aggregate. A named method rather than an `attr_writer`, on the
+  # rule {#preload_shard_count} states.
+  def preload_layer_counts(counts)
+    @layer_counts = counts
+    self
+  end
 
   # The run-wide TIME by declared layer beside {#layer_counts} — `{unit: {total_seconds:, timed_count:},
   # … undeclared: {…}}` in `SpecObservation::DECLARED_LAYER_KEYS` order — taken from the SAME single
