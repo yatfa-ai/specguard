@@ -5218,11 +5218,12 @@ RSpec.describe "Repository registration and API keys", type: :request do
         end
       end
 
-      # alpha 40% (6 unit + 4 request), bravo a measured 0% (10 unit), charlie all undeclared,
-      # delta never ingested. Pyramid order (bravo, alpha, charlie, delta) differs from name order
+      # alpha 40% (6 unit + 4 request), bravo a measured 0% (10 unit), foxtrot 33% (all four
+      # declared layers), charlie all undeclared, delta never ingested. Pyramid order (bravo,
+      # foxtrot, alpha, charlie, delta) differs from name order
       # (alpha first) and annotated order (charlie 0%, alpha 50%, bravo 100%).
       def pyramid_fixture
-        repos = %w[alpha bravo charlie delta].index_with do |name|
+        repos = %w[alpha bravo charlie delta foxtrot golf].index_with do |name|
           create_repository(user: @user, github_full_name: "acme/#{name}")
         end
         alpha = create_test_run(repository: repos["alpha"], commit_sha: "cafe1813a", total_specs_count: 10,
@@ -5234,6 +5235,21 @@ RSpec.describe "Repository registration and API keys", type: :request do
         observe_layers(bravo, :unit, 10)
         charlie = create_test_run(repository: repos["charlie"], commit_sha: "cafe1813c", total_specs_count: 3)
         observe_layers(charlie, :undeclared, 3)
+        # foxtrot pins every term of the share: (1 request + 1 system) / (2 unit + 2 integration +
+        # 1 request + 1 system) = 33%. Integration counted as top-of-pyramid gives 67%, system
+        # dropped from the numerator 17%, integration dropped from the denominator 50%.
+        foxtrot = create_test_run(repository: repos["foxtrot"], commit_sha: "cafe1813f", total_specs_count: 6,
+                                  annotated_specs_count: 6)
+        observe_layers(foxtrot, :unit, 2)
+        observe_layers(foxtrot, :integration, 2)
+        observe_layers(foxtrot, :request, 1)
+        observe_layers(foxtrot, :system, 1)
+        # golf (3 unit + 1 request = 25%) sits between bravo and foxtrot, so dropping system from
+        # the numerator (foxtrot -> 17%) moves foxtrot ahead of golf and goes red.
+        golf = create_test_run(repository: repos["golf"], commit_sha: "cafe1813g", total_specs_count: 4,
+                               annotated_specs_count: 4)
+        observe_layers(golf, :unit, 3)
+        observe_layers(golf, :request, 1)
         repos
       end
 
@@ -5247,7 +5263,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         get repositories_path, params: { sort: "pyramid" }
 
-        expect(rendered_card_paths).to eq(paths_for(repos, "bravo", "alpha", "charlie", "delta"))
+        expect(rendered_card_paths).to eq(paths_for(repos, "bravo", "golf", "foxtrot", "alpha", "charlie", "delta"))
 
         get repositories_path, params: { sort: "annotated" }
         expect(rendered_card_paths.first(3)).to eq(paths_for(repos, "charlie", "alpha", "bravo"))

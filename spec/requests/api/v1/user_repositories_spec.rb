@@ -792,7 +792,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
         expect(full_names.first(3)).to eq(["acme/charlie", "acme/alpha", "acme/bravo"])
         # delta (no measured suite) and every never-ingested repository share the last limb, in
         # name order.
-        expect(full_names.drop(3)).to eq((owned_never + ["acme/delta", "acme/echo"]).sort)
+        expect(full_names.drop(4)).to eq((owned_never + ["acme/delta", "acme/echo"]).sort)
       end
 
       it "answers two identical calls with an identical sequence" do
@@ -851,12 +851,13 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
         end
       end
 
-      # alpha is 40% (6 unit + 4 request), bravo a measured 0% (10 unit), charlie declared nothing
-      # (all undeclared) and delta was never ingested. Pyramid order is bravo, alpha, then the
+      # alpha is 40% (6 unit + 4 request), bravo a measured 0% (10 unit), foxtrot 33% (2 unit,
+      # 2 integration, 1 request, 1 system), charlie declared nothing (all undeclared) and delta
+      # was never ingested. Pyramid order is bravo, foxtrot, alpha, then the
       # unmeasured by name; it differs from name order (alpha first) and from annotated order
       # (alpha 50% before bravo 100%).
       def pyramid_fixture
-        repos = %w[alpha bravo charlie delta].index_with do |name|
+        repos = %w[alpha bravo charlie delta foxtrot golf].index_with do |name|
           create_repository(user: person, github_full_name: "acme/#{name}")
         end
         alpha = create_test_run(repository: repos["alpha"], commit_sha: "cafe1813a", total_specs_count: 10,
@@ -868,6 +869,22 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
         observe(bravo, :unit, 10)
         charlie = create_test_run(repository: repos["charlie"], commit_sha: "cafe1813c", total_specs_count: 3)
         observe(charlie, :undeclared, 3)
+        # foxtrot pins every term of the share: (1 request + 1 system) / (2 unit + 2 integration +
+        # 1 request + 1 system) = 33%. Counting integration as top-of-pyramid would make it 67%
+        # and dropping integration from the denominator 50% (both past alpha); dropping system
+        # from the numerator makes it 17% (ahead of golf).
+        foxtrot = create_test_run(repository: repos["foxtrot"], commit_sha: "cafe1813f", total_specs_count: 6,
+                                  annotated_specs_count: 6)
+        observe(foxtrot, :unit, 2)
+        observe(foxtrot, :integration, 2)
+        observe(foxtrot, :request, 1)
+        observe(foxtrot, :system, 1)
+        # golf (3 unit + 1 request = 25%) sits between bravo and foxtrot, so dropping system from
+        # the numerator (foxtrot -> 17%) moves foxtrot ahead of golf and goes red.
+        golf = create_test_run(repository: repos["golf"], commit_sha: "cafe1813g", total_specs_count: 4,
+                               annotated_specs_count: 4)
+        observe(golf, :unit, 3)
+        observe(golf, :request, 1)
         repos
       end
 
@@ -878,8 +895,8 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
         get_repositories(params: { sort: "pyramid" })
 
         expect(response).to have_http_status(:ok)
-        expect(full_names.first(2)).to eq(["acme/bravo", "acme/alpha"])
-        expect(full_names.drop(2)).to eq(["acme/billing-service", "acme/charlie", "acme/delta", "acme/ledger"])
+        expect(full_names.first(4)).to eq(["acme/bravo", "acme/golf", "acme/foxtrot", "acme/alpha"])
+        expect(full_names.drop(4)).to eq(["acme/billing-service", "acme/charlie", "acme/delta", "acme/ledger"])
 
         get_repositories
         expect(full_names.first(2)).to eq(["acme/alpha", "acme/billing-service"])
