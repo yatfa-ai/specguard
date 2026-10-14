@@ -792,7 +792,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
         expect(full_names.first(3)).to eq(["acme/charlie", "acme/alpha", "acme/bravo"])
         # delta (no measured suite) and every never-ingested repository share the last limb, in
         # name order.
-        expect(full_names.drop(4)).to eq((owned_never + ["acme/delta", "acme/echo"]).sort)
+        expect(full_names.drop(3)).to eq((owned_never + ["acme/delta", "acme/echo"]).sort)
       end
 
       it "answers two identical calls with an identical sequence" do
