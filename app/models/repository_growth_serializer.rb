@@ -339,24 +339,7 @@ class RepositoryGrowthSerializer
   # are nullable and independently so: `baseline_commit_sha` is `null` in both serializer states,
   # and `anchor_commit_sha` in `no_latest_run` alone.
   def serialized_directory_run_growth_window
-    growth = spec_directory_growth
-
-    window = {
-      order: "abs_change_desc,path_asc",
-      tie_break_served: true,
-      basis: "previous_run_on_branch",
-      branch_scope: "single_branch",
-      branch: latest_test_run&.branch,
-      state: run_pair_state(growth),
-      comparable: growth&.comparable? || false,
-      anchor_commit_sha: latest_test_run&.commit_sha,
-      baseline_commit_sha: previous_test_run&.commit_sha
-    }
-
-    # Echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block beside
-    # this is `null` — still says which layer's comparison was refused. Absent otherwise.
-    window[:layer] = growth.layer if growth&.layer?
-    window
+    area_run_pair_window(spec_directory_growth, order: "abs_change_desc,path_asc")
   end
 
   # The contract block for `layer_growth` — the declared-layer mix over the `?branch=` window, the
@@ -620,24 +603,7 @@ class RepositoryGrowthSerializer
   # tell which sha each operand was summed on. ANCHOR IS THE LATEST RUN and BASELINE IS THE PREVIOUS
   # ONE, which is the direction every `change` is signed in. Both are nullable and independently so.
   def serialized_directory_runtime_growth_window
-    growth = spec_directory_runtime_growth
-
-    window = {
-      order: "abs_change_desc_nulls_last,path_asc",
-      tie_break_served: true,
-      basis: "previous_run_on_branch",
-      branch_scope: "single_branch",
-      branch: latest_test_run&.branch,
-      state: run_pair_state(growth),
-      comparable: growth&.comparable? || false,
-      anchor_commit_sha: latest_test_run&.commit_sha,
-      baseline_commit_sha: previous_test_run&.commit_sha
-    }
-
-    # Echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block beside
-    # this is `null` — still says which layer's comparison was refused. Absent otherwise.
-    window[:layer] = growth.layer if growth&.layer?
-    window
+    area_run_pair_window(spec_directory_runtime_growth, order: "abs_change_desc_nulls_last,path_asc")
   end
 
   # WHICH AREAS OF THE SUITE GOT SLOWER OR FASTER IN THE LATEST PUSH — the agent-readable half of the
@@ -835,22 +801,10 @@ class RepositoryGrowthSerializer
   # `SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT` rather than restated — it is its own
   # constant, neither the areas' ten nor the durations drill-down's.
   def serialized_directory_run_file_growth_window
-    growth = spec_directory_growth
-
-    window = {
-      path: requested_spec_directory,
-      order: "abs_change_desc,path_asc",
-      tie_break_served: true,
-      basis: "previous_run_on_branch",
-      state: run_pair_state(growth),
-      comparable: growth&.comparable? || false,
+    file_run_pair_window(
+      spec_directory_growth, order: "abs_change_desc,path_asc",
       limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT
-    }
-
-    # Echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block beside
-    # this is `null` — still says which layer's comparison was refused. Absent otherwise.
-    window[:layer] = growth.layer if growth&.layer?
-    window
+    )
   end
 
   # WHICH FILES OF THE ASKED-FOR AREA GREW OR SHRANK IN THE LATEST PUSH — the agent-readable half of
@@ -928,27 +882,10 @@ class RepositoryGrowthSerializer
   # comparison that was never taken. `layer` is echoed only when asked, in every state of a grouped
   # block, so a refused block still says which layer's comparison was refused.
   def serialized_directory_file_growth_window
-    growth = spec_directory_window_file_growth
-    baseline = growth&.baseline_run
-
-    window = {
-      path: requested_spec_directory,
-      order: "abs_change_desc,path_asc",
-      tie_break_served: true,
-      basis: "two_endpoints",
-      branch_scope: window_branch_scope,
-      branch: requested_branch,
-      grouped: !growth.nil?,
-      state: growth&.state,
-      comparable: growth&.comparable? || false,
-      anchor_commit_sha: growth&.anchor_run&.commit_sha,
-      baseline_commit_sha: baseline&.commit_sha,
-      runs_back: baseline && growth.runs_back,
+    file_endpoint_window(
+      spec_directory_window_file_growth, order: "abs_change_desc,path_asc",
       limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT
-    }
-
-    window[:layer] = growth.layer if growth&.layer?
-    window
+    )
   end
 
   # WHICH FILES OF THE ASKED-FOR AREA GREW OR SHRANK ACROSS THE BRANCH WINDOW — `null` in EVERY
@@ -1080,22 +1017,10 @@ class RepositoryGrowthSerializer
   # the two rank the SAME files by INDEPENDENT quantities, which is precisely why they are two
   # constants.
   def serialized_directory_runtime_file_growth_window
-    growth = spec_directory_runtime_growth
-
-    window = {
-      path: requested_spec_directory,
-      order: "abs_change_desc_nulls_last,path_asc",
-      tie_break_served: true,
-      basis: "previous_run_on_branch",
-      state: run_pair_state(growth),
-      comparable: growth&.comparable? || false,
+    file_run_pair_window(
+      spec_directory_runtime_growth, order: "abs_change_desc_nulls_last,path_asc",
       limit: SpecObservation::SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT
-    }
-
-    # Echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block beside
-    # this is `null` — still says which layer's comparison was refused. Absent otherwise.
-    window[:layer] = growth.layer if growth&.layer?
-    window
+    )
   end
 
   # WHICH FILES OF THE ASKED-FOR AREA GOT SLOWER OR FASTER IN THE LATEST PUSH — the cell that
@@ -1251,27 +1176,10 @@ class RepositoryGrowthSerializer
   # state of a grouped block, so a refused block still says which layer's comparison was refused.
   # `order` carries `nulls_last`: a file an end did not time sorts after every timed one.
   def serialized_directory_runtime_window_file_growth_window
-    growth = spec_directory_window_file_runtime_growth
-    baseline = growth&.baseline_run
-
-    window = {
-      path: requested_spec_directory,
-      order: "abs_change_desc_nulls_last,path_asc",
-      tie_break_served: true,
-      basis: "two_endpoints",
-      branch_scope: window_branch_scope,
-      branch: requested_branch,
-      grouped: !growth.nil?,
-      state: growth&.state,
-      comparable: growth&.comparable? || false,
-      anchor_commit_sha: growth&.anchor_run&.commit_sha,
-      baseline_commit_sha: baseline&.commit_sha,
-      runs_back: baseline && growth.runs_back,
+    file_endpoint_window(
+      spec_directory_window_file_runtime_growth, order: "abs_change_desc_nulls_last,path_asc",
       limit: SpecObservation::SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT
-    }
-
-    window[:layer] = growth.layer if growth&.layer?
-    window
+    )
   end
 
   # WHICH FILES OF THE ASKED-FOR AREA GOT SLOWER OR FASTER ACROSS THE BRANCH WINDOW — `null` in EVERY
@@ -1374,6 +1282,70 @@ class RepositoryGrowthSerializer
       anchor_commit_sha: latest_test_run&.commit_sha,
       baseline_commit_sha: previous_test_run&.commit_sha
     }
+  end
+
+  # The `basis: "previous_run_on_branch"` contract block of the two AREA run-pair windows
+  # (`directory_run_growth_window` / `directory_runtime_growth_window`); `order` is each caller's own.
+  # `layer` is echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block
+  # beside it is `null` — still says which layer's comparison was refused.
+  def area_run_pair_window(growth, order:)
+    window = {
+      order: order,
+      tie_break_served: true,
+      basis: "previous_run_on_branch",
+      branch_scope: "single_branch",
+      branch: latest_test_run&.branch,
+      state: run_pair_state(growth),
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: latest_test_run&.commit_sha,
+      baseline_commit_sha: previous_test_run&.commit_sha
+    }
+
+    window[:layer] = growth.layer if growth&.layer?
+    window
+  end
+
+  # The contract block of the two FILE run-pair drill-ins (`directory_run_file_growth_window` /
+  # `directory_runtime_file_growth_window`); `order` and `limit` are each caller's own.
+  def file_run_pair_window(growth, order:, limit:)
+    window = {
+      path: requested_spec_directory,
+      order: order,
+      tie_break_served: true,
+      basis: "previous_run_on_branch",
+      state: run_pair_state(growth),
+      comparable: growth&.comparable? || false,
+      limit: limit
+    }
+
+    window[:layer] = growth.layer if growth&.layer?
+    window
+  end
+
+  # The `basis: "two_endpoints"` contract block of the two `?branch=` FILE window drill-ins
+  # (`directory_file_growth_window` / `directory_runtime_window_file_growth_window`); `order` and
+  # `limit` are each caller's own.
+  def file_endpoint_window(growth, order:, limit:)
+    baseline = growth&.baseline_run
+
+    window = {
+      path: requested_spec_directory,
+      order: order,
+      tie_break_served: true,
+      basis: "two_endpoints",
+      branch_scope: window_branch_scope,
+      branch: requested_branch,
+      grouped: !growth.nil?,
+      state: growth&.state,
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: growth&.anchor_run&.commit_sha,
+      baseline_commit_sha: baseline&.commit_sha,
+      runs_back: baseline && growth.runs_back,
+      limit: limit
+    }
+
+    window[:layer] = growth.layer if growth&.layer?
+    window
   end
 
   delegate :latest_test_run, :previous_test_run, :requested_spec_directory, :requested_branch,
