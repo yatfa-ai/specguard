@@ -126,4 +126,66 @@ module AreasRuntimeOverWindowHelper
        "is on the chart above, which reads the run totals rather than these rows."]
     end
   end
+
+  # == The "Files that got slower or faster across the window" drill-in's sentences
+  #
+  # The file rung below the panel above ({SpecDirectoryWindowFileRuntimeGrowth}); same baseline and
+  # span sentences, so the two panels cannot describe one window differently.
+
+  # The "How to read this" paragraph of the file drill-in.
+  def spec_directory_window_file_runtime_growth_basis(growth)
+    sentences = [spec_directory_window_file_runtime_growth_scope_sentence(growth),
+                 spec_directory_window_growth_baseline_sentence(growth),
+                 spec_directory_window_growth_span_sentence(growth),
+                 "Only the two ends are compared, so what a file did between them is not shown: a file " \
+                 "that got slower and then faster again reads here as a file that did not move."]
+    sentences << "Where the movement runs out before the list does, files whose time did not move are " \
+                 "listed too, as ±0." if growth.any_unmoved?
+    sentences << "Files one of the two ends ran but reported no timing for are listed last, as " \
+                 "\"Not timed\" — nothing about them got faster." if growth.any_timing_gap?
+    sentences << "A file listed as new beside one listed as removed is what a RENAMED or relocated file " \
+                 "looks like from here — and so is a real addition beside a real deletion. This panel " \
+                 "sums each end's rows and pairs no example with any other example, so it cannot tell " \
+                 "the two apart and does not try; both files are named so a reader can."
+    sentences << "This area is the immediate parent of the files listed, so a nested area such as a " \
+                 "subdirectory of it is its own area rather than part of this list."
+    sentences << spec_directory_window_file_runtime_growth_denominator_sentence(growth)
+    sentences.join(" ")
+  end
+
+  # "The 10 spec files whose time moved most across this window, of the 41 either end recorded in
+  # this area — largest movement first, in both directions." Counted off the rows the table lists.
+  def spec_directory_window_file_runtime_growth_scope_sentence(growth)
+    if growth.truncated?
+      "#{growth.path} — the #{number_with_delimiter(growth.rows.size)} spec " \
+        "#{"file".pluralize(growth.rows.size)} whose time moved most across this window, of the " \
+        "#{number_with_delimiter(growth.file_count)} either end recorded in this area — largest " \
+        "movement first, in both directions."
+    else
+      "#{growth.path} — all #{number_with_delimiter(growth.file_count)} spec " \
+        "#{"file".pluralize(growth.file_count)} either end of this window recorded in this area — " \
+        "largest movement first, in both directions."
+    end
+  end
+
+  # What every figure was summed over, and what it is not. This area's own rows, not the suite's.
+  def spec_directory_window_file_runtime_growth_denominator_sentence(growth)
+    "Summed off the #{number_with_delimiter(growth.baseline_timed_count)} of " \
+      "#{number_with_delimiter(growth.baseline_recorded_count)} and " \
+      "#{number_with_delimiter(growth.anchor_timed_count)} of " \
+      "#{number_with_delimiter(growth.anchor_recorded_count)} #{growth.layer? ? "#{growth.layer}-layer " : ""}" \
+      "example rows the two ends recorded in this area that reported a timing — this area's own rows, " \
+      "never the run wall clock on the Summary at the top of this page, which is a maximum over the " \
+      "run's shards."
+  end
+
+  # The comparable-but-nothing-moved empty state.
+  def spec_directory_window_file_runtime_growth_unmoved_description(growth)
+    "Every one of the #{number_with_delimiter(growth.file_count)} " \
+      "#{"spec file".pluralize(growth.file_count)} the two ends of this window timed in " \
+      "#{growth.path} took the same time at both. " \
+      "#{spec_directory_window_file_runtime_growth_denominator_sentence(growth)} " \
+      "#{spec_directory_window_growth_baseline_sentence(growth)} Only those two ends were compared, " \
+      "so a file that got slower and faster again in between is counted here as one that did not move."
+  end
 end

@@ -26,6 +26,10 @@
 #   - `directory_file_growth`: the branch-WINDOW file drill-in of that area comparison (served with
 #     `?branch=` and `?spec_directory=`), narrowed the same way, so its file changes sum to the layer-narrowed
 #     `directory_growth` row for the area (SPGD-1794);
+#   - `directory_runtime_window_growth` (SPGD-1788) and its `directory_runtime_window_file_growth`
+#     file drill-in (served with `?branch=` and `?spec_directory=`, SPGD-1803): the branch-WINDOW area
+#     and file TIME comparisons, narrowed the same way across the window's two endpoint runs, so the
+#     file `change`s sum to the layer-narrowed `directory_runtime_window_growth` row for the area;
 #   - `slowest_tests`: the window-grain ranking (candidate step);
 #   - `unstable_tests`: the window-grain ranking (candidate step: the tests that FAILED in an example
 #     of that layer — SPGD-1755);

@@ -17,13 +17,17 @@
                 columns: ["Directory", { label: "Time at baseline", end: true }, { label: "Time now", end: true }, { label: "Change across window", end: true }, { label: "Timed", end: true }],
                 describedby: "spec-directory-window-runtime-growth-basis", sortable: true) do %>
             <% window_growth.rows.each do |area| %>
-              <tr>
-                <td class="font-mono text-xs [overflow-wrap:anywhere]"><%= area.path %></td>
+              <%= drawer_row(area.path, kind: "Area that changed pace", title: area.path,
+                    facts: [["Time at baseline", area.baseline_label], ["Time now", area.anchor_label],
+                            ["Change across window", area.change_label], ["Timed", area.coverage_label],
+                            ["Reading", area.change_reading]],
+                    actions: [["Which files got slower or faster across the window", drill_down_path(@repository, spec_directory: area.path, anchor: "changes"), :primary]]) do %>
+                <td><%= row_open(area.path, mono: true, current: area.path == @spec_directory_request) %></td>
                 <td class="num mute" data-sort="<%= area.previous_seconds %>"><%= area.baseline_label %></td>
                 <td class="num mute" data-sort="<%= area.latest_seconds %>"><%= area.anchor_label %></td>
                 <td class="num" data-sort="<%= area.change %>" aria-label="<%= area.change_reading %>"><%= delta_tag(area.change_label, tone: area.change ? delta_tone_for(area.change, bigger_is_worse: true) : :flat) %></td>
                 <td class="num mute text-xs"><%= area.coverage_label %></td>
-              </tr>
+              <% end %>
             <% end %>
           <% end %>
         <% elsif window_growth.comparable? %>
