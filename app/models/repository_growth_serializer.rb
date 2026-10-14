@@ -65,7 +65,7 @@ class RepositoryGrowthSerializer
       order: "abs_change_desc,path_asc",
       tie_break_served: true,
       basis: "two_endpoints",
-      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch_scope: window_branch_scope,
       branch: requested_branch,
       grouped: !spec_directory_window_growth.nil?
     }
@@ -347,7 +347,7 @@ class RepositoryGrowthSerializer
       basis: "previous_run_on_branch",
       branch_scope: "single_branch",
       branch: latest_test_run&.branch,
-      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
+      state: run_pair_state(growth),
       comparable: growth&.comparable? || false,
       anchor_commit_sha: latest_test_run&.commit_sha,
       baseline_commit_sha: previous_test_run&.commit_sha
@@ -371,20 +371,7 @@ class RepositoryGrowthSerializer
   # baseline the SHARED {WindowBaseline} walk landed on, so they equal `directory_growth`'s for the
   # same window. `comparable` is exactly `layer_growth != null`.
   def serialized_layer_growth_window
-    growth = layer_window_growth
-    baseline = growth&.baseline_run
-
-    {
-      basis: "two_endpoints",
-      branch_scope: requested_branch ? "single_branch" : "all_branches",
-      branch: requested_branch,
-      grouped: !growth.nil?,
-      state: growth&.state,
-      comparable: growth&.comparable? || false,
-      anchor_commit_sha: growth&.anchor_run&.commit_sha,
-      baseline_commit_sha: baseline&.commit_sha,
-      runs_back: baseline && growth.runs_back
-    }
+    layer_endpoint_window(layer_window_growth)
   end
 
   # The declared-layer mix movement over the window — `null` in EVERY non-comparable state, never a
@@ -393,17 +380,7 @@ class RepositoryGrowthSerializer
   # `SpecObservation::DECLARED_LAYER_KEYS` order, `{baseline_count, anchor_count, change}`; the
   # changes sum to `anchor_recorded_count - baseline_recorded_count`.
   def serialized_layer_growth
-    growth = layer_window_growth
-
-    return nil unless growth&.comparable?
-
-    {
-      layers: growth.rows.transform_values do |row|
-        { baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
-      end,
-      baseline_recorded_count: growth.baseline_recorded_count,
-      anchor_recorded_count: growth.anchor_recorded_count
-    }
+    layer_count_body(layer_window_growth)
   end
 
   # The contract block for `layer_runtime_window_growth` — the declared-layer TIME movement over the
@@ -419,20 +396,7 @@ class RepositoryGrowthSerializer
   # `layer_growth_window`'s for the same window. `comparable` is exactly
   # `layer_runtime_window_growth != null`.
   def serialized_layer_runtime_window_growth_window
-    growth = layer_window_runtime_growth
-    baseline = growth&.baseline_run
-
-    {
-      basis: "two_endpoints",
-      branch_scope: requested_branch ? "single_branch" : "all_branches",
-      branch: requested_branch,
-      grouped: !growth.nil?,
-      state: growth&.state,
-      comparable: growth&.comparable? || false,
-      anchor_commit_sha: growth&.anchor_run&.commit_sha,
-      baseline_commit_sha: baseline&.commit_sha,
-      runs_back: baseline && growth.runs_back
-    }
+    layer_endpoint_window(layer_window_runtime_growth)
   end
 
   # The declared-layer TIME movement over the window — `null` in EVERY non-comparable state, never
@@ -441,17 +405,7 @@ class RepositoryGrowthSerializer
   # each was summed over, the recorded example counts, and `change` (anchor − baseline, `null` unless
   # BOTH ends timed that layer). Operands and difference only — no view strings, no verdict.
   def serialized_layer_runtime_window_growth
-    growth = layer_window_runtime_growth
-
-    return nil unless growth&.comparable?
-
-    {
-      layers: growth.rows.transform_values do |row|
-        { baseline_seconds: row.baseline_seconds, anchor_seconds: row.anchor_seconds,
-          baseline_timed_count: row.baseline_timed_count, anchor_timed_count: row.anchor_timed_count,
-          baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
-      end
-    }
+    layer_seconds_body(layer_window_runtime_growth)
   end
 
   # The contract block for `layer_run_growth`, shaped like `directory_run_growth_window` and
@@ -462,16 +416,7 @@ class RepositoryGrowthSerializer
   # run that named no branch) — because the presenter is never handed a nil previous run.
   # `comparable` is exactly `layer_run_growth != null`.
   def serialized_layer_run_growth_window
-    growth = layer_run_growth
-
-    {
-      basis: "previous_run_on_branch",
-      branch: latest_test_run&.branch,
-      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
-      comparable: growth&.comparable? || false,
-      anchor_commit_sha: latest_test_run&.commit_sha,
-      baseline_commit_sha: previous_test_run&.commit_sha
-    }
+    layer_run_pair_window(layer_run_growth)
   end
 
   # The declared-layer mix movement — `null` in EVERY non-comparable state, never a block of zeros
@@ -481,17 +426,7 @@ class RepositoryGrowthSerializer
   # `anchor_recorded_count - baseline_recorded_count`. Operands and difference only — no view
   # strings; the path is never consulted.
   def serialized_layer_run_growth
-    growth = layer_run_growth
-
-    return nil unless growth&.comparable?
-
-    {
-      layers: growth.rows.transform_values do |row|
-        { baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
-      end,
-      baseline_recorded_count: growth.baseline_recorded_count,
-      anchor_recorded_count: growth.anchor_recorded_count
-    }
+    layer_count_body(layer_run_growth)
   end
 
   # The contract block for `layer_runtime_growth`, the exact shape of `layer_run_growth_window` so a
@@ -499,16 +434,7 @@ class RepositoryGrowthSerializer
   # two serializer-level ones, `no_latest_run` and `no_previous_run`. `comparable` is exactly
   # `layer_runtime_growth != null`.
   def serialized_layer_runtime_growth_window
-    growth = layer_runtime_growth
-
-    {
-      basis: "previous_run_on_branch",
-      branch: latest_test_run&.branch,
-      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
-      comparable: growth&.comparable? || false,
-      anchor_commit_sha: latest_test_run&.commit_sha,
-      baseline_commit_sha: previous_test_run&.commit_sha
-    }
+    layer_run_pair_window(layer_runtime_growth)
   end
 
   # The declared-layer TIME movement — `null` in EVERY non-comparable state, never zeros. Per layer,
@@ -516,17 +442,7 @@ class RepositoryGrowthSerializer
   # examples each was summed over, the recorded example counts, and `change` (anchor − baseline,
   # `null` unless BOTH sides timed that layer). Operands and difference only — no view strings.
   def serialized_layer_runtime_growth
-    growth = layer_runtime_growth
-
-    return nil unless growth&.comparable?
-
-    {
-      layers: growth.rows.transform_values do |row|
-        { baseline_seconds: row.baseline_seconds, anchor_seconds: row.anchor_seconds,
-          baseline_timed_count: row.baseline_timed_count, anchor_timed_count: row.anchor_timed_count,
-          baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
-      end
-    }
+    layer_seconds_body(layer_runtime_growth)
   end
 
   # WHICH AREAS OF THE SUITE GREW OR SHRANK IN THE LATEST PUSH — the agent-readable half of the
@@ -712,7 +628,7 @@ class RepositoryGrowthSerializer
       basis: "previous_run_on_branch",
       branch_scope: "single_branch",
       branch: latest_test_run&.branch,
-      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
+      state: run_pair_state(growth),
       comparable: growth&.comparable? || false,
       anchor_commit_sha: latest_test_run&.commit_sha,
       baseline_commit_sha: previous_test_run&.commit_sha
@@ -827,7 +743,7 @@ class RepositoryGrowthSerializer
       order: "abs_change_desc_nulls_last,path_asc",
       tie_break_served: true,
       basis: "two_endpoints",
-      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch_scope: window_branch_scope,
       branch: requested_branch,
       grouped: !growth.nil?,
       state: growth&.state,
@@ -926,7 +842,7 @@ class RepositoryGrowthSerializer
       order: "abs_change_desc,path_asc",
       tie_break_served: true,
       basis: "previous_run_on_branch",
-      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
+      state: run_pair_state(growth),
       comparable: growth&.comparable? || false,
       limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT
     }
@@ -1020,7 +936,7 @@ class RepositoryGrowthSerializer
       order: "abs_change_desc,path_asc",
       tie_break_served: true,
       basis: "two_endpoints",
-      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch_scope: window_branch_scope,
       branch: requested_branch,
       grouped: !growth.nil?,
       state: growth&.state,
@@ -1171,7 +1087,7 @@ class RepositoryGrowthSerializer
       order: "abs_change_desc_nulls_last,path_asc",
       tie_break_served: true,
       basis: "previous_run_on_branch",
-      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
+      state: run_pair_state(growth),
       comparable: growth&.comparable? || false,
       limit: SpecObservation::SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT
     }
@@ -1315,6 +1231,74 @@ class RepositoryGrowthSerializer
   private
 
   attr_reader :overview
+
+  # ---- shared builders for the declared-layer method pairs (extract-only; see the public methods) ----
+
+  # `branch_scope` of every `?branch=` window contract block.
+  def window_branch_scope
+    requested_branch ? "single_branch" : "all_branches"
+  end
+
+  # `state` of every previous-run-on-branch contract block: the presenter's own state, plus the two
+  # serializer-level ones the presenter is never handed (`no_latest_run`, `no_previous_run`).
+  def run_pair_state(growth)
+    growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run)
+  end
+
+  # Body of `layer_growth` / `layer_run_growth`: the declared-layer COUNT movement.
+  def layer_count_body(growth)
+    return nil unless growth&.comparable?
+
+    {
+      layers: growth.rows.transform_values do |row|
+        { baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
+      end,
+      baseline_recorded_count: growth.baseline_recorded_count,
+      anchor_recorded_count: growth.anchor_recorded_count
+    }
+  end
+
+  # Body of `layer_runtime_window_growth` / `layer_runtime_growth`: the declared-layer TIME movement.
+  def layer_seconds_body(growth)
+    return nil unless growth&.comparable?
+
+    {
+      layers: growth.rows.transform_values do |row|
+        { baseline_seconds: row.baseline_seconds, anchor_seconds: row.anchor_seconds,
+          baseline_timed_count: row.baseline_timed_count, anchor_timed_count: row.anchor_timed_count,
+          baseline_count: row.baseline_count, anchor_count: row.anchor_count, change: row.change }
+      end
+    }
+  end
+
+  # The `basis: "two_endpoints"` contract block of the two `?branch=` window layer objects.
+  def layer_endpoint_window(growth)
+    baseline = growth&.baseline_run
+
+    {
+      basis: "two_endpoints",
+      branch_scope: window_branch_scope,
+      branch: requested_branch,
+      grouped: !growth.nil?,
+      state: growth&.state,
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: growth&.anchor_run&.commit_sha,
+      baseline_commit_sha: baseline&.commit_sha,
+      runs_back: baseline && growth.runs_back
+    }
+  end
+
+  # The `basis: "previous_run_on_branch"` contract block of the two run-pair layer objects.
+  def layer_run_pair_window(growth)
+    {
+      basis: "previous_run_on_branch",
+      branch: latest_test_run&.branch,
+      state: run_pair_state(growth),
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: latest_test_run&.commit_sha,
+      baseline_commit_sha: previous_test_run&.commit_sha
+    }
+  end
 
   delegate :latest_test_run, :previous_test_run, :requested_spec_directory, :requested_branch,
            :requested_layer, :history_runs, to: :overview, private: true
