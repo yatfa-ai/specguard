@@ -129,8 +129,13 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
                            "anchor_commit_sha" => nil, "baseline_commit_sha" => nil, "runs_back" => nil)
     end
 
-    # @intent: { entity: "layer_runtime_window_growth", action: "bound its reads", behavior: "the pair adds no run-layer aggregate beyond the two endpoint reads layer_growth already issues", layer: "request" }
-    it "adds no observation read beyond the two endpoint reads layer_growth makes" do
+    # SPGD-1819 moved who pays for the two endpoint run aggregates. `history[].layer_counts` is now
+    # primed for the whole window by one grouped read, so `layer_growth` (which reads only counts)
+    # is free; the aggregates are paid by THIS pair, whose `layer_durations` the grouped read does
+    # not carry. Before, `layer_growth` paid them and this pair rode the run's memoized row. The
+    # endpoint total is unchanged by the move: it is exactly two endpoint reads, once.
+    # @intent: { entity: "layer_runtime_window_growth", action: "bound its reads", behavior: "the pair issues exactly the two endpoint run-layer aggregates for its layer_durations, and layer_growth adds none of its own", layer: "request" }
+    it "pays exactly the two endpoint run aggregates for its durations, and layer_growth adds none" do
       unfiltered = layer_reads
       named = layer_reads(query: { branch: "main" })
 
@@ -139,7 +144,10 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
       allow(LayerWindowRuntimeGrowth).to receive(:for).and_return(nil)
       without_pair = observation_reads { get_repository(query: { branch: "main" }) }.length
 
-      expect(with_pair).to eq(without_pair)
+      expect(with_pair - without_pair).to eq(2)
+      # And with the count window removed too, nothing else was reading the endpoints' mixes.
+      allow(LayerWindowGrowth).to receive(:for).and_return(nil)
+      expect(observation_reads { get_repository(query: { branch: "main" }) }.length).to eq(without_pair)
     end
 
     # @intent: { entity: "layer_runtime_window_growth", action: "sit beside layer_growth", behavior: "the pair is top-level and absent from latest_run", layer: "request" }

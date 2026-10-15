@@ -1121,7 +1121,18 @@ class RepositoryOverview
       # `0`, unchanged in meaning: there were no parts, so there were none to time.
       timed_shard_count: run.timed_shard_count,
       suite_size_measured: run.suite_size_measured?,
-      ingested_at: run.created_at.iso8601
+      ingested_at: run.created_at.iso8601,
+      # The run-wide DECLARED-LAYER MIX — exactly `TestRun#layer_counts`, i.e. what `latest_run.layer_counts`
+      # serves for the same run: five measured zeros in `DECLARED_LAYER_KEYS` order summing to the run's
+      # `intent_readings.recorded`, or `null` — never five zeros — for a run with no per-example rows.
+      # It is the per-run SERIES that `layer_run_growth` (latest vs previous) and `layer_growth` (two
+      # endpoints of the window) cannot give. Operands only: no verdict, no threshold, DECLARED only
+      # (never inferred from a path). Appended LAST so every earlier key keeps its position.
+      #
+      # Same differencing rule as `total_specs`: it is a SUM over the shards RECORDED, so do not
+      # difference it across rows whose `shard_count` differs. Primed for the whole window by ONE grouped
+      # `spec_observations` read in `history_runs`, so this costs nothing per row.
+      layer_counts: run.layer_counts
     }
   end
 
@@ -1149,6 +1160,10 @@ class RepositoryOverview
   # is precisely what a client was left to do before this. `Repository#recent_test_runs` carries
   # the rest of that argument, and the index it relies on.
   #
+  # ONE MORE statement primes each row's `layer_counts` (`preload_layer_counts`: a single grouped
+  # `spec_observations` read keyed by the ids already loaded), independent of the window size — it
+  # is not one aggregate per row. A run with no per-example rows is primed NIL.
+  #
   # ONE window read, memoized, and its ORIENTATION IS THE QUERY'S: `recent_test_runs` orders
   # `(created_at, id) DESC` — newest first — so the rows are wrapped `RunWindow.newest_first` and
   # that fact travels with the object. Every reader below asks the window for the end it needs
@@ -1157,8 +1172,10 @@ class RepositoryOverview
   # this array points.
   def history_runs
     @history_runs ||= RunWindow.newest_first(
-      preload_shard_counts(
-        repository.recent_test_runs(limit: history_limit, branch: requested_branch).to_a
+      preload_layer_counts(
+        preload_shard_counts(
+          repository.recent_test_runs(limit: history_limit, branch: requested_branch).to_a
+        )
       )
     )
   end

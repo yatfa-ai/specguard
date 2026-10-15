@@ -2323,7 +2323,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # anything, so the denominator a client reads here is the count of shards that is also zero.
         "timed_shard_count" => 0,
         "suite_size_measured" => true,
-        "ingested_at" => third.created_at.iso8601
+        "ingested_at" => third.created_at.iso8601,
+        # `create_test_run` stores no per-example rows, so this run has no declared-layer mix to
+        # state: NULL, never five zeros. The populated shape is pinned in repository_history_layer_counts_spec.rb.
+        "layer_counts" => nil
       )
     end
 
@@ -2386,8 +2389,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # block up. `ingested_at` is the only ordering key served, and it is the one that ties.
       expect(row.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
-        "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
+        "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at",
+        "layer_counts"
       )
+      # `layer_counts` is APPENDED: every earlier key keeps its position, so a client reading rows
+      # positionally or diffing key lists sees only an addition at the end.
+      expect(row.keys.last).to eq("layer_counts")
     end
 
     # AC. Every figure re-derived straight from the table, in the ordering the model documents —
@@ -2903,8 +2910,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "near")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
-        "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
+        "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at",
+        "layer_counts"
       )
+      expect(body["history"].first.keys.last).to eq("layer_counts")
     end
 
     # AC8. The rows are `recent_test_runs`' own ordering, tie-break included, and the branch
@@ -3849,6 +3858,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # `TestRun#assembled_like?` gate has to ask about a row `preload_shard_counts` never saw — is
       # the bound that catches it.
       expect(statements.grep(/FROM "test_run_shards"/).length).to eq(3)
+
+      # SPGD-1819: the per-run declared-layer mix rides ONE more statement, on `spec_observations` —
+      # which the `test_run_shards`/`test_runs` greps above do not see. Exactly one grouped
+      # `GROUP BY test_run_id` read for the whole 30-row window (30 ids in one `IN`), and none per
+      # row; the same single statement is pinned at 10 rows in the default-window example below.
+      layer_reads = statements.grep(/FROM "spec_observations"/).grep(/GROUP BY "spec_observations"\."test_run_id"/)
+      expect(layer_reads.length).to eq(1)
+      expect(layer_reads.first).to include("IN (")
     end
 
     # The branch predicate and the LIMIT are ONE query, which is the entire fix: a window bounded
@@ -4045,6 +4062,32 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(count_queries { get_repository }).to eq(baseline)
       expect(get_repository["history"].length).to eq(10)
     end
+
+    # SPGD-1819, pinned at the 10-row default window AND at 25 rows (cut to 10): the history's
+    # `layer_counts` is primed by exactly ONE grouped `spec_observations` statement whatever the
+    # window holds — not one aggregate per row. (The 30-row narrowed window is pinned beside the
+    # `test_run_shards` budget above.)
+    # @intent: { entity: "Repository history window", action: "prime layer counts once", behavior: "the history's per-run declared-layer mix costs exactly one grouped spec_observations read at 10 rows and at 25 runs", layer: "request" }
+    it "primes the history's layer_counts with exactly one grouped read, at 10 rows and at 25 runs" do
+      9.times { |index| create_test_run(repository: repository, commit_sha: "lcten%07d" % index) }
+      get_repository
+
+      grouped = lambda do
+        executed_sql { get_repository }.grep(/FROM "spec_observations"/)
+                                       .grep(/GROUP BY "spec_observations"\."test_run_id"/)
+      end
+      expect(get_repository["history"].length).to eq(9)
+      expect(grouped.call.length).to eq(1)
+
+      create_test_run(repository: repository, commit_sha: "lcten0000009")
+      expect(get_repository["history"].length).to eq(10)
+      expect(grouped.call.length).to eq(1)
+
+      15.times { |index| create_test_run(repository: repository, commit_sha: "lcbig%07d" % index) }
+      expect(get_repository["history"].length).to eq(10)
+      expect(grouped.call.length).to eq(1)
+      expect(grouped.call.first).to include("IN (")
+    end
   end
 
   # The by-file rollup's own axis, and it is stated as CONSTANT rather than as minimal — the
@@ -4143,18 +4186,18 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # one. A gate in front of the read would buy this run its query back at the price of a second
       # one on every run that does record.
       expect(area_grain_reads { get_repository }.length).to eq(1)
-      # And the UNRECORDED path reads the table SEVEN times IN TOTAL — no eighth. Asserted here and
+      # And the UNRECORDED path reads the table EIGHT times IN TOTAL — no ninth. Asserted here and
       # not only on the recorded fixture below, because a read matching no grain's pattern is
       # invisible to every per-grain guard by construction, and the unrecorded branch is exactly
       # where an `exists?` gate or a preload would be tempting to add.
       #
-      # Pinned as a bare `6` here, and that is deliberate rather than an oversight: this example
+      # Pinned as a bare literal here, and that is deliberate rather than an oversight: this example
       # classifies nothing — it holds `area_grain_reads` alone, so there are no grain lists in
       # scope to sum, and putting them in scope would re-narrow the one assertion that has to stay
       # UNclassified to catch the read matching no grain's pattern. The sum-of-grains form belongs
       # at the site that already does the classifying, where it is written ALONGSIDE the literal
-      # and not in place of it — see "reads spec_observations exactly seven times in total" below.
-      expect(observation_reads { get_repository }.length).to eq(7)
+      # and not in place of it — see "reads spec_observations exactly eight times in total" below.
+      expect(observation_reads { get_repository }.length).to eq(8)
       expect(get_repository.dig("latest_run", "spec_directories")).to be_nil
 
       small = create_test_run(repository: repository, commit_sha: "acost0000002", duration_seconds: 42.5)
@@ -4192,7 +4235,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # The N+1 this example exists to catch need not land on any grain's pattern — a per-run
       # preload of `spec_observations` matches none of them, so the per-grain count alone would
       # stay at 1 through sixteen extra reads. The total is what names it.
-      expect(observation_reads { get_repository }.length).to eq(7)
+      expect(observation_reads { get_repository }.length).to eq(8)
     end
 
     # "GAINS EXACTLY ONE" — the half neither per-grain block can state, and the reason it is stated
@@ -4200,7 +4243,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # added by anything else on this endpoint unnamed; the table-level total is what closes that,
     # and it is the criterion this ticket was written against.
     #
-    # SEVEN, as `1 + 1 + 2 + 2 + 0 + 1`: one aggregate per rollup grain, two for the per-example
+    # EIGHT, as `1 + 1 + 2 + 2 + 0 + 1 + 1` (the last term is the history window's one grouped
+    # declared-layer read, SPGD-1819; it was SEVEN, as `1 + 1 + 2 + 2 + 0 + 1`): one aggregate per rollup grain, two for the per-example
     # ranking — whose presenter issues a capped scan and a coverage aggregate — two for the
     # by-description ranking, whose presenter issues a grouped aggregate and the presence count it
     # cannot window over, NONE for the cross-run flakiness grain, which is not constructed on an
@@ -4224,14 +4268,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The by-description patterns were chosen against that same trap: two of the flakiness grain's
     # four also `GROUP BY name`, so this fixture's empty flakiness list is what would catch a
     # description pattern loose enough to adopt them.
-    # @intent: { entity: "Repository latest-run endpoint", action: "bound total observation reads", behavior: "spec_observations is read exactly seven times in total: one per rollup grain, two per ranking, no others", layer: "request" }
-    it "reads spec_observations exactly seven times in total — one per rollup grain, two per ranking, and no other" do
+    # @intent: { entity: "Repository latest-run endpoint", action: "bound total observation reads", behavior: "spec_observations is read exactly eight times in total: one per rollup grain, two per ranking, no others", layer: "request" }
+    it "reads spec_observations exactly eight times in total — one per rollup grain, two per ranking, and no other" do
       run = create_test_run(repository: repository, commit_sha: "acosttotal01", duration_seconds: 42.5)
       observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
       observe(run, path: "spec/requests/b_spec.rb", duration: 0.5, line_number: 1)
 
       area, file, example, description, flakiness, _growth, _dfiles, _fex, _dex, _dfg, _rtg, _dfrtg,
-        _utr, _unann, _debt, readings = observation_reads_by_grain { get_repository }
+        _utr, _unann, _debt, readings, _identity, history_layers = observation_reads_by_grain { get_repository }
 
       expect(area.length).to eq(1)
       expect(file.length).to eq(1)
@@ -4239,11 +4283,13 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(description.length).to eq(2)
       expect(flakiness).to be_empty
       expect(readings.length).to eq(1)
+      # The history window's declared-layer mix: ONE grouped read for the whole window.
+      expect(history_layers.length).to eq(1)
       # And the classified reads are ALL of them — the assertion the per-grain blocks cannot make,
       # because a read matching no grain's pattern is invisible to every one of them.
       expect(observation_reads { get_repository }.length)
         .to eq(classified_observation_reads { get_repository })
-      expect(observation_reads { get_repository }.length).to eq(7)
+      expect(observation_reads { get_repository }.length).to eq(8)
     end
   end
 
@@ -4332,7 +4378,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(repository.test_runs.count).to eq(16)
       expect(example_grain_reads { get_repository }.length).to eq(2)
-      expect(observation_reads { get_repository }.length).to eq(7)
+      expect(observation_reads { get_repository }.length).to eq(8)
     end
   end
 
@@ -4428,7 +4474,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(repository.test_runs.count).to eq(16)
       expect(description_grain_reads { get_repository }.length).to eq(2)
-      expect(observation_reads { get_repository }.length).to eq(7)
+      expect(observation_reads { get_repository }.length).to eq(8)
     end
   end
 end

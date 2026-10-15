@@ -128,6 +128,12 @@ RSpec.describe "GET /api/v1/repository — layer_growth", type: :request do
 
     # Query budget (criterion 5): the comparable case adds exactly the two endpoint reads to what the
     # run-over-run pair already issues, and nothing at all unfiltered.
+    #
+    # SINCE SPGD-1819 those two reads are `layer_runtime_window_growth`'s (its `layer_durations`),
+    # not `layer_growth`'s: the history window's `layer_counts` is primed by one grouped read, so
+    # `layer_growth` — which reads counts only — pays nothing of its own. `layer_reads` counts the
+    # run-layer aggregate statement, which is one statement whoever issues it, so this pin is
+    # unchanged; the attribution is pinned in repository_layer_runtime_window_growth_spec.rb.
     # @intent: { entity: "layer_growth", action: "bound its reads", behavior: "a comparable branch-scoped window adds exactly two run-layer aggregates over the unfiltered request", layer: "request" }
     it "adds exactly two run-layer reads, one per endpoint run" do
       unfiltered = layer_reads

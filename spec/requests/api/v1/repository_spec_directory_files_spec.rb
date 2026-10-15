@@ -355,10 +355,10 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       # this is served on every response, because a correction a client has to opt into leaves it
       # reading `total_specs - annotated_specs` as the count of what SpecGuard cannot see. It lands
       # in its own grain (`AS run_authored_count`) and touches none of the figures above.
-      expect(observation_reads { get_repository(query: { spec_directory: "spec/models" }) }.length).to eq(8)
+      expect(observation_reads { get_repository(query: { spec_directory: "spec/models" }) }.length).to eq(9)
       # Seven without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
       # restated here as the thing this slice did NOT change.
-      expect(observation_reads { get_repository }.length).to eq(7)
+      expect(observation_reads { get_repository }.length).to eq(8)
       expect(directory_files_grain_reads { get_repository }).to be_empty
     end
 

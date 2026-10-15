@@ -396,10 +396,10 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
       # this is served on every response, because a correction a client has to opt into leaves it
       # reading `total_specs - annotated_specs` as the count of what SpecGuard cannot see. It lands
       # in its own grain (`AS run_authored_count`) and touches none of the figures above.
-      expect(observation_reads { get_repository(query: { spec_file: TARGET_FILE }) }.length).to eq(8)
+      expect(observation_reads { get_repository(query: { spec_file: TARGET_FILE }) }.length).to eq(9)
       # Six without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
       # restated here as the thing this slice did NOT change.
-      expect(observation_reads { get_repository }.length).to eq(7)
+      expect(observation_reads { get_repository }.length).to eq(8)
       expect(file_examples_grain_reads { get_repository }).to be_empty
     end
 
@@ -423,7 +423,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
       # grain at all, is invisible to every assertion in the example.
       expect(observation_reads { get_repository(query: query) }.length)
         .to eq(classified_observation_reads { get_repository(query: query) })
-      expect(observation_reads { get_repository(query: query) }.length).to eq(9)
+      expect(observation_reads { get_repository(query: query) }.length).to eq(10)
     end
 
     # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's

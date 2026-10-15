@@ -806,6 +806,28 @@ module RepositoriesHelper
     key ? safe_join([bar, key_list]) : bar
   end
 
+  # The shared key of the "Declared layers by run" strip: all five declared layers in
+  # `SpecObservation::DECLARED_LAYER_KEYS` order, "undeclared" included, so one legend serves every
+  # bar (`layers_stack(..., key: false)` draws bars only). The swatch ranks are the bars' own.
+  def declared_layers_key
+    ranks = { unit: "1", integration: "2", request: "3", system: "4", undeclared: "x" }
+    tag.ul(class: "rc-key", aria: { label: "Declared layers" }) do
+      safe_join(SpecObservation::DECLARED_LAYER_KEYS.map { |layer| tag.li(layer.to_s, data: { r: ranks[layer] }) })
+    end
+  end
+
+  # The strip's accessible text: names every layer, and states the oldest and newest drawn run's mix
+  # as counts — operands only, no verdict. `runs` are the drawn runs, oldest first.
+  def declared_layers_summary(runs, branch)
+    describe = lambda do |run|
+      run.layer_counts.map { |layer, count| "#{layer} #{number_with_delimiter(count)}" }.join(", ")
+    end
+    "Declared layers across #{runs.size} #{'run'.pluralize(runs.size)} on #{branch}. " \
+      "The oldest declared #{describe.call(runs.first)}; the newest declared #{describe.call(runs.last)}. " \
+      "Each bar is one run, oldest first, and shows that run's own split across unit, integration, " \
+      "request, system and undeclared; a bar's length is its share of that run, not its size."
+  end
+
   # The runs the pass/fail strips are drawn across, oldest first — the same window every other
   # trajectory panel reads, so a strip's cell N is the run the suite-growth chart's point N is.
   def trajectory_runs_for_strips = @suite_trajectory.runs

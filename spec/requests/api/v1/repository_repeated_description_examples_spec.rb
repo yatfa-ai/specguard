@@ -461,7 +461,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
       expect(observation_reads { get_repository(query: { repeated_description: looped }) }.length)
         .to eq(classified_observation_reads { get_repository(query: { repeated_description: looped }) })
       expect(observation_reads { get_repository(query: { repeated_description: looped }) }.length)
-        .to eq(8)
+        .to eq(9)
       # Seven without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
       # restated here as the thing this slice did NOT change, and asserted against THIS grain rather
       # than against a bare total.
@@ -471,7 +471,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
       # this is served on every response, because a correction a client has to opt into leaves it
       # reading `total_specs - annotated_specs` as the count of what SpecGuard cannot see. It lands
       # in its own grain (`AS run_authored_count`) and touches none of the figures above.
-      expect(observation_reads { get_repository }.length).to eq(7)
+      expect(observation_reads { get_repository }.length).to eq(8)
       expect(repeated_description_examples_grain_reads { get_repository }).to be_empty
     end
 
@@ -501,7 +501,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
       # or matching no grain at all, is invisible to every assertion here.
       expect(observation_reads { get_repository(query: query) }.length)
         .to eq(classified_observation_reads { get_repository(query: query) })
-      expect(observation_reads { get_repository(query: query) }.length).to eq(10)
+      expect(observation_reads { get_repository(query: query) }.length).to eq(11)
     end
 
     # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's
