@@ -443,10 +443,27 @@ module ObservationGrainReads
   FLAKINESS_CANDIDATES = /ORDER BY COUNT\(\*\) ASC, spec_identity_id ASC/
   FLAKINESS_COMPOSITION = /ARRAY_AGG\(DISTINCT outcome\)/
 
+  # The HISTORY-window declared-layer mix — `SpecObservation.run_layer_counts_for`, the ONE grouped
+  # read that primes `TestRun#layer_counts` across the whole `history[]` window (`RepositoryOverview#
+  # history_runs`), so the per-run series costs one statement whatever the window holds.
+  #
+  # Matched POSITIVELY on `GROUP BY "spec_observations"."test_run_id"`, the quoted-column form Arel
+  # emits for `.group(:test_run_id)`, which no other read of this table produces: the run-grain
+  # aggregate (`.run_counts_in`) has NO grouping, the growth reads compare two runs with `FILTER
+  # (WHERE test_run_id = …)` aggregates and group by area or file, and the identity/flakiness reads
+  # group by `spec_identity_id`. Verified by generating each statement rather than by reading them.
+  #
+  # ⚠️ Its pattern is the grouping, not an alias, because the read projects the UNALIASED
+  # `directory_layer_count_expressions` (shared by the list surfaces, which prime the same way). It is
+  # served on EVERY request that has at least one history row, so a block bounding this endpoint's
+  # reads should expect exactly ONE of these — at 1 row, at 10 and at 30 — and none on a repository
+  # that has never ingested (`preload_layer_counts` returns early on an empty window).
+  HISTORY_LAYER_COUNTS_GROUPING = /GROUP BY "spec_observations"\."test_run_id"/
+
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
   # repeated_description_examples, directory_file_growth, runtime_growth,
   # directory_file_runtime_growth, unstable_test_runs, unannotated_examples,
-  # unannotated_directories, run_readings, identity]` — the seventeen grains,
+  # unannotated_directories, run_readings, identity, history_layer_counts]` — the eighteen grains,
   # each an array of the
   # statements matched. The single-run grains come first, in the order `serialized_latest_run` serves
   # them, and the two CROSS-RUN grains after them in the order `show` serves them — so a
@@ -500,7 +517,8 @@ module ObservationGrainReads
      reads.grep(UNANNOTATED_DEBT_ORDER),
      reads.grep(RUN_READINGS_PROJECTION),
      reads.grep(IDENTITY_PRESENCE) + reads.grep(IDENTITY_CANDIDATES) +
-       reads.grep(IDENTITY_GROUPING).grep(IDENTITY_COMPOSITION)]
+       reads.grep(IDENTITY_GROUPING).grep(IDENTITY_COMPOSITION),
+     reads.grep(HISTORY_LAYER_COUNTS_GROUPING)]
   end
 
   # `UnstableTests.for`'s five reads, in the order it issues them: the gating outcome-reporting
@@ -539,11 +557,12 @@ module ObservationGrainReads
   def run_readings_grain_reads(&) = observation_reads_by_grain(&)[15]
 
   # The run-grain aggregate reads that carry the declared-layer mix — the latest run's, plus the
-  # PREVIOUS run's when (and only when) `LayerRunGrowth` is comparable. NOT a seventeen-grain
+  # PREVIOUS run's when (and only when) `LayerRunGrowth` is comparable. NOT an eighteen-grain
   # partition member: it selects the same statements `run_readings_grain_reads` already holds, so
   # adding it to `observation_reads_by_grain` would double-classify them.
   def run_layer_mix_reads(&) = observation_reads(&).grep(/run_layer_unit_count/)
   def identity_grain_reads(&) = observation_reads_by_grain(&)[16]
+  def history_layer_counts_grain_reads(&) = observation_reads_by_grain(&)[17]
 end
 
 RSpec.configure do |config|

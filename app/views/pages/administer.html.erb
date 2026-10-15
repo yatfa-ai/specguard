@@ -474,6 +474,11 @@
               <code>system</code>, <code>undeclared</code>; <code>null</code> when the run
               recorded no per-example rows, never five zeros). A null and a zeroed block are different facts — never-reported
               is not the same thing as ran-and-found-nothing.
+              The same <code>layer_counts</code> is the last key of every row of
+              <code>history</code> on <code>GET /api/v1/repository</code>, so the mix is a per-run
+              series (<code>?branch=</code> for one branch's). Like <code>total_specs</code> it is a
+              sum over the shards recorded, so do not difference it across rows whose
+              <code>shard_count</code> differs.
             </td>
           </tr>
         <% end %>

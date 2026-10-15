@@ -941,7 +941,10 @@ RSpec.describe "Repository unstable tests", type: :request do
       # RECOUNTED AT 24 by SPGD-1788: "Areas that got slower or faster over the window" reads the
       # window's two ends through `directory_runtime_growth_between` — ONE grouped statement, constant
       # in window and suite size, asked whenever the walk and the run-grain gates say the pair compares.
-      expect(large_queries.size).to eq(24)
+      #
+      # RECOUNTED AT 25 by SPGD-1819: the "Declared layers by run" strip under Suite growth primes the
+      # plotted runs' `layer_counts` with ONE grouped read — constant in window and suite size.
+      expect(large_queries.size).to eq(25)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -957,7 +960,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(24)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(25)
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -1000,7 +1003,9 @@ RSpec.describe "Repository unstable tests", type: :request do
       # whenever the window's two ends are comparable — a gate of that panel, not of this one.
       # THE NINETEENTH is SPGD-1788's area-time window comparison, asked whenever the window's two
       # ends are comparable — a gate of that panel, not of this one.
-      expect(queries.size).to eq(19)
+      # THE TWENTIETH is SPGD-1819's one grouped declared-layer read for the Suite growth strip,
+      # asked whenever the trajectory is plottable — a gate of that panel, not of this one.
+      expect(queries.size).to eq(20)
       # What the gate withholds is THIS panel's outcome-narrowed grouping over the WINDOW — the
       # candidate narrowing (`test_run_id IN` + `outcome = 'failed'`, grouped on the identity) and
       # the composition that follows it. The window-narrowed identity groupings that ARE on the

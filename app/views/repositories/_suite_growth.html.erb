@@ -97,6 +97,38 @@
                 <%= time_ago_in_words(@suite_trajectory.last_run.created_at) %> ago.
               <% end %>
             <% end %>
+            <%# "Declared layers by run": the layer mix of every PLOTTED run, so a shift in the pyramid
+                  is placed in time (one step vs creep vs rise-and-fall-back), which the two-endpoint
+                  `layer_growth` reads as ±0. Drawn only for the plotted cohort — a run withheld from the
+                  line is withheld here — and primed in RepositoryDashboard. A run with no per-example
+                  rows has `layer_counts` nil, so it is skipped with a stated reason, never drawn as an
+                  empty bar. No box at all when no plotted run has a mix. %>
+            <% layer_runs = @suite_trajectory.plotted.select { |run| run.layer_counts&.values&.sum.to_i.positive? } %>
+            <% if layer_runs.any? %>
+              <% layer_skipped = @suite_trajectory.plotted.size - layer_runs.size %>
+              <section id="suite-trajectory-layers" aria-labelledby="suite-trajectory-layers-title" class="space-y-2">
+                <h3 id="suite-trajectory-layers-title" class="text-sm font-medium text-app-content-primary">Declared layers by run</h3>
+                <p class="sr-only"><%= declared_layers_summary(layer_runs, @suite_trajectory.branch) %></p>
+                <ol class="space-y-1" aria-label="Declared layers by run on <%= @suite_trajectory.branch %>, oldest first">
+                  <% layer_runs.each do |run| %>
+                    <li class="flex items-center gap-2" data-commit-sha="<%= run.commit_sha %>">
+                      <span class="font-mono text-xs w-16 shrink-0"><%= run.commit_sha.first(7) %></span>
+                      <span class="flex-1"><%= layers_stack(run.layer_counts, key: false) %></span>
+                    </li>
+                  <% end %>
+                </ol>
+                <%= declared_layers_key %>
+                <% if layer_skipped.positive? %>
+                  <p id="suite-trajectory-layers-skipped" class="text-xs text-app-content-secondary">
+                    <%= layer_skipped %> of the <%= @suite_trajectory.plotted.size %> plotted
+                    <%= "run".pluralize(@suite_trajectory.plotted.size) %>
+                    <%= layer_skipped == 1 ? "is" : "are" %> not drawn here for having no recorded
+                    per-example rows: with no detail stored there is no declared-layer mix to state,
+                    and an empty bar would read as a measurement of an empty suite.
+                  </p>
+                <% end %>
+              </section>
+            <% end %>
             <% if @suite_trajectory.runtime_plottable? %>
               <% runtime_formatter = trajectory_runtime_formatter %>
               <% runtime_points = @suite_trajectory.timed.map do |run|

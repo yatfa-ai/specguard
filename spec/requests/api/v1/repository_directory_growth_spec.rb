@@ -375,7 +375,8 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       # (`TestRun#layer_counts`, the same run-grain aggregate statement with another run id), and it
       # does so only because this fixture's two newest `main` runs are comparable. It lands in the
       # run-readings grain beside the latest run's own read; see `ObservationGrainReads`.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(10)
+      # ⭐ ONE MORE SINCE SPGD-1819 — the history window's declared-layer mix (`history[].layer_counts`) is primed by ONE grouped `GROUP BY test_run_id` read, in its own grain (`history_layer_counts`).
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(11)
       expect(get_repository(key: api_key)["directory_growth"]).to be_nil
       # And the read that IS issued unfiltered belongs to the pair that answers unconditionally.
       expect(get_repository(key: api_key)["directory_run_growth"]).not_to be_nil
@@ -794,8 +795,9 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       # `directory_runtime_growth_between`, a statement identical to the run-over-run runtime pair's, so it
       # lands in the same runtime-growth grain (see `repository_directory_runtime_window_growth_spec.rb`
       # for the pin of that one read).
+      # TWENTY since SPGD-1819: `history[].layer_counts` is primed by one grouped read (its own grain).
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(19)
+        .to eq(20)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

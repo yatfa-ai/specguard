@@ -732,7 +732,8 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       # (`TestRun#layer_counts`, the same run-grain aggregate statement with another run id), and it
       # does so only because this fixture's two newest `main` runs are comparable. It lands in the
       # run-readings grain beside the latest run's own read; see `ObservationGrainReads`.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(10)
+      # ⭐ ONE MORE SINCE SPGD-1819 — the history window's declared-layer mix (`history[].layer_counts`) is primed by ONE grouped `GROUP BY test_run_id` read, in its own grain (`history_layer_counts`).
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(11)
       expect(get_repository(key: api_key)["unstable_tests"]).to be_nil
     end
 
@@ -819,9 +820,10 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       # reads the resolving fixtures now pay: eighteen — and NINETEEN since SPGD-1681, whose
       # `layer_run_growth` reads the previous run's layer mix when the pair is comparable —
       # and TWENTY-ONE since SPGD-1744, whose `layer_growth` reads the layer mix of the window's two
-      # endpoint runs — and TWENTY-TWO since SPGD-1788's `directory_runtime_window_growth` (above).
+      # endpoint runs — and TWENTY-TWO since SPGD-1788's `directory_runtime_window_growth` (above)
+      # — and TWENTY-THREE since SPGD-1819's one grouped `history[].layer_counts` read (its own grain).
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(22)
+        .to eq(23)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

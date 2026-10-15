@@ -573,7 +573,8 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_file_growth", type:
       # fact the flakiness zero four places to its left rests on.
       # The run-readings grain (index 15) reads TWICE since SPGD-1681: the latest run's mix and, this
       # pair being comparable, the previous run's (`layer_run_growth`) — see `ObservationGrainReads`.
-      expect(grains.map(&:length)).to eq([1, 1, 2, 2, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 2, 0])
+      # The LAST entry (index 17) is the history window's ONE grouped declared-layer read (SPGD-1819).
+      expect(grains.map(&:length)).to eq([1, 1, 2, 2, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 2, 0, 1])
       expect(observation_reads { get_repository(key: api_key, query: query) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: query) })
       # And the three neighbouring growth grains are each a different statement from this one.

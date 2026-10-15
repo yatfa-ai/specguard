@@ -1121,11 +1121,11 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       # a read matching no grain's pattern is invisible to every one of them.
       expect(observation_reads { get_repository(query: ask) }.length)
         .to eq(classified_observation_reads { get_repository(query: ask) })
-      expect(observation_reads { get_repository(query: ask) }.length).to eq(9)
+      expect(observation_reads { get_repository(query: ask) }.length).to eq(10)
       # Seven without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
       # restated here as the thing this slice did NOT change. It went from six to seven when
       # `intent_readings` landed, which is the ONE ungated read this file's slice added.
-      expect(observation_reads { get_repository }.length).to eq(7)
+      expect(observation_reads { get_repository }.length).to eq(8)
       expect(unannotated_examples_grain_reads { get_repository }).to be_empty
       expect(unannotated_directories_grain_reads { get_repository }).to be_empty
     end
@@ -1143,7 +1143,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
         .to eq([1, 1, 1, 1])
       expect(observation_reads { get_repository(query: query) }.length)
         .to eq(classified_observation_reads { get_repository(query: query) })
-      expect(observation_reads { get_repository(query: query) }.length).to eq(10)
+      expect(observation_reads { get_repository(query: query) }.length).to eq(11)
     end
 
     # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's
