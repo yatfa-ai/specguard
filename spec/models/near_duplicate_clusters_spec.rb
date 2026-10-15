@@ -483,11 +483,19 @@ RSpec.describe NearDuplicateClusters do
       observe(costly_shipping, duration: 90.0)
       observe(costly_partner, duration: 90.0)
 
+      # A plain duplicate: both members declare the SAME layer, so the cluster is same_layer.
+      refund = identity("Billing issues a refund for a cancelled order", source: "intent", line: 41,
+                                                                          path: "spec/services/billing_spec.rb")
+      refund_partner = identity("Billing issues a refund for a cancelled order outright",
+                                source: "intent", line: 49, path: "spec/services/billing_spec.rb")
+      observe(refund, layer: "unit", duration: 1.0)
+      observe(refund_partner, layer: "unit", duration: 1.0)
+
       result = described_class.for(repository, limit: 1)
 
       expect(result.clusters.sole.layer_redundancy).to be_nil # the page holds only the undeclared pair
-      expect(result.cluster_count).to eq(2)
-      expect(result.layer_redundancy_counts).to eq(cross_layer: 1, same_layer: 0, undeclared: 1)
+      expect(result.cluster_count).to eq(3)
+      expect(result.layer_redundancy_counts).to eq(cross_layer: 1, same_layer: 1, undeclared: 1)
       expect(result.layer_redundancy_counts.values.sum).to eq(result.cluster_count)
     end
 
