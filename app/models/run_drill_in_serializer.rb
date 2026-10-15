@@ -288,49 +288,7 @@ class RunDrillInSerializer
       # `recorded?` stays a RUN-level gate: a layer with no examples serves `rows: []` and
       # `recorded_count: 0`, never `null` — `null` still means "this run recorded nothing".
       **(slowest.layer? ? { layer: slowest.layer } : {}),
-      rows: slowest.rows.map do |observation|
-        {
-          name: observation.name,
-          file_path: observation.file_path,
-          line_number: observation.line_number,
-          spec_file_path: observation.spec_file_path,
-          duration_seconds: observation.duration_seconds,
-          outcome: observation.outcome,
-          # THE LAYER THE TEST'S OWN ANNOTATION DECLARED — one of the four `open-test-intent` enum
-          # tokens (`unit` / `integration` / `request` / `system`), or `null`.
-          #
-          # THIS IS THE COLUMN'S FIRST AND ONLY READER, AND IT SHIPPED WITH THE COLUMN ON PURPOSE.
-          # `db/migrate/20260811120000_create_spec_identities.rb` refused the field with a condition
-          # rather than a flat no — *"a column nothing reads is a column that will be read wrongly
-          # later"* — so `intent_layer` was not allowed to exist without a caller. Serving it here
-          # is that condition being met, not a convenience bolted onto a storage change.
-          #
-          # SERVED RAW, NEVER WORDED. The stored string is already a bounded token that
-          # `Ingest::Payload#validate_intent` checked against the schema's enum before the run was
-          # accepted, so a client can branch on it, group by it, and compare it across runs. Passing
-          # it through a humanising helper the way `outcome` has `SpecObservation#outcome_label`
-          # would turn a machine-readable axis into prose an agent has to parse back — and this
-          # endpoint exists for the reader that cannot look at a panel.
-          #
-          # WHY THIS BLOCK AND NOT `unannotated_examples`. That block's population is BY DEFINITION
-          # the rows carrying no layer, so serving the key there would be a column of guaranteed
-          # nulls. This ranking spans annotated and unannotated rows alike — it ranks on duration and
-          # filters on nothing else — so the key is informative on some rows and honestly null on
-          # others, which is the only shape in which "which layers is this suite's slowest work in?"
-          # is answerable at all.
-          #
-          # `null` IS A REAL ANSWER AND IS KEPT DISTINGUISHABLE FROM A VALUE — the key is always
-          # present, never omitted for a row that has no layer. It carries TWO readings this block
-          # cannot separate and must not pretend to: the example is unannotated (it declared no
-          # layer, and the envelope requires `intent` to be ABSENT when `status` is `"unannotated"`),
-          # or it was ingested before this column existed and cannot be given one retroactively. In
-          # neither case is a default admissible: substituting a directory guess would serve an
-          # inference in the field reserved for a declaration, and substituting `""` would make "not
-          # declared" indistinguishable from a layer named by the empty string.
-          intent_layer: observation.intent_layer,
-          declared_intent: serialized_declared_intent(observation)
-        }
-      end,
+      rows: slowest.rows.map { |observation| serialized_example_row(observation) },
       recorded_count: slowest.recorded_count,
       timed_count: slowest.timed_count,
       reported_outcome_count: slowest.reported_outcome_count,
@@ -631,33 +589,14 @@ class RunDrillInSerializer
       # `history_window.branch`'s rule: a malformed shape is no ask at all and reaches no block, so
       # what is served here is always the path the rows were actually gathered under.
       path: examples.path,
-      # THE SAME EIGHT FIELDS `serialized_slowest_examples` SERVES, AND THE REPETITION IS CHOSEN. The
-      # two per-example blocks on this endpoint must agree field for field, and a shared
-      # `serialized_example_row` would make that structural rather than asserted — the stronger
-      # guarantee, and it is declined here for this file's standing reason: each block states its
-      # own contract beside its own rows, and a field list extracted to a helper sits where neither
-      # block's comment can explain why it holds what it holds. What enforces the agreement instead
-      # is a `contain_exactly` over these names in each block's request spec, so a field added to
-      # one and not the other goes red rather than shipping a client two per-example shapes.
-      #
-      # `intent_layer` is here BECAUSE OF THAT RULE, not because this block asked for it. It was
-      # added to `serialized_slowest_examples` (SPGD-851) and the cross-block guard in
-      # `repository_repeated_description_examples_spec.rb` went red — which is the guard working:
-      # one shape, served by every block that describes these rows. It is the DECLARED layer, null
-      # for an unannotated row and for one ingested before the column existed; see
-      # `serialized_slowest_examples` for why it is served raw and never worded.
-      rows: examples.rows.map do |observation|
-        {
-          name: observation.name,
-          file_path: observation.file_path,
-          line_number: observation.line_number,
-          spec_file_path: observation.spec_file_path,
-          duration_seconds: observation.duration_seconds,
-          outcome: observation.outcome,
-          intent_layer: observation.intent_layer,
-          declared_intent: serialized_declared_intent(observation)
-        }
-      end,
+      # THE SAME EIGHT FIELDS `serialized_slowest_examples` SERVES — and since SPGD-1823 that is
+      # STRUCTURAL: all three per-example blocks build each row through `serialized_example_row`, so a
+      # field added to one reaches every block and a client can never be served two per-example
+      # shapes. (Before the extraction the three copies were kept in step by a `contain_exactly` over
+      # the names in each block's request spec; those guards stay, now asserting the one builder.)
+      # Each block still states its own contract beside its own rows — the row's field-by-field
+      # rationale, `intent_layer` included, lives on `serialized_example_row`.
+      rows: examples.rows.map { |observation| serialized_example_row(observation) },
       recorded_count: examples.recorded_count,
       timed_count: examples.timed_count,
       limit: SpecObservation::FILE_EXAMPLES_LIMIT
@@ -759,28 +698,12 @@ class RunDrillInSerializer
       # block, so what is served here is always the description the rows were actually gathered
       # under.
       name: examples.name,
-      # THE SAME EIGHT FIELDS the two per-example blocks above serve, and the repetition is chosen for
-      # the reason `serialized_spec_file_examples` states in full: each block states its own contract
-      # beside its own rows, and what enforces the agreement is a `contain_exactly` over these names
-      # in each block's request spec, so a field added to one and not the others goes red rather than
-      # shipping a client three per-example shapes.
-      #
-      # `intent_layer` is here BECAUSE OF THAT RULE (SPGD-851): it was added to the run-wide ranking
-      # and the cross-block guard in this block's own request spec — the one assertion that reads all
-      # three shapes off a single response — went red until the field reached all three. The DECLARED
-      # layer, null for an unannotated row and for one ingested before the column existed.
-      rows: examples.rows.map do |observation|
-        {
-          name: observation.name,
-          file_path: observation.file_path,
-          line_number: observation.line_number,
-          spec_file_path: observation.spec_file_path,
-          duration_seconds: observation.duration_seconds,
-          outcome: observation.outcome,
-          intent_layer: observation.intent_layer,
-          declared_intent: serialized_declared_intent(observation)
-        }
-      end,
+      # THE SAME EIGHT FIELDS the two per-example blocks above serve — all three build each row
+      # through `serialized_example_row` (SPGD-1823), so the agreement is structural rather than
+      # asserted; the `contain_exactly` over these names in each block's request spec remains as the
+      # guard on that one builder. `intent_layer` (SPGD-851) is the DECLARED layer, null for an
+      # unannotated row and for one ingested before the column existed.
+      rows: examples.rows.map { |observation| serialized_example_row(observation) },
       recorded_count: examples.recorded_count,
       timed_count: examples.timed_count,
       limit: SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT
@@ -1032,6 +955,54 @@ class RunDrillInSerializer
     }
   end
 
+  # THE EIGHT-KEY PER-EXAMPLE ROW shared by `serialized_slowest_examples`,
+  # `serialized_spec_file_examples` and `serialized_repeated_description_examples` (SPGD-1823) — one
+  # builder, so the three blocks cannot drift. Key order is part of the served JSON: name, file_path,
+  # line_number, spec_file_path, duration_seconds, outcome, intent_layer, declared_intent.
+  def serialized_example_row(observation)
+    {
+      name: observation.name,
+      file_path: observation.file_path,
+      line_number: observation.line_number,
+      spec_file_path: observation.spec_file_path,
+      duration_seconds: observation.duration_seconds,
+      outcome: observation.outcome,
+      # THE LAYER THE TEST'S OWN ANNOTATION DECLARED — one of the four `open-test-intent` enum
+      # tokens (`unit` / `integration` / `request` / `system`), or `null`.
+      #
+      # THIS IS THE COLUMN'S FIRST AND ONLY READER, AND IT SHIPPED WITH THE COLUMN ON PURPOSE.
+      # `db/migrate/20260811120000_create_spec_identities.rb` refused the field with a condition
+      # rather than a flat no — *"a column nothing reads is a column that will be read wrongly
+      # later"* — so `intent_layer` was not allowed to exist without a caller. Serving it here
+      # is that condition being met, not a convenience bolted onto a storage change.
+      #
+      # SERVED RAW, NEVER WORDED. The stored string is already a bounded token that
+      # `Ingest::Payload#validate_intent` checked against the schema's enum before the run was
+      # accepted, so a client can branch on it, group by it, and compare it across runs. Passing
+      # it through a humanising helper the way `outcome` has `SpecObservation#outcome_label`
+      # would turn a machine-readable axis into prose an agent has to parse back — and this
+      # endpoint exists for the reader that cannot look at a panel.
+      #
+      # WHY THIS BLOCK AND NOT `unannotated_examples`. That block's population is BY DEFINITION
+      # the rows carrying no layer, so serving the key there would be a column of guaranteed
+      # nulls. This ranking spans annotated and unannotated rows alike — it ranks on duration and
+      # filters on nothing else — so the key is informative on some rows and honestly null on
+      # others, which is the only shape in which "which layers is this suite's slowest work in?"
+      # is answerable at all.
+      #
+      # `null` IS A REAL ANSWER AND IS KEPT DISTINGUISHABLE FROM A VALUE — the key is always
+      # present, never omitted for a row that has no layer. It carries TWO readings this block
+      # cannot separate and must not pretend to: the example is unannotated (it declared no
+      # layer, and the envelope requires `intent` to be ABSENT when `status` is `"unannotated"`),
+      # or it was ingested before this column existed and cannot be given one retroactively. In
+      # neither case is a default admissible: substituting a directory guess would serve an
+      # inference in the field reserved for a declaration, and substituting `""` would make "not
+      # declared" indistinguishable from a layer named by the empty string.
+      intent_layer: observation.intent_layer,
+      declared_intent: serialized_declared_intent(observation)
+    }
+  end
+
   # One row's DECLARED `@intent` as three fields, or `null` when the author declared none of them
   # (SPGD-1665) — the declared twin of `serialized_derived_intent`, served on the three per-example
   # blocks that span annotated and unannotated rows (`slowest_examples`, `spec_file_examples`,
@@ -1151,7 +1122,7 @@ class RunDrillInSerializer
     }
   end
 
-  private :serialized_declared_intent, :serialized_derived_intent
+  private :serialized_example_row, :serialized_declared_intent, :serialized_derived_intent
 
   private
 
