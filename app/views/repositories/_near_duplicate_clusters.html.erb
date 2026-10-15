@@ -108,7 +108,7 @@
           The <%= number_with_delimiter(census["clusters"].size) %> <%= ranked_multi_file_first ? "top-ranked" : "costliest" %> of
           <%= number_with_delimiter(census["cluster_count"]) %>
           <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>
-          — a page of the census, not all of it.
+          — a page of the census, not all of it.<%= (layer_clause = near_duplicate_layer_redundancy_clause(census)) ? " #{layer_clause}" : "" %>
         <% else %>
           All <%= number_with_delimiter(census["cluster_count"]) %>
           <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>.

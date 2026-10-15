@@ -552,6 +552,24 @@ class NearDuplicateClusters
     LAYER_SOURCE if @all_clusters.any? { |cluster| cluster.declared_layers.any? }
   end
 
+  # How many of the census's groups fall in each declared-layer redundancy state —
+  # `{cross_layer:, same_layer:, undeclared:}`, three integers that sum to `#cluster_count`.
+  # Counted over `@all_clusters`, the same whole-census population `#layer_source` and
+  # `#cluster_count` are counted over, NEVER over the truncated page: the served page holds only the
+  # top-ranked clusters, so a tally taken over it would answer "how many of the page" and be read
+  # as "how many of the repository". `undeclared` is the clusters whose `layer_redundancy` is nil
+  # (no member declared a layer) — neither state, and not folded into `same_layer`. A layer-free
+  # suite therefore reads `{cross_layer: 0, same_layer: 0, undeclared: cluster_count}`, the stated
+  # absence consistent with a nil `layer_source`; an empty census reads all zeros.
+  def layer_redundancy_counts
+    tally = @all_clusters.map(&:layer_redundancy).tally
+    {
+      CROSS_LAYER_REDUNDANCY.to_sym => tally.fetch(CROSS_LAYER_REDUNDANCY, 0),
+      SAME_LAYER_REDUNDANCY.to_sym => tally.fetch(SAME_LAYER_REDUNDANCY, 0),
+      undeclared: tally.fetch(nil, 0)
+    }
+  end
+
   # The weighed run recorded per-example rows AT ALL — the question that decides whether the surface
   # has anything to say, and the one an empty `clusters` cannot answer. False too for a repository
   # with no run to weigh against, which is the same silence arriving one step earlier. The
