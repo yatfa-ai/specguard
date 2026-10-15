@@ -154,7 +154,7 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       # the column choice honest.
       expect(served.keys)
         .to eq(["similarity_floor", "similarity_basis", "layer_source", "ranking_basis",
-                "cluster_count", "truncated",
+                "cluster_count", "layer_redundancy_counts", "truncated",
                 "saturated_identity_count", "unresolved_count", "recorded_count",
                 "identity_count", "clustered_identity_count", "clustered_timed_count",
                 "clustered_example_count", "clusters", "weighed_run_id", "computed_at"])
@@ -478,6 +478,9 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
 
       expect(summary.keys.first(3)).to eq(%w[similarity_floor similarity_basis layer_source])
       expect(summary.keys).to eq(full.keys)
+      # The whole-census tally rides the summary projection verbatim, in stored position.
+      expect(summary.keys.index("layer_redundancy_counts")).to eq(summary.keys.index("cluster_count") + 1)
+      expect(summary["layer_redundancy_counts"]).to eq(full["layer_redundancy_counts"])
       expect(summary.to_json).not_to include('"members"', '"layer_groups"')
 
       row = summary["clusters"].sole

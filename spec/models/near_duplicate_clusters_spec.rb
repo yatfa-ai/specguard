@@ -466,6 +466,46 @@ RSpec.describe NearDuplicateClusters do
       expect(result.layer_source).to eq(described_class::LAYER_SOURCE)
     end
 
+    # The tally is the CENSUS's, not the page's: the cross-layer cluster sits past the cap (the
+    # page holds only the costlier, undeclared pair), and it must still be counted — counting over
+    # `clusters` instead of the whole census reads `cross_layer: 0` and fails this.
+    # @intent: { entity: "NearDuplicateClusters", action: "tally layer redundancy", behavior: "layer_redundancy_counts counts a cross-layer cluster that sits past the page cap and the three counts sum to cluster_count", layer: "unit" }
+    it "tallies layer redundancy over the whole census, not the served page" do
+      cheap_unit = identity(EXPIRED, source: "intent", line: 3)
+      cheap_request = identity(OUTRIGHT, source: "intent", line: 9)
+      observe(cheap_unit, layer: "unit", duration: 1.0)
+      observe(cheap_request, layer: "request", duration: 1.0)
+
+      costly_shipping = identity(UNRELATED, source: "intent", line: 21,
+                                 path: "spec/services/shipping_spec.rb")
+      costly_partner = identity("Shipping calculates a delivery estimate outright",
+                                source: "intent", line: 29, path: "spec/services/shipping_spec.rb")
+      observe(costly_shipping, duration: 90.0)
+      observe(costly_partner, duration: 90.0)
+
+      result = described_class.for(repository, limit: 1)
+
+      expect(result.clusters.sole.layer_redundancy).to be_nil # the page holds only the undeclared pair
+      expect(result.cluster_count).to eq(2)
+      expect(result.layer_redundancy_counts).to eq(cross_layer: 1, same_layer: 0, undeclared: 1)
+      expect(result.layer_redundancy_counts.values.sum).to eq(result.cluster_count)
+    end
+
+    # @intent: { entity: "NearDuplicateClusters", action: "tally layer redundancy", behavior: "a layer-free suite tallies every cluster as undeclared and an empty census tallies all zeros", layer: "unit" }
+    it "states a layer-free suite as all undeclared and an empty census as all zeros" do
+      expect(described_class.for(repository).layer_redundancy_counts)
+        .to eq(cross_layer: 0, same_layer: 0, undeclared: 0)
+
+      identity(EXPIRED, line: 3)
+      identity(OUTRIGHT, line: 9)
+
+      result = described_class.for(repository)
+
+      expect(result.layer_source).to be_nil
+      expect(result.layer_redundancy_counts)
+        .to eq(cross_layer: 0, same_layer: 0, undeclared: result.cluster_count)
+    end
+
     # The layer read is one indexed DISTINCT pass, and a repository with no clusters asks it no
     # question: empty in, empty out.
     # @intent: { entity: "NearDuplicateClusters", action: "cut by declared layer", behavior: "a repository with no clusters yields no layer data and an absent layer source without querying for members it does not have", layer: "unit" }

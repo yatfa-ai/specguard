@@ -650,6 +650,29 @@ module RepositoriesHelper
       "after a run lands rather than during it."
   end
 
+  # The census-wide declared-layer tally, stated where the caption would otherwise leave the
+  # truncated page to be read as the whole: the page holds the top-ranked groups only, and this
+  # is the one figure that answers "how many of ALL the groups are tested on more than one layer".
+  # Read from the stored `layer_redundancy_counts` (counted over every cluster, never the page).
+  # nil when the key is absent (a census stored before the tally existed — the counts cannot be
+  # derived from the stored page, so the caption renders exactly as it did), or when it is not the
+  # three-Integer shape.
+  def near_duplicate_layer_redundancy_clause(census)
+    return nil unless census.is_a?(Hash)
+
+    counts = census["layer_redundancy_counts"]
+    return nil unless counts.is_a?(Hash)
+
+    cross, same, undeclared = counts.values_at("cross_layer", "same_layer", "undeclared")
+    return nil unless [cross, same, undeclared].all?(Integer)
+
+    total = cross + same + undeclared
+    "#{number_with_delimiter(cross)} of the #{number_with_delimiter(total)} #{"group".pluralize(total)} " \
+      "#{cross == 1 ? "spans" : "span"} more than one declared layer, " \
+      "#{number_with_delimiter(same)} #{same == 1 ? "is" : "are"} confined to one layer, " \
+      "#{number_with_delimiter(undeclared)} declared none."
+  end
+
   # --- the console (`repositories/show`) -----------------------------------------------------
 
   # Every ask that opens a drill-in, as the set a "close" link has to clear. The global asks

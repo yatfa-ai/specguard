@@ -194,6 +194,7 @@ class NearDuplicateCensus < ApplicationRecord
         layer_source: clusters.layer_source,
         ranking_basis: clusters.ranking_basis,
         cluster_count: clusters.cluster_count,
+        layer_redundancy_counts: clusters.layer_redundancy_counts,
         truncated: clusters.truncated?,
         saturated_identity_count: clusters.saturated_identity_count,
         unresolved_count: clusters.unresolved_count,

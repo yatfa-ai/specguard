@@ -725,6 +725,35 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     expect(sentence).not_to include("costliest first")
   end
 
+  # @intent: {"entity": "NearDuplicateCensus", "action": "disclose the layer tally", "behavior": "the truncated caption names the census-wide cross-layer, same-layer and undeclared counts only when truncated and the key is stored; a payload without the key and an untruncated census render no clause", "layer": "request"}
+  it "appends the census-wide layer tally to the truncated caption only when stored" do
+    ingest(repository, pair_specs)
+    census = NearDuplicateCensus.find_by!(repository_id: repository.id)
+    expect(census.payload.keys.index("layer_redundancy_counts"))
+      .to eq(census.payload.keys.index("cluster_count") + 1)
+    tally = { "cross_layer" => 4, "same_layer" => 2, "undeclared" => 1 }
+
+    # untruncated: no clause even with the key present
+    census.update!(payload: census.payload.merge("layer_redundancy_counts" => tally))
+    get repository_path(repository)
+    expect(panel.find("#near-duplicate-clusters-page").text(normalize_ws: true))
+      .not_to include("declared layer")
+
+    # truncated + key: the clause names all three counts
+    census.update!(payload: census.payload.merge("truncated" => true, "cluster_count" => 7))
+    get repository_path(repository)
+    sentence = panel.find("#near-duplicate-clusters-page").text(normalize_ws: true)
+    expect(sentence).to include("a page of the census, not all of it. 4 of the 7 groups span more than one declared layer, " \
+                                "2 are confined to one layer, 1 declared none.")
+
+    # truncated, key absent (stored before the tally): the caption is exactly the old one
+    census.update!(payload: census.payload.except("layer_redundancy_counts"))
+    get repository_path(repository)
+    sentence = panel.find("#near-duplicate-clusters-page").text(normalize_ws: true)
+    expect(sentence).to end_with("a page of the census, not all of it.")
+    expect(sentence).not_to include("declared layer")
+  end
+
   # @intent: {"entity": "NearDuplicateCensus", "action": "render overlap kind", "behavior": "each row says whether its group spans one spec file or several, from the stored key and, for a payload stored without it, derived from its members", "layer": "request"}
   it "shows the overlap kind per row, derived from members when the key is not stored" do
     ingest(repository, pair_specs)

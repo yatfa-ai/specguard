@@ -97,6 +97,7 @@ RSpec.describe NearDuplicateCensus do
         similarity_basis: live.similarity_basis,
         layer_source: live.layer_source,
         cluster_count: live.cluster_count,
+        layer_redundancy_counts: live.layer_redundancy_counts,
         truncated: live.truncated?,
         saturated_identity_count: live.saturated_identity_count,
         unresolved_count: live.unresolved_count,
