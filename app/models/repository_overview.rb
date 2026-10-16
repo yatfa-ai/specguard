@@ -1132,7 +1132,19 @@ class RepositoryOverview
       # Same differencing rule as `total_specs`: it is a SUM over the shards RECORDED, so do not
       # difference it across rows whose `shard_count` differs. Primed for the whole window by ONE grouped
       # `spec_observations` read in `history_runs`, so this costs nothing per row.
-      layer_counts: run.layer_counts
+      layer_counts: run.layer_counts,
+      # The run-wide MACHINE TIME by declared layer — exactly `TestRun#layer_durations`, i.e. what
+      # `latest_run.layer_durations` serves for the same run: five layers in `DECLARED_LAYER_KEYS` order,
+      # each `{total_seconds, timed_count}`; `total_seconds` is `null`, never 0, for a layer none of whose
+      # examples was timed (`timed_count: 0`), and the whole key is `null` for a run with no per-example
+      # rows. The per-run SERIES that `layer_runtime_growth` (latest vs previous) and
+      # `layer_runtime_window_growth` (two endpoints) deliberately are not. Operands only: no verdict, no
+      # threshold, DECLARED layers only. Appended LAST so every earlier key keeps its position.
+      #
+      # A SUM of example durations — machine time, NOT wall clock — so do not difference it across rows
+      # whose `shard_count` / `timed_shard_count` differ. Primed with `layer_counts` by the ONE grouped read
+      # in `history_runs`, so it costs nothing per row.
+      layer_durations: run.layer_durations
     }
   end
 
@@ -1160,9 +1172,10 @@ class RepositoryOverview
   # is precisely what a client was left to do before this. `Repository#recent_test_runs` carries
   # the rest of that argument, and the index it relies on.
   #
-  # ONE MORE statement primes each row's `layer_counts` (`preload_layer_counts`: a single grouped
-  # `spec_observations` read keyed by the ids already loaded), independent of the window size — it
-  # is not one aggregate per row. A run with no per-example rows is primed NIL.
+  # ONE MORE statement primes each row's `layer_counts` AND `layer_durations` (`preload_layer_mix`: a
+  # single grouped `spec_observations` read keyed by the ids already loaded, carrying both sets of
+  # per-layer FILTER aggregates), independent of the window size — it is not one aggregate per row.
+  # A run with no per-example rows is primed NIL on both.
   #
   # ONE window read, memoized, and its ORIENTATION IS THE QUERY'S: `recent_test_runs` orders
   # `(created_at, id) DESC` — newest first — so the rows are wrapped `RunWindow.newest_first` and
@@ -1172,7 +1185,7 @@ class RepositoryOverview
   # this array points.
   def history_runs
     @history_runs ||= RunWindow.newest_first(
-      preload_layer_counts(
+      preload_layer_mix(
         preload_shard_counts(
           repository.recent_test_runs(limit: history_limit, branch: requested_branch).to_a
         )

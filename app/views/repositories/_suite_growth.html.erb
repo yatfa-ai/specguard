@@ -129,6 +129,65 @@
                 <% end %>
               </section>
             <% end %>
+            <%# "Machine time by declared layer, by run": the TIME twin of the strip above, over the same
+                  plotted cohort and the same priming (`TestRun#layer_durations`, one grouped read in
+                  RepositoryDashboard). `layer_runtime_growth` and `layer_runtime_window_growth` compare
+                  two points and cannot say whether the runs between them support a step, creep or
+                  noise. One sparkline per layer that has at least two TIMED runs: a layer with no timed
+                  example in a run has NO figure there (null, not 0 s), and a run with no per-example
+                  rows (`layer_durations` nil) contributes to none. No box when no plotted run has any
+                  timing. SUM of example durations, so it is not the wall clock above. %>
+            <% layer_time_series = declared_layer_time_series(@suite_trajectory.plotted) %>
+            <% layer_time_drawn = layer_time_series.select { |_, points| points.size >= SuiteTrajectory::MINIMUM_POINTS } %>
+            <% if layer_time_series.any? %>
+              <% layer_time_formatter = trajectory_runtime_formatter %>
+              <% layer_time_unrecorded = @suite_trajectory.plotted.count { |run| run.layer_durations.nil? } %>
+              <% layer_time_single = layer_time_series.keys - layer_time_drawn.keys %>
+              <section id="suite-trajectory-layer-time" aria-labelledby="suite-trajectory-layer-time-title" class="space-y-2">
+                <h3 id="suite-trajectory-layer-time-title" class="text-sm font-medium text-app-content-primary">Machine time by declared layer, by run</h3>
+                <% if layer_time_drawn.any? %>
+                  <p class="sr-only"><%= declared_layer_time_summary(layer_time_drawn, @suite_trajectory.branch) %></p>
+                <% end %>
+                <% layer_time_drawn.each do |layer, points| %>
+                  <%= render UI::SparklineComponent.new(
+                        id: "suite-trajectory-layer-time-#{layer}",
+                        points: points.map { |run, seconds|
+                          UI::SparklineComponent::Point.new(label: run.commit_sha.first(7), value: seconds,
+                                                            detail: "#{time_ago_in_words(run.created_at)} ago")
+                        },
+                        label: "#{layer.to_s.capitalize} machine time on #{@suite_trajectory.branch}",
+                        coverage: "#{points.size} of #{@suite_trajectory.plotted.size} plotted runs",
+                        summary: "The #{layer} layer's examples summed between " \
+                                 "#{layer_time_formatter.call(points.map(&:last).min)} and " \
+                                 "#{layer_time_formatter.call(points.map(&:last).max)} across #{points.size} runs on " \
+                                 "#{@suite_trajectory.branch}. The vertical axis spans that range and does not " \
+                                 "start at zero.",
+                        columns: ["Run", "Machine time", "Ingested"],
+                        formatter: layer_time_formatter
+                      ) %>
+                <% end %>
+                <p id="suite-trajectory-layer-time-caption" class="text-xs text-app-content-secondary">
+                  SUM of example durations — machine time, not wall clock; do not difference across rows whose
+                  shard_count / timed_shard_count differ. Each chart is one declared layer on its own axis;
+                  only runs where that layer had a timed example are points.
+                </p>
+                <% if layer_time_unrecorded.positive? %>
+                  <p id="suite-trajectory-layer-time-skipped" class="text-xs text-app-content-secondary">
+                    <%= layer_time_unrecorded %> of the <%= @suite_trajectory.plotted.size %> plotted
+                    <%= "run".pluralize(@suite_trajectory.plotted.size) %>
+                    <%= layer_time_unrecorded == 1 ? "is" : "are" %> not drawn here for having no recorded
+                    per-example rows: with no detail stored there is no per-layer time to state, and a
+                    zero would read as a measurement of an empty suite.
+                  </p>
+                <% end %>
+                <% if layer_time_single.any? %>
+                  <p id="suite-trajectory-layer-time-thin" class="text-xs text-app-content-secondary">
+                    Not charted for having a timed example in fewer than <%= SuiteTrajectory::MINIMUM_POINTS %>
+                    plotted runs: <%= layer_time_single.join(", ") %>. One figure drawn as a line would be a flat one.
+                  </p>
+                <% end %>
+              </section>
+            <% end %>
             <% if @suite_trajectory.runtime_plottable? %>
               <% runtime_formatter = trajectory_runtime_formatter %>
               <% runtime_points = @suite_trajectory.timed.map do |run|

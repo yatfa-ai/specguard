@@ -479,6 +479,13 @@
               series (<code>?branch=</code> for one branch's). Like <code>total_specs</code> it is a
               sum over the shards recorded, so do not difference it across rows whose
               <code>shard_count</code> differs.
+              Beside it, <code>layer_durations</code> is the last key of every <code>history</code>
+              row: the same per-layer machine time as <code>latest_run.layer_durations</code>
+              (<code>unit</code>…<code>undeclared</code>, each <code>{total_seconds, timed_count}</code>;
+              <code>total_seconds</code> is <code>null</code>, never 0, for a layer with no timed example, and
+              the whole key is <code>null</code> when the run recorded no per-example rows). It is a sum of
+              example durations — machine time, not wall clock — so do not difference it across rows whose
+              <code>shard_count</code> / <code>timed_shard_count</code> differ.
             </td>
           </tr>
         <% end %>

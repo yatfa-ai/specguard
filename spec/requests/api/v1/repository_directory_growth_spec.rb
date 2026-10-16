@@ -796,8 +796,10 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       # lands in the same runtime-growth grain (see `repository_directory_runtime_window_growth_spec.rb`
       # for the pin of that one read).
       # TWENTY since SPGD-1819: `history[].layer_counts` is primed by one grouped read (its own grain).
+      # EIGHTEEN since SPGD-1829: `history[].layer_durations` is primed by that SAME grouped read, so the
+      # window's two endpoint run aggregates (paid by `layer_runtime_window_growth` since SPGD-1819) are free.
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(20)
+        .to eq(18)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

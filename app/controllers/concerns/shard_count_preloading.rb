@@ -86,4 +86,20 @@ module ShardCountPreloading
     mixes = SpecObservation.run_layer_counts_for(runs.map(&:id))
     runs.each { |run| run.preload_layer_counts(mixes[run.id]) }
   end
+
+  # Primes `TestRun#layer_counts` AND `TestRun#layer_durations` across a window of runs from ONE
+  # grouped `spec_observations` read (`SpecObservation.run_layer_counts_and_durations_for`) — the
+  # history window's pair, for surfaces that draw the mix and its machine time. Same statement shape
+  # and the same grain as {#preload_layer_counts} (it replaces that call on those surfaces rather than
+  # adding a read), so the window costs one statement whatever its size. A run with no recorded rows
+  # is primed NIL on both. List surfaces keep {#preload_layer_counts}: they draw no time.
+  def preload_layer_mix(runs)
+    return runs if runs.empty?
+
+    mixes = SpecObservation.run_layer_counts_and_durations_for(runs.map(&:id))
+    runs.each do |run|
+      counts, durations = mixes[run.id]
+      run.preload_layer_counts(counts).preload_layer_durations(durations)
+    end
+  end
 end

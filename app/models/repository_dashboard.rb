@@ -509,12 +509,13 @@ class RepositoryDashboard
     #
     @suite_trajectory = SuiteTrajectory.new(runs: trajectory_runs, branch: @trajectory_run&.branch)
     # The "Declared layers by run" strip under the line draws one bar per PLOTTED run, each from
-    # `TestRun#layer_counts`. Primed for exactly that cohort with ONE grouped `spec_observations`
-    # read (`ShardCountPreloading#preload_layer_counts`) — otherwise it is one aggregate per bar.
+    # `TestRun#layer_counts`, and the "Machine time by declared layer" strip beside it from
+    # `TestRun#layer_durations`. Primed for exactly that cohort with ONE grouped `spec_observations`
+    # read serving both (`ShardCountPreloading#preload_layer_mix`) — otherwise it is one aggregate per run.
     # Only when the line is plottable: a page whose Suite growth panel draws no line draws no strip,
     # so it pays nothing (spec/requests/repository_suite_layers_strip_spec.rb pins both). The runs
     # withheld from the line are never primed, because they are never drawn.
-    preload_layer_counts(@suite_trajectory.plotted) if @suite_trajectory.plottable?
+    preload_layer_mix(@suite_trajectory.plotted) if @suite_trajectory.plottable?
     # The slowest examples of the run every panel above names, with the coverage the panel states
     # them to. The first read this application has ever made of `spec_observations` — until those
     # rows landed, "which tests are slow" was a question the schema could not answer, and this page

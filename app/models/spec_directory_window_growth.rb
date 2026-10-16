@@ -148,8 +148,11 @@ class SpecDirectoryWindowGrowth
     context = context.merge(baseline_run: baseline.run, runs_back: baseline.runs_back)
 
     if layer
-      baseline_recorded = baseline.run.intent_readings.recorded?
-      anchor_recorded = baseline.anchor.intent_readings.recorded?
+      # `layer_counts` is nil exactly when the run recorded no per-example rows (`intent_readings.recorded?`
+      # false) — the same fact, read off the value the window's one grouped read primes (SPGD-1829), so the
+      # endpoints cost no run-grain aggregate of their own.
+      baseline_recorded = !baseline.run.layer_counts.nil?
+      anchor_recorded = !baseline.anchor.layer_counts.nil?
       return new(state: :neither_recorded, **context) unless baseline_recorded || anchor_recorded
       return new(state: :baseline_unrecorded, **context) unless baseline_recorded
       return new(state: :anchor_unrecorded, **context) unless anchor_recorded

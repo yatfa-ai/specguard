@@ -79,7 +79,11 @@ RSpec.describe "GET /api/v1/repository — latest_run.layer_durations", type: :r
 
       expect(reads.grep(ObservationGrainReads::RUN_READINGS_PROJECTION).length).to eq(1)
       expect(reads.grep(/run_layer_unit_count/).length).to eq(1)
-      expect(reads.grep(/run_layer_unit_seconds/).length).to eq(1)
+      # The history window's ONE grouped read (SPGD-1829) carries the same aliases, so it is told apart by its
+      # grouping: the RUN-grain aggregate is the ungrouped one.
+      ungrouped = reads.grep_v(ObservationGrainReads::HISTORY_LAYER_COUNTS_GROUPING)
+      expect(ungrouped.grep(/run_layer_unit_seconds/).length).to eq(1)
+      expect(reads.grep(ObservationGrainReads::HISTORY_LAYER_COUNTS_GROUPING).grep(/run_layer_unit_seconds/).length).to eq(1)
       expect(reads.grep(/run_layer_unit_count/).first).to include("run_layer_undeclared_timed_count")
       expect(reads.length).to eq(classified_observation_reads { get_repository })
     end

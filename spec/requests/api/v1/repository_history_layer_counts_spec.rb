@@ -88,13 +88,13 @@ RSpec.describe "GET /api/v1/repository — history[].layer_counts", type: :reque
     end
 
     # @intent: { entity: "history layer_counts", action: "append last", behavior: "layer_counts is the last key of every history row and the earlier keys keep their order", layer: "request" }
-    it "appends layer_counts as the LAST key, leaving every earlier key where it was" do
+    it "appends layer_counts then layer_durations as the last keys, leaving every earlier key where it was" do
       keys = get_repository(query: { branch: "main" })["history"].map(&:keys)
 
       expect(keys.uniq.length).to eq(1)
       expect(keys.first).to eq(
         %w[commit_sha branch total_specs annotated_specs annotated_ratio duration_seconds shard_count
-           timed_shard_count suite_size_measured ingested_at layer_counts]
+           timed_shard_count suite_size_measured ingested_at layer_counts layer_durations]
       )
     end
 
