@@ -52,13 +52,17 @@
           <% end %>
           <%= render UI::TableComponent.new(
                 columns: ["Test", { label: "Total across window", end: true }, { label: "Slowest single run", end: true },
-                          { label: "Runs seen", end: true }, { label: "Timed", end: true }],
+                          { label: "Window change", end: true }, { label: "Runs seen", end: true },
+                          { label: "Timed", end: true }],
                 describedby: "slowest-tests-window-basis", sortable: true) do %>
             <% @slowest_tests.rows.each do |test| %>
               <% title = test.descriptions.first || "no description reported" %>
               <%= drawer_row(test.spec_identity_id, kind: "Test across the window", title: title,
                     facts: [["Total across window", test.duration_label],
                             ["Slowest single run", test.slowest_label],
+                            ["First run in window", test.first_label],
+                            ["Newest run in window", test.latest_label],
+                            ["Window change", test.change_label],
                             ["Runs seen", test.appearance_label(@slowest_tests.run_count)],
                             ["Examples timed", test.coverage_label],
                             ["Declared layers", test.declared_layers.any? ? test.declared_layers.join(", ") : "undeclared"],
@@ -74,6 +78,7 @@
                 </td>
                 <td class="num" data-sort="<%= test.total_seconds %>"><%= test.duration_label %></td>
                 <td class="num mute" data-sort="<%= test.slowest_seconds %>"><%= test.slowest_label %></td>
+                <td class="num mute" data-sort="<%= test.change %>"><%= test.change_label %></td>
                 <td class="num mute" data-sort="<%= test.run_count %>"><%= test.appearance_label(@slowest_tests.run_count) %></td>
                 <td class="num mute" data-sort="<%= test.timed_count %>"><%= test.coverage_label %></td>
               <% end %>

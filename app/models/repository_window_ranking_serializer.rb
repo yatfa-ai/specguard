@@ -606,6 +606,14 @@ class RepositoryWindowRankingSerializer
   # loop or a shared example group — which is what separates "slow in twelve runs" from "run three
   # times in each of four". `recorded_count` and `run_count` are the two operands beside it.
   #
+  # `first_seconds` / `latest_seconds` / `change` are the test's TWO ENDPOINTS across the window —
+  # its wall clock (summed per run, so a table-driven test compares like with like) in the OLDEST
+  # and the NEWEST run it appears in, and the latter minus the former. They tell a chronically slow
+  # test from one fixed long ago (13s → 1s still tops a ranking on the window sum) and from one that
+  # regressed late. Two endpoints, NOT a series, and the candidates are still chosen by the newest
+  # run's cost. Each endpoint is `null` — never `0` — when that run's rows were all untimed, and
+  # `change` is `null` unless both are non-null and the test appears in at least two runs.
+  #
   # `timed` / `timed_count` / `untimed_count` keep a blank duration from being read as a zero. A row
   # that reaches this list untimed is ordinary, not a defect: an example that never ran has no
   # duration to report.
@@ -614,6 +622,9 @@ class RepositoryWindowRankingSerializer
       spec_identity_id: row.spec_identity_id,
       total_seconds: row.total_seconds,
       slowest_seconds: row.slowest_seconds,
+      first_seconds: row.first_seconds,
+      latest_seconds: row.latest_seconds,
+      change: row.change,
       run_count: row.run_count,
       recorded_count: row.recorded_count,
       timed_count: row.timed_count,

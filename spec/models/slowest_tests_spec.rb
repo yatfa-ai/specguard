@@ -302,12 +302,44 @@ RSpec.describe SlowestTests do
         expect(ranking.unexamined_count).to eq(0)
       end
 
-      # Three statements for the whole panel — a gate, a candidate step and a composition — and none
-      # of them grows with the size of the suite or the length of the window.
-      # @intent: { entity: "SlowestTests", action: "bound the reads", behavior: "building the ranking costs exactly three queries regardless of suite size or window length", layer: "unit" }
-      it "costs three bounded reads" do
-        expect(count_queries { described_class.for(repository, runs, branch: "main").rows }).to eq(3)
+      # Four statements for the whole panel — a gate, a candidate step, a composition and (SPGD-1836)
+      # the per-run endpoint read — and none of them grows with the size of the suite or the length
+      # of the window.
+      # @intent: { entity: "SlowestTests", action: "bound the reads", behavior: "building the ranking costs exactly four queries regardless of suite size or window length", layer: "unit" }
+      it "costs four bounded reads" do
+        expect(count_queries { described_class.for(repository, runs, branch: "main").rows }).to eq(4)
       end
+    end
+  end
+
+  # SPGD-1836 — `Row#change` and its labels, on the rule that a missing endpoint is never a zero.
+  describe SlowestTests::Row do
+    def row(**attrs)
+      described_class.new(spec_identity_id: 1, total_seconds: 1.0, recorded_count: 2, timed_count: 2,
+                          run_count: 2, slowest_seconds: 1.0, **attrs)
+    end
+
+    # @intent: { entity: "SlowestTests::Row", action: "compute the window change", behavior: "change is latest minus first, negative when faster and positive when slower", layer: "unit" }
+    it "is latest minus first" do
+      expect(row(first_seconds: 13.0, latest_seconds: 1.0).change).to eq(-12.0)
+      expect(row(first_seconds: 1.0, latest_seconds: 9.0).change).to eq(8.0)
+      expect(row(first_seconds: 2.0, latest_seconds: 2.0).change).to eq(0.0)
+    end
+
+    # @intent: { entity: "SlowestTests::Row", action: "compute the window change", behavior: "change is nil when either endpoint is untimed or the test appears in fewer than two runs", layer: "unit" }
+    it "is nil unless both endpoints are timed and the test appears in at least two runs" do
+      expect(row(first_seconds: nil, latest_seconds: 1.0).change).to be_nil
+      expect(row(first_seconds: 1.0, latest_seconds: nil).change).to be_nil
+      expect(row(first_seconds: 3.0, latest_seconds: 3.0, run_count: 1).change).to be_nil
+    end
+
+    # @intent: { entity: "SlowestTests::Row", action: "label the window change", behavior: "labels read not reported for a nil endpoint or change and a signed duration otherwise", layer: "unit" }
+    it "labels endpoints and change, with not reported for a nil" do
+      expect(row(first_seconds: nil, latest_seconds: nil).first_label).to eq("not reported")
+      expect(row(first_seconds: nil, latest_seconds: nil).change_label).to eq("not reported")
+      expect(row(first_seconds: 13.0, latest_seconds: 1.0).change_label).to eq("−12.00s")
+      expect(row(first_seconds: 1.0, latest_seconds: 9.0).change_label).to eq("+8.00s")
+      expect(row(first_seconds: 1.0, latest_seconds: 9.0).latest_label).to eq("9.00s")
     end
   end
 

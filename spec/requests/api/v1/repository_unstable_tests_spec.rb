@@ -813,7 +813,9 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       # from the flakiness matching rather than a key), so the slowest-tests panel over the same
       # window passes its resolver gate and pays its candidate and composition reads where these
       # fixtures used to stop it at the gate.
-      expect(identity.length).to eq(3)
+      # FOUR since SPGD-1836: the panel's per-run endpoint read joins the gate, the candidates and the
+      # composition.
+      expect(identity.length).to eq(4)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       # FIFTEEN at the last recount, plus the flakiness grain's fifth read and the two identity
@@ -824,8 +826,9 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       # — and TWENTY-THREE since SPGD-1819's one grouped `history[].layer_counts` read (its own grain).
       # — and TWENTY-ONE since SPGD-1829, whose same grouped read also primes `layer_durations`, retiring the two
       # endpoint run aggregates `layer_runtime_window_growth` had been paying (see repository_layer_growth_spec.rb).
+      # — and TWENTY-TWO since SPGD-1836's per-run endpoint read for `slowest_tests` (identity grain).
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(21)
+        .to eq(22)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

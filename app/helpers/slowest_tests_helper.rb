@@ -37,7 +37,22 @@ module SlowestTestsHelper
 
     "#{opening} that cost this suite the most wall clock across the last " \
       "#{runs}#{window_branch_clause(slowest)}, ordered on that window TOTAL — not on any single " \
-      "run of it.#{slowest_tests_layer_clause(slowest)}"
+      "run of it.#{slowest_tests_endpoints_sentence}#{slowest_tests_layer_clause(slowest)}"
+  end
+
+  # The "Window change" column, stated for what it is: TWO ENDPOINTS of the window, not a series.
+  # It is the test's wall clock in the newest run it appears in minus its wall clock in the oldest
+  # one (each run's rows summed, so a test that ran several times in a run is compared like with
+  # like), so a test that spiked in the middle of the window reads the same as one that never
+  # moved. And the scope is stated rather than hidden: WHICH tests are listed is still decided by
+  # the newest run's cost, so a test that regressed but sits outside that run's top slice is not
+  # here however large its change. "not reported" when the test appears in only one run or an endpoint
+  # reported no timing.
+  def slowest_tests_endpoints_sentence
+    " \"Window change\" compares two endpoints of the window — the test's wall clock in the newest " \
+      "run it appears in minus its wall clock in the oldest, negative meaning faster now — and is " \
+      "not a series. Which tests are listed is still decided by the newest run's cost, so a test " \
+      "that regressed but is outside that run's slowest tests is not here."
   end
 
   # With `?layer=` asked (SPGD-1726) the ranking is narrowed at its CANDIDATE step: the tests listed
@@ -48,8 +63,8 @@ module SlowestTestsHelper
     return "" unless slowest.layer?
 
     " Narrowed to the #{slowest.layer} layer: only tests with at least one #{slowest.layer}-layer " \
-      "example in that newest run are candidates, and each row still totals the whole test across " \
-      "the window."
+      "example in that newest run are candidates, and each row's total and window change still span " \
+      "the whole test across the window."
   end
 
   # The layer-narrowed ranking's empty state: the newest run holds resolved tests, none of which has

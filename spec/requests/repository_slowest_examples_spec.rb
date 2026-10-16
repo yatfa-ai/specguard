@@ -1207,9 +1207,12 @@ RSpec.describe "Repository slowest tests", type: :request do
       # gate and pays its candidate and composition reads where these fixtures used to stop it at
       # the gate. The flakiness panel itself still costs its one gating probe here — this file's
       # examples report no outcomes, so its window is incomparable and it stops there.
+      # RECOUNTED AT 13 by SPGD-1836: the window slowest-tests panel's per-run endpoint read (the
+      # "Window change" column) — one grouped statement over the same candidates, constant in suite
+      # size and window length.
       # Page-wide rather than panel-scoped on purpose: what must not grow is the number of times
       # ONE page walks this table, and only a count taken across the whole request can say that.
-      expect(large_queries.size).to eq(12)
+      expect(large_queries.size).to eq(13)
     end
   end
 

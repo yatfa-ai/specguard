@@ -203,7 +203,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       expect(block["rows"].first.keys).to contain_exactly(
         "spec_identity_id", "total_seconds", "slowest_seconds", "run_count", "recorded_count",
         "timed_count", "untimed_count", "timed", "repeated_within_run", "moved", "renamed",
-        "descriptions", "files_seen", "declared_layers"
+        "descriptions", "files_seen", "declared_layers", "first_seconds", "latest_seconds", "change"
       )
     end
 
@@ -660,6 +660,139 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     end
   end
 
+  # SPGD-1836 — `first_seconds` / `latest_seconds` / `change`: the two ENDPOINTS of each test's window
+  # (its wall clock in the oldest and in the newest run it appears in), beside the window sum that
+  # orders the list. They separate a chronically slow test from one fixed long ago (13s → 1s still
+  # tops a ranking on the sum) and from one that regressed late (1s → 9s ranks low).
+  #
+  # ⚠️ THE RUNS ARE INGESTED IN AN ORDER THAT DIFFERS FROM THEIR TIME ORDER. The window is ordered by
+  # `(created_at, id)`, and ids are insertion order; a fixture that ingested oldest-first would pass
+  # just as green with the endpoints read off `ORDER BY test_run_id`. Here the newest run has the
+  # LOWEST id and the second-oldest the highest, so only the window's own order yields the right
+  # endpoints (mutation: sorting by run id flips every sign asserted below).
+  describe "first_seconds, latest_seconds and change — the window's two endpoints" do
+    FIXED = "Report export streams every row"
+    REGRESSED = "Search index rebuilds a shard"
+    FLAT = "Session store evicts an idle key"
+    SINGLE_RUN = "Mailer renders a digest"
+    UNTIMED_NEWEST = "Cache warmer primes a region"
+    UNTIMED_FIRST = "Queue drainer empties a lane"
+
+    # Window time order, oldest first; each entry is the suite that run reported.
+    ENDPOINT_RUNS = [
+      { FIXED => 13.0, REGRESSED => 1.0, FLAT => 2.0, UNTIMED_NEWEST => 3.0, UNTIMED_FIRST => nil },
+      { FIXED => 6.0, REGRESSED => 2.0, FLAT => 2.0, UNTIMED_NEWEST => 3.0, UNTIMED_FIRST => nil },
+      { FIXED => 3.0, REGRESSED => 5.0, FLAT => 2.0, UNTIMED_NEWEST => 3.0, UNTIMED_FIRST => 4.0 },
+      { FIXED => 1.0, REGRESSED => 9.0, FLAT => 2.0, UNTIMED_NEWEST => nil, UNTIMED_FIRST => 4.0,
+        SINGLE_RUN => 7.0 }
+    ].freeze
+
+    # Ingested newest-first, then third, first, second — ids run opposite to time at the ends.
+    INGEST_ORDER = [3, 2, 0, 1].freeze
+
+    def endpoint_window(repo = repository, runs: ENDPOINT_RUNS)
+      INGEST_ORDER.each do |index|
+        specs = runs[index].each_with_index.map do |(name, duration), line|
+          example_spec(name: name, duration: duration, line_number: line + 1,
+                       file_path: "spec/models/endpoint_#{line}_spec.rb")
+        end
+        ingest(repo, specs, commit_sha: "end#{index}sha#{format("%07d", index)}", at: (30 - index).days.ago)
+      end
+      repo
+    end
+
+    def endpoints_of(block, name) = row_described(block, name).slice("first_seconds", "latest_seconds", "change")
+
+    # @intent: { entity: "SlowestTests", action: "serve window endpoints", behavior: "a test that went 13s to 1s serves change -12 and a test that went 1s to 9s serves +8, read in window order and not run-id order", layer: "request" }
+    it "serves both signs of change, read in the window's order and not the run ids'" do
+      endpoint_window
+      newest = repository.test_runs.order(created_at: :desc).first
+      expect(repository.test_runs.order(:id).first).to eq(newest) # the fixture's ids DO disagree with time
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(endpoints_of(block, FIXED)).to eq("first_seconds" => 13.0, "latest_seconds" => 1.0, "change" => -12.0)
+      expect(endpoints_of(block, REGRESSED)).to eq("first_seconds" => 1.0, "latest_seconds" => 9.0, "change" => 8.0)
+      expect(endpoints_of(block, FLAT)).to eq("first_seconds" => 2.0, "latest_seconds" => 2.0, "change" => 0.0)
+    end
+
+    # The list is still ordered on the window SUM — the endpoints ride beside it and re-rank nothing.
+    # @intent: { entity: "SlowestTests", action: "serve window endpoints", behavior: "the fixed test still ranks on its window sum above the regressed one and the totals are unchanged", layer: "request" }
+    it "leaves the ranking on the window total, with the totals unchanged" do
+      endpoint_window
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(row_described(block, FIXED)["total_seconds"]).to eq(23.0)
+      expect(row_described(block, REGRESSED)["total_seconds"]).to eq(17.0)
+      expect(block["rows"].index(row_described(block, FIXED)))
+        .to be < block["rows"].index(row_described(block, REGRESSED))
+    end
+
+    # @intent: { entity: "SlowestTests", action: "serve window endpoints", behavior: "a test present in exactly one run serves change null with both endpoints equal to that run", layer: "request" }
+    it "serves change null for a test seen in a single run" do
+      endpoint_window
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(row_described(block, SINGLE_RUN)["run_count"]).to eq(1)
+      expect(endpoints_of(block, SINGLE_RUN)).to eq("first_seconds" => 7.0, "latest_seconds" => 7.0, "change" => nil)
+    end
+
+    # @intent: { entity: "SlowestTests", action: "serve window endpoints", behavior: "an endpoint run that was all untimed serves null for that endpoint and for change, never zero", layer: "request" }
+    it "serves null — never zero — for an untimed endpoint and for the change it would have fed" do
+      endpoint_window
+
+      _window, block = blocks(query: { branch: "main" })
+
+      expect(endpoints_of(block, UNTIMED_NEWEST)).to eq("first_seconds" => 3.0, "latest_seconds" => nil, "change" => nil)
+      expect(endpoints_of(block, UNTIMED_FIRST)).to eq("first_seconds" => nil, "latest_seconds" => 4.0, "change" => nil)
+    end
+
+    # A test that ran three times per run is one identity and three rows: each endpoint is that
+    # run's SUM, so 3 x 4s (oldest) → 3 x 1s (newest) is 12 → 3 and not 4 → 1.
+    # @intent: { entity: "SlowestTests", action: "serve window endpoints", behavior: "a table-driven test with three examples per run serves per-run sums as its endpoints and is flagged repeated_within_run", layer: "request" }
+    it "reads a table-driven test's endpoints as per-run sums" do
+      repo = create_repository(user: @user, github_full_name: "acme/table-service")
+      [[2, 1.0], [0, 4.0], [1, 2.0]].each do |index, each|
+        specs = 3.times.map do |case_index|
+          example_spec(name: "Currency converts each supported code", duration: each, line_number: 1,
+                       file_path: "spec/models/currency_spec.rb",
+                       id: "./spec/models/currency_spec.rb[1:#{case_index}]")
+        end
+        ingest(repo, specs, commit_sha: "tbl#{index}sha#{format("%07d", index)}", at: (30 - index).days.ago)
+      end
+
+      _window, block = blocks(repo: repo, query: { branch: "main" })
+
+      row = block["rows"].first
+      expect(row).to include("repeated_within_run" => true, "recorded_count" => 9, "run_count" => 3,
+                             "first_seconds" => 12.0, "latest_seconds" => 3.0, "change" => -9.0)
+    end
+
+    # Rows are still the LAYER's candidates; the endpoints are the whole durable test's across the
+    # window, exactly as the totals are — so a test that declared `system` in the oldest run and
+    # `unit` in the newest keeps its oldest-run figure under `?layer=unit`.
+    # @intent: { entity: "SlowestTests", action: "serve window endpoints", behavior: "under layer=unit the candidates are the layer's but the endpoints span the whole test including a run that declared another layer", layer: "request" }
+    it "serves whole-test endpoints under ?layer=, narrowing only the candidates" do
+      [[2, "unit", 1.0], [0, "system", 5.0], [1, "system", 3.0]].each do |index, layer, duration|
+        specs = [
+          annotated_spec(file_path: "spec/models/money_spec.rb", line_number: 1, name: "Money rounds half to even",
+                         duration: duration, layer: layer),
+          annotated_spec(file_path: "spec/system/flow_spec.rb", line_number: 1, name: "System flow completes",
+                         duration: 50.0, layer: "system", entity: "Flow", action: "complete", behavior: "completes")
+        ]
+        ingest(repository, specs, commit_sha: "lyr#{index}sha#{format("%07d", index)}", at: (30 - index).days.ago)
+      end
+
+      _window, block = blocks(query: { branch: "main", layer: "unit" })
+
+      expect(block["rows"].map { |row| row["descriptions"].first }).to eq(["Money rounds half to even"])
+      expect(block["rows"].first).to include("first_seconds" => 5.0, "latest_seconds" => 1.0, "change" => -4.0,
+                                             "total_seconds" => 9.0)
+    end
+  end
+
   # What this block costs the endpoint, ON A RESOLVED WINDOW — the case no other file can pin.
   #
   # ⚠️ THIS EXAMPLE EXISTS BECAUSE THE OTHER TWO CANNOT REACH THE STATE IT MEASURES, and that is a
@@ -677,8 +810,8 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
   # for a grain that fired rather than a red example. This example is the guard for the half of the
   # partition the unresolved fixtures structurally cannot exercise.
   describe "what the block costs the endpoint on a window it can rank" do
-    # @intent: { entity: "SlowestTests", action: "issue three identity reads", behavior: "a branch ask costs the presence probe then the two grouped reads and no more", layer: "request" }
-    it "issues three identity reads — the presence probe, then the two grouped reads" do
+    # @intent: { entity: "SlowestTests", action: "issue four identity reads", behavior: "a branch ask costs the presence probe then the three grouped reads and no more", layer: "request" }
+    it "issues four identity reads — the presence probe, then the three grouped reads" do
       window_repository
 
       reads = observation_reads { get_repository(query: { branch: "main" }) }
@@ -692,7 +825,9 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       expect(reads.grep(ObservationGrainReads::IDENTITY_CANDIDATES).length).to eq(1)
       expect(reads.grep(ObservationGrainReads::IDENTITY_GROUPING)
                   .grep(ObservationGrainReads::IDENTITY_COMPOSITION).length).to eq(1)
-      expect(identity_grain_reads { get_repository(query: { branch: "main" }) }.length).to eq(3)
+      # SPGD-1836: the per-run endpoint read — exactly ONE more than before, grouped on identity AND run.
+      expect(reads.grep(ObservationGrainReads::IDENTITY_RUN_DURATIONS).length).to eq(1)
+      expect(identity_grain_reads { get_repository(query: { branch: "main" }) }.length).to eq(4)
       # And the two patterns are DISJOINT over these statements — the property that lets one grain
       # carry two patterns without double-counting, which `classified_observation_reads` would
       # otherwise catch as parts summing to more than the total.

@@ -73,13 +73,14 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
   def rows
     panel.all("tbody tr").map do |row|
-      test_cell, total_cell, slowest_cell, seen_cell, timed_cell = row.all("td").first(5)
+      test_cell, total_cell, slowest_cell, change_cell, seen_cell, timed_cell = row.all("td").first(6)
       layers = test_cell.first("[data-declared-layers]")&.text&.gsub(/\s+/, " ")&.strip
       # What the old row's notes said, now the drawer's: the files it was recorded under, the other
       # descriptions it wore, and the repeated-in-a-run disclosure. Absent facts are absent keys.
       notes = [fact_of(row, "Recorded under"), fact_of(row, "Also recorded as")].compact
       { name: label_of(test_cell), notes: notes, layers: layers, total: total_cell.text.strip,
-        slowest: slowest_cell.text.strip, seen: seen_cell.text.gsub(/\s+/, " ").strip,
+        slowest: slowest_cell.text.strip, change: change_cell.text.strip,
+        change_sort: change_cell["data-sort"], seen: seen_cell.text.gsub(/\s+/, " ").strip,
         repeated: fact_of(row, "Ran more than once in a run"), timed: timed_cell.text.strip }
     end
   end
@@ -230,6 +231,42 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect(steady[:slowest]).to eq("3.00s")
       expect(steady[:seen]).to eq("4 of 4")
       expect(steady[:timed]).to eq("4 of 4")
+    end
+
+    # SPGD-1836 — the "Window change" column: a sortable header, a numeric `data-sort` on each cell
+    # (empty for a test with no change to sort on), a signed label, and the two endpoints in the
+    # drawer. The fixture's steady and moved tests did not change; the untimed one has no endpoints.
+    # @intent: {"entity": "GET /repositories/:id", "action": "render window change", "behavior": "the panel has a sortable Window change header, a numeric data-sort on a timed row, an empty one on the untimed row, and first/newest/change facts in the drawer", "layer": "request"}
+    it "renders the Window change column with a numeric data-sort and the endpoints in the drawer" do
+      get repository_path(window_repository)
+
+      expect(panel.all("thead th").map { |th| th.text.squish }).to include("Window change")
+      steady = row_named("Ledger rebuild walks every entry")
+      expect(steady[:change]).to eq("0.00s")
+      expect(steady[:change_sort]).to eq("0.0")
+      expect(row_named("Webhook replays a failed delivery")).to include(change: "not reported", change_sort: "")
+      steady_row = row_element("Ledger rebuild walks every entry")
+      expect(fact_of(steady_row, "First run in window")).to eq("3.00s")
+      expect(fact_of(steady_row, "Newest run in window")).to eq("3.00s")
+      expect(fact_of(steady_row, "Window change")).to eq("0.00s")
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "render window change sign", "behavior": "a test that got slower reads a plus-signed change with a positive data-sort and the caption states the two-endpoint scope", "layer": "request"}
+    it "signs a regression and states in the caption that the change is two endpoints, not a series" do
+      repository = create_repository(user: @user)
+      [[1, 5.0], [0, 1.0]].each do |index, duration|
+        ingest(repository, [example_spec(name: "Search index rebuilds a shard", duration: duration,
+                                         file_path: "spec/models/search_spec.rb")],
+               commit_sha: "chg#{index}sha#{format("%07d", index)}", at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository)
+
+      row = row_named("Search index rebuilds a shard")
+      expect(row[:change]).to eq("+4.00s")
+      expect(row[:change_sort]).to eq("4.0")
+      expect(basis_line.text.squish).to include("two endpoints of the window", "not a series",
+                                                "decided by the newest run's cost")
     end
 
     # The row nothing timed reads as unmeasured in BOTH duration columns and sorts last. A zero
@@ -754,11 +791,11 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect(window_reads.size).to eq(1)
     end
 
-    # THREE reads at most, and none of them grows with the length of the window or the size of the
-    # suite: the gate over one run, the capped candidate step over that same run, and the
-    # composition over those candidates only. A thirty-run window of a two-hundred-example suite
+    # FOUR reads at most, and none of them grows with the length of the window or the size of the
+    # suite: the gate over one run, the capped candidate step over that same run, the composition
+    # over those candidates only, and (SPGD-1836) the per-run endpoint read over the same candidates. A thirty-run window of a two-hundred-example suite
     # costs the same as a three-run window of three.
-    # @intent: {"entity": "GET /repositories/:id", "action": "cost flat reads", "behavior": "a 30-run 200-example window renders the capped panel on the same count of spec_identity_id reads as a 3-run 3-example one — exactly five", "layer": "request"}
+    # @intent: {"entity": "GET /repositories/:id", "action": "cost flat reads", "behavior": "a 30-run 200-example window renders the capped panel on the same count of spec_identity_id reads as a 3-run 3-example one — exactly six", "layer": "request"}
     it "costs the same reads at 30 runs of 200 examples as at 3 runs of 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
       3.times do |index|
@@ -784,13 +821,14 @@ RSpec.describe "Repository window slowest tests", type: :request do
       # panels would be equal and worthless.
       expect(rows.size).to eq(SpecObservation::SLOWEST_LIMIT)
       expect(large_queries.size).to eq(small_queries.size)
-      # FIVE since SPGD-758, and three of them are this panel's own — the gate, the capped
-      # candidate step and the composition. The other two are the flakiness panel over the same
+      # SIX since SPGD-1836, and four of them are this panel's own — the gate, the capped
+      # candidate step, the composition and the per-run endpoint read. (FIVE since SPGD-758, when the
+      # panel's own were three.) The other two are the flakiness panel over the same
       # page, whose grouping moved onto this same column: its candidate probe (empty on this
       # fixture's green window, but issued) and its unresolved-row exclusion count. Counted here
       # because they carry `spec_identity_id` and a pattern that ignored them would be re-defining
       # the column's cost rather than measuring it.
-      expect(large_queries.size).to eq(5)
+      expect(large_queries.size).to eq(6)
     end
 
     # A window whose newest run has nothing to rank asks ONE question and stops — the gate, and
