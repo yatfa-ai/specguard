@@ -1916,6 +1916,66 @@ RSpec.describe SpecObservation do
       end
     end
 
+    # SPGD-1836 — the per-run read behind a ranking row's first / latest / change endpoints.
+    describe ".identity_run_durations_in" do
+      # @intent: { entity: "SpecObservation", action: "read each candidate's wall clock per run of the window", behavior: "one tuple per identity per run it appears in, each carrying that run's summed duration", layer: "unit" }
+      it "returns one per-run sum per identity per run of the window" do
+        tuples = described_class.identity_run_durations_in(
+          run_ids: window_ids, spec_identity_ids: [identity_ids[6]]
+        )
+
+        expect(tuples.length).to eq(6)
+        expect(tuples.map { |tuple| tuple[0] }.uniq).to eq([identity_ids[6]])
+        expect(tuples.map { |tuple| tuple[1] }).to match_array(window_ids)
+        expect(tuples.map { |tuple| tuple[2] }).to all(be_within(0.0001).of(100.0 / 7))
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read each candidate's wall clock per run of the window", behavior: "a run in which every row of the identity was untimed reports a nil sum and never zero", layer: "unit" }
+      it "keeps a nil sum, never a zero, for a run nothing timed" do
+        tuples = described_class.identity_run_durations_in(
+          run_ids: window_ids, spec_identity_ids: [identity_ids[49]]
+        )
+
+        expect(tuples.length).to eq(6)
+        expect(tuples.map(&:last)).to all(be_nil)
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read each candidate's wall clock per run of the window", behavior: "an identity with several rows in one run is summed within that run rather than split into one tuple per row", layer: "unit" }
+      it "sums an identity's several rows within one run" do
+        target = window.last
+        described_class.where(test_run_id: target.id, spec_identity_id: identity_ids[6]).first
+                       .then do |row|
+          described_class.insert_all([row.attributes.except("id").merge("example_id" => "./spec/dup_spec.rb[1:1]")])
+        end
+
+        tuples = described_class.identity_run_durations_in(
+          run_ids: [target.id], spec_identity_ids: [identity_ids[6]]
+        )
+
+        expect(tuples.length).to eq(1)
+        expect(tuples.first.last).to be_within(0.0001).of(2 * (100.0 / 7))
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read each candidate's wall clock per run of the window", behavior: "only the handed window's runs contribute", layer: "unit" }
+      it "counts only the runs of the window it was given" do
+        tuples = described_class.identity_run_durations_in(
+          run_ids: window_ids.first(2), spec_identity_ids: [identity_ids[6]]
+        )
+
+        expect(tuples.map { |tuple| tuple[1] }).to match_array(window_ids.first(2))
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read each candidate's wall clock per run of the window", behavior: "an empty window or an empty candidate list answers without issuing any query", layer: "unit" }
+      it "answers for a window of no runs, and for no candidates, without asking anything" do
+        expect(count_queries do
+          expect(described_class.identity_run_durations_in(run_ids: [], spec_identity_ids: identity_ids.first(3)))
+            .to be_empty
+          expect(described_class.identity_run_durations_in(run_ids: window_ids, spec_identity_ids: []))
+            .to be_empty
+        end).to eq(0)
+      end
+    end
+
     # The bound the whole two-step shape exists for, measured rather than asserted. The naive
     # spelling of this question groups the window whole — 1,800 rows on this seed, 600,000 at the
     # roadmap's design point — and what these examples pin is that the composition reads on the
@@ -2069,6 +2129,30 @@ RSpec.describe SpecObservation do
         # what the two-step shape buys — and the ratio widens with the suite, because this read
         # follows the candidate count while a whole-window group-by follows the row count.
         expect(SpecObservation.where(test_run_id: window_ids).count).to eq(1800)
+        expect(ten).to be < 1800 / 5
+      end
+
+      # SPGD-1836 — the per-run endpoint read is the same index scan with a finer GROUP BY, so the
+      # same certification applies: off the by-identity index, and following the candidate count.
+      # @intent: { entity: "SpecObservation", action: "read each candidate's wall clock per run of the window", behavior: "the per-run read is served by the by-identity index and its cost scales with the candidate count rather than the window size", layer: "unit" }
+      it "reads the per-run durations off the by-identity index, on the order of the candidate count" do
+        plan = plan_for_actual_sql("spec_observations") do
+          described_class.identity_run_durations_in(run_ids: window_ids, spec_identity_ids: identity_ids.first(10))
+        end
+        expect(plan).to include("index_spec_observations_on_spec_identity_id")
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+
+        per_run = lambda do |count|
+          rows_touched("spec_observations") do
+            described_class.identity_run_durations_in(run_ids: window_ids, spec_identity_ids: identity_ids.first(count))
+          end
+        end
+        ten = per_run.call(10)
+        three = per_run.call(3)
+
+        expect(ten).to be <= 10 * runs.size * 2
+        expect(three).to be <= 3 * runs.size * 2
+        expect(three).to be < ten
         expect(ten).to be < 1800 / 5
       end
     end

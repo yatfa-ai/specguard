@@ -2241,6 +2241,41 @@ class SpecObservation < ApplicationRecord
              *IDENTITY_DURATION_COMPOSITION.values.map { |sql| Arel.sql(sql) })
   end
 
+  # Step three of the cross-run ranking: each candidate identity's wall clock PER RUN of the window —
+  # `SUM(duration_seconds)` grouped on `(spec_identity_id, test_run_id)` — so a caller can read the
+  # two ENDPOINTS of a test's window (the oldest and newest run it appears in) without a series.
+  #
+  # Same candidates and same window run ids as `.identity_duration_composition_in`, and the same
+  # conventions, for the same reasons (see that method's plan and arithmetic, which this read shares
+  # because it is the same index scan with a finer GROUP BY):
+  #
+  # * NO `repository_id` predicate — the by-identity index drives it, and tenancy is carried by the
+  #   arguments (`SlowestTests.validate_anchor!`).
+  # * `[]` with no query when either list is empty.
+  # * Bound: candidates × the runs those identities appear in. The result is at most one row per
+  #   `(identity, run)`, i.e. ≤ `SLOWEST_LIMIT × window runs`, and it follows the candidate count,
+  #   never the window's row count.
+  #
+  # ⚠️ PER-RUN SUM, not per-row: a table-driven test that ran three times in a run is one identity
+  # and three rows, so the per-run figure is their sum — otherwise the first and latest endpoints of
+  # a loop would compare one example against three. A run in which EVERY row of the identity was
+  # untimed sums to SQL NULL, and that NULL is KEPT (never coalesced to zero): an untimed endpoint is
+  # "not reported", not a free run.
+  #
+  # NOT ordered, and deliberately: `test_run_id` is not time order, so ordering here would invite the
+  # caller to read the first and last tuple as the endpoints. The window's own run order decides
+  # which run is oldest and which is newest, and that lives with the caller ({SlowestTests}).
+  #
+  # @return [Array<Array>] `[spec_identity_id, test_run_id, seconds]` per identity per run it appears
+  #   in; `seconds` is `nil` when nothing in that run was timed.
+  def self.identity_run_durations_in(run_ids:, spec_identity_ids:)
+    return [] if run_ids.empty? || spec_identity_ids.empty?
+
+    where(test_run_id: run_ids, spec_identity_id: spec_identity_ids)
+      .group(:spec_identity_id, :test_run_id)
+      .pluck(Arel.sql("spec_identity_id"), Arel.sql("test_run_id"), Arel.sql("SUM(duration_seconds)"))
+  end
+
   # Where ONE run's wall clock went, rolled up by DIRECTORY — the rung directly above the rollup
   # above, and the grain the question is usually asked in. "Which area of this suite carries the
   # time" is not answerable from a ranked list of files any more than it was from a ranked list of

@@ -948,7 +948,10 @@ RSpec.describe "Repository unstable tests", type: :request do
       # RECOUNTED AT 23 by SPGD-1829: the same grouped read now also primes the plotted runs'
       # `layer_durations`, and the window's two endpoints are plotted runs, so the two endpoint run
       # aggregates `LayerWindowGrowth` read are served from the primed memo instead.
-      expect(large_queries.size).to eq(23)
+      #
+      # RECOUNTED AT 24 by SPGD-1836: the "Slowest tests across the window" panel's per-run endpoint
+      # read (its "Window change" column) — ONE grouped statement over the same candidates.
+      expect(large_queries.size).to eq(24)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -964,7 +967,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(23) # 25 before SPGD-1829 primed the endpoints' layer mix
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(24) # 25 before SPGD-1829 primed the endpoints' layer mix; +1 SPGD-1836
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -1011,7 +1014,9 @@ RSpec.describe "Repository unstable tests", type: :request do
       # asked whenever the trajectory is plottable — a gate of that panel, not of this one.
       # MINUS TWO since SPGD-1829: the Suite growth strips' grouped read primes the window endpoints'
       # `layer_counts`, so `LayerWindowGrowth`'s two endpoint mixes (the seventeenth and eighteenth) are free.
-      expect(queries.size).to eq(18)
+      # PLUS ONE since SPGD-1836: the slowest-tests panel's per-run endpoint read — that panel is not
+      # gated by this one's comparability, so it is paid here too.
+      expect(queries.size).to eq(19)
       # What the gate withholds is THIS panel's outcome-narrowed grouping over the WINDOW — the
       # candidate narrowing (`test_run_id IN` + `outcome = 'failed'`, grouped on the identity) and
       # the composition that follows it. The window-narrowed identity groupings that ARE on the

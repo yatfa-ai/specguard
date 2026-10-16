@@ -59,8 +59,9 @@
 # and the number the naive spelling follows is the row count — which is the whole of why it is two
 # steps.
 #
-# Three bounded statements for the whole panel — a gate, a candidate step and a composition — and
-# none of them grows with the size of the suite. The count is not constant in STATE, and that is the
+# Four bounded statements for the whole panel — a gate, a candidate step, a composition and (SPGD-1836)
+# a per-run read of the same candidates giving each its window ENDPOINTS (`first_seconds` /
+# `latest_seconds` / `change`) — and none of them grows with the size of the suite. The count is not constant in STATE, and that is the
 # point of asking the gating question first rather than a shape to be tidied away: a window whose
 # anchor recorded nothing costs one read and stops.
 #
@@ -189,9 +190,36 @@ class SlowestTests
         resolved_count: resolved_rows,
         tuples: identity_ids.empty? ? [] : SpecObservation.identity_duration_composition_in(
           run_ids: runs.map(&:id), spec_identity_ids: identity_ids
-        ))
+        ),
+        endpoints: window_endpoints(runs, identity_ids))
   end
   private_class_method :rank
+
+  # ⭐ The two ENDPOINTS of each candidate's window — its wall clock in the OLDEST and in the NEWEST
+  # run of the window it appears in — as `{ identity_id => [first_seconds, latest_seconds] }`.
+  #
+  # One more grouped read (`SpecObservation.identity_run_durations_in`), issued right after the
+  # composition read over the same candidates and run ids, and skipped when there are no candidates.
+  # The reads' per-run sums are ordered HERE, by the window's own run order (`runs` arrives oldest
+  # first, so a run's index IS its position in time) and never by `test_run_id`: ids are insertion
+  # order, and a run ingested late is stamped back in time, so the id says nothing about which end of
+  # the window a run sits at.
+  #
+  # An endpoint's seconds are `nil` — never `0` — when every row of the test in that run was
+  # untimed (the per-run SUM of NULLs is NULL and is kept). Two endpoints, not a series: a test that
+  # spiked in the middle of the window reads the same as one that never moved.
+  def self.window_endpoints(runs, identity_ids)
+    return {} if identity_ids.empty?
+
+    position = runs.each_with_index.to_h { |run, index| [run.id, index] }
+    SpecObservation.identity_run_durations_in(run_ids: position.keys, spec_identity_ids: identity_ids)
+                   .group_by(&:first)
+                   .transform_values do |per_run|
+      ordered = per_run.sort_by { |(_identity, run_id, _seconds)| position.fetch(run_id) }
+      [ordered.first.last, ordered.last.last]
+    end
+  end
+  private_class_method :window_endpoints
 
   # The anchor must be the ranked repository's own run, and it is CHECKED rather than trusted for
   # {NearDuplicateClusters}' reason — which is this object's reason too, because it is the very same
@@ -214,7 +242,7 @@ class SlowestTests
 
   def initialize(state:, branch: nil, run_count: 0, anchor_run: nil, recorded_count: nil,
                  unresolved_count: nil, candidate_count: nil, resolved_count: nil, timed_count: nil,
-                 tuples: [], layer: nil)
+                 tuples: [], layer: nil, endpoints: {})
     @state = state
     @layer = layer&.to_s
     @branch = branch
@@ -225,7 +253,11 @@ class SlowestTests
     @candidate_count = candidate_count
     @resolved_count = resolved_count
     @timed_count = timed_count
-    @rows = tuples.map { |tuple| Row.new(**ROW_ATTRIBUTES.zip(tuple).to_h) }.sort_by(&:sort_key)
+    @rows = tuples.map do |tuple|
+      attributes = ROW_ATTRIBUTES.zip(tuple).to_h
+      first_seconds, latest_seconds = endpoints[attributes[:spec_identity_id]]
+      Row.new(**attributes, first_seconds: first_seconds, latest_seconds: latest_seconds)
+    end.sort_by(&:sort_key)
   end
 
   # How a composition tuple is read into a `Row`. Built by NAME off
@@ -347,8 +379,14 @@ class SlowestTests
 
   # One durable test, across the whole window — how long it took in total, how much of the window it
   # was seen in, and every description and file it wore while it was.
+  #
+  # `first_seconds` / `latest_seconds` are the test's wall clock in the OLDEST and the NEWEST run of
+  # the window it appears in (per-run SUMs, so a table-driven test compares like with like) — the
+  # two endpoints of the window, not a series. `nil`, never `0`, when that run's rows were all
+  # untimed. See {SlowestTests.window_endpoints}.
   Row = Struct.new(:spec_identity_id, :total_seconds, :recorded_count, :timed_count, :run_count,
-                   :slowest_seconds, :names, :file_paths, :intent_layers, keyword_init: true) do
+                   :slowest_seconds, :names, :file_paths, :intent_layers,
+                   :first_seconds, :latest_seconds, keyword_init: true) do
     # Slowest first, and a test nobody timed is NOT a test that cost nothing: the nil flag leads the
     # key rather than the total being coerced to zero, which is the `DESC NULLS LAST` rule
     # {NearDuplicateClusters} and `.file_durations_in` both sort by. `recorded_count` breaks the tie
@@ -386,6 +424,33 @@ class SlowestTests
     # sixty one-second runs of a cheap one, and a ranking ordered on the sum alone cannot tell the
     # reader which they are looking at.
     def slowest_label = SpecObservation.humanized_duration(slowest_seconds)
+
+    # How the test moved across the window: its newest run's wall clock minus its oldest run's, in
+    # seconds (negative = faster now). `nil` — never `0` — unless BOTH endpoints were timed AND the
+    # test appears in at least two runs: a test seen in one run has one endpoint reported twice, and
+    # a difference of a run with itself would be a measured "did not move" nothing measured.
+    def change
+      return nil if run_count.to_i < 2 || first_seconds.nil? || latest_seconds.nil?
+
+      latest_seconds - first_seconds
+    end
+
+    # The two endpoints and their difference, rendered — "not reported" for a nil, through the same
+    # seam as `#slowest_label`. `#change_label` is signed so a regression reads as one.
+    def first_label = SpecObservation.humanized_duration(first_seconds)
+
+    def latest_label = SpecObservation.humanized_duration(latest_seconds)
+
+    def change_label
+      value = change
+      return "not reported" if value.nil?
+
+      sign = if value.negative? then "−"
+             elsif value.positive? then "+"
+             else ""
+             end
+      "#{sign}#{SpecObservation.humanized_duration(value.abs)}"
+    end
 
     # How much of its own history carried a timing — always the fraction, through the same seam the
     # object above uses, because "9" in a column of "9 of 12" reads as nine of something unstated.

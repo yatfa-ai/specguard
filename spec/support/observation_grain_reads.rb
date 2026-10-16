@@ -402,9 +402,9 @@ module ObservationGrainReads
   #
   # ⚠️ THIS GRAIN IS GATED ON `?branch=`, like the flakiness grain and unlike the run-readings one.
   # Unfiltered, `SlowestTests.for` is never constructed and this grain is EMPTY. Under a branch it is
-  # THREE on a ranked window and ONE on a gating state — the object asks its presence probe first and
-  # returns before the candidate and composition reads, so an unresolved or unrecorded window costs
-  # one. A block bounding this endpoint's reads should expect 0, 1 or 3 and never 2.
+  # FOUR on a ranked window (SPGD-1836 added the per-run endpoint read) and ONE on a gating state —
+  # the object asks its presence probe first and returns before the candidate and composition reads, so an unresolved or unrecorded window costs
+  # one. A block bounding this endpoint's reads should expect 0, 1 or 4 and never 2 or 3.
 
   # The two GROUPED reads. `GROUP BY "spec_observations"."spec_identity_id"` is emitted by
   # `.slowest_identity_candidates_in` and `.identity_duration_composition_in` and by no other read of
@@ -425,6 +425,11 @@ module ObservationGrainReads
   # `MAX` is what keeps it from matching the flakiness composition SPGD-758 moved onto the same
   # GROUP BY column, which aggregates outcomes and never a duration.
   IDENTITY_COMPOSITION = /MAX\(duration_seconds\)/
+
+  # The slowest-tests per-run endpoint read (SPGD-1836) — `.identity_run_durations_in`, the one read
+  # of this table grouping on the identity AND the run. The composite grouping is what keeps it from
+  # matching the composition (identity alone) and from being adopted by the flakiness grain.
+  IDENTITY_RUN_DURATIONS = /GROUP BY "spec_observations"\."spec_identity_id", "spec_observations"\."test_run_id"/
 
   # The gating PRESENCE probe — `.identity_presence_in`, matched on the FILTER aggregate it alone
   # selects. The unquoted `spec_identity_id` here is not incidental: it is an `Arel.sql` literal,
@@ -517,7 +522,7 @@ module ObservationGrainReads
      reads.grep(UNANNOTATED_DEBT_ORDER),
      reads.grep(RUN_READINGS_PROJECTION),
      reads.grep(IDENTITY_PRESENCE) + reads.grep(IDENTITY_CANDIDATES) +
-       reads.grep(IDENTITY_GROUPING).grep(IDENTITY_COMPOSITION),
+       reads.grep(IDENTITY_GROUPING).grep(IDENTITY_COMPOSITION) + reads.grep(IDENTITY_RUN_DURATIONS),
      reads.grep(HISTORY_LAYER_COUNTS_GROUPING)]
   end
 
