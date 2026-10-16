@@ -79,7 +79,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
       # descriptions it wore, and the repeated-in-a-run disclosure. Absent facts are absent keys.
       notes = [fact_of(row, "Recorded under"), fact_of(row, "Also recorded as")].compact
       { name: label_of(test_cell), notes: notes, layers: layers, total: total_cell.text.strip,
-        slowest: slowest_cell.text.strip, change: change_cell.text.strip,
+        slowest: slowest_cell.text.strip, slowest_title: slowest_cell["title"], change: change_cell.text.strip,
         change_sort: change_cell["data-sort"], seen: seen_cell.text.gsub(/\s+/, " ").strip,
         repeated: fact_of(row, "Ran more than once in a run"), timed: timed_cell.text.strip }
     end
@@ -249,6 +249,30 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect(fact_of(steady_row, "First run in window")).to eq("3.00s")
       expect(fact_of(steady_row, "Newest run in window")).to eq("3.00s")
       expect(fact_of(steady_row, "Window change")).to eq("0.00s")
+    end
+
+    # SPGD-1840 — the "Slowest single run" figure gets its LOCATION: a drawer fact and a cell tooltip
+    # naming the commit (short sha) and ingest time of the run that recorded it. The untimed row
+    # says "not reported" rather than naming a run.
+    # @intent: {"entity": "GET /repositories/:id", "action": "locate the slowest run", "behavior": "the drawer carries a Slowest run fact and the Slowest single run cell a title, both naming the short sha of the run that recorded the max, and an untimed row reads not reported", "layer": "request"}
+    it "locates the slowest single run in the drawer and on the cell's tooltip" do
+      repository = create_repository(user: @user)
+      [[1, 5.0], [0, 1.0]].each do |index, duration|
+        ingest(repository, [example_spec(name: "Search index rebuilds a shard", duration: duration,
+                                         file_path: "spec/models/search_spec.rb")],
+               commit_sha: "chg#{index}sha#{format("%07d", index)}", at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository)
+
+      row = row_named("Search index rebuilds a shard")
+      expect(row[:slowest]).to eq("5.00s")
+      expect(row[:slowest_title]).to include("chg1sha")
+      expect(fact_of(row_element("Search index rebuilds a shard"), "Slowest run")).to match(/\Achg1sha · \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\z/)
+
+      get repository_path(window_repository)
+      expect(row_named("Webhook replays a failed delivery")[:slowest_title]).to include("No run")
+      expect(fact_of(row_element("Webhook replays a failed delivery"), "Slowest run")).to eq("not reported")
     end
 
     # @intent: {"entity": "GET /repositories/:id", "action": "render window change sign", "behavior": "a test that got slower reads a plus-signed change with a positive data-sort and the caption states the two-endpoint scope", "layer": "request"}

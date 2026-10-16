@@ -2266,14 +2266,21 @@ class SpecObservation < ApplicationRecord
   # caller to read the first and last tuple as the endpoints. The window's own run order decides
   # which run is oldest and which is newest, and that lives with the caller ({SlowestTests}).
   #
-  # @return [Array<Array>] `[spec_identity_id, test_run_id, seconds]` per identity per run it appears
-  #   in; `seconds` is `nil` when nothing in that run was timed.
+  # SPGD-1840 — the 4th column is that run's `MAX(duration_seconds)`: the single longest row of the
+  # identity in that run. It rides the SAME grouped scan (one more aggregate over rows already being
+  # read, so the tuple count and the query count are unchanged) and is what lets the caller NAME the
+  # run that holds the window's MAX. The max of these per-run maxes is exactly the composition read's
+  # `MAX(duration_seconds)`. `nil` — never zero — when nothing in that run was timed, like the sum.
+  #
+  # @return [Array<Array>] `[spec_identity_id, test_run_id, seconds, slowest_seconds]` per identity per
+  #   run it appears in; both figures are `nil` when nothing in that run was timed.
   def self.identity_run_durations_in(run_ids:, spec_identity_ids:)
     return [] if run_ids.empty? || spec_identity_ids.empty?
 
     where(test_run_id: run_ids, spec_identity_id: spec_identity_ids)
       .group(:spec_identity_id, :test_run_id)
-      .pluck(Arel.sql("spec_identity_id"), Arel.sql("test_run_id"), Arel.sql("SUM(duration_seconds)"))
+      .pluck(Arel.sql("spec_identity_id"), Arel.sql("test_run_id"), Arel.sql("SUM(duration_seconds)"),
+             Arel.sql("MAX(duration_seconds)"))
   end
 
   # Where ONE run's wall clock went, rolled up by DIRECTORY — the rung directly above the rollup
