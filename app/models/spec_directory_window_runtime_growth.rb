@@ -41,6 +41,8 @@
 # decided from rows already in memory, so a window that cannot be compared issues NO observation
 # read; a comparable one issues exactly one.
 class SpecDirectoryWindowRuntimeGrowth
+  include SpecDirectoryWindowContext
+
   STATES = %i[anchor_unmeasured no_earlier_run no_measured_baseline no_comparable_composition
               neither_recorded baseline_unrecorded anchor_unrecorded
               neither_timed baseline_untimed anchor_untimed comparable].freeze
@@ -59,35 +61,14 @@ class SpecDirectoryWindowRuntimeGrowth
   #   area `new_area?`; at the anchor only, every area `removed_area?`; at both, `comparable` with no
   #   rows ({#layer_empty?}) — a defined answer, not `neither_recorded`.
   def self.for(runs, branch: nil, limit: SpecObservation::RETIMED_DIRECTORIES_LIMIT, layer: nil)
-    layer = layer&.to_s
-    baseline = WindowBaseline.for(runs)
-    context = { branch: branch, window_run_count: baseline.window_run_count, anchor_run: baseline.anchor,
-                skipped_unmeasured_count: baseline.skipped_unmeasured_count,
-                skipped_assembled_differently_count: baseline.skipped_assembled_differently_count,
-                layer: layer }
+    resolve_window(runs, branch: branch, layer: layer) do |baseline, context, narrowed|
+      sides = narrowed && { baseline_has_layer: baseline.run.layer_counts.fetch(narrowed.to_sym, 0).positive?,
+                            anchor_has_layer: baseline.anchor.layer_counts.fetch(narrowed.to_sym, 0).positive? }
 
-    return new(state: baseline.state, **context) unless baseline.found?
-
-    context = context.merge(baseline_run: baseline.run, runs_back: baseline.runs_back)
-    sides = nil
-
-    if layer
-      # `layer_counts` is nil exactly when the run recorded no per-example rows (`intent_readings.recorded?`
-      # false) — the same fact, read off the value the window's one grouped read primes (SPGD-1829), so the
-      # endpoints cost no run-grain aggregate of their own.
-      baseline_recorded = !baseline.run.layer_counts.nil?
-      anchor_recorded = !baseline.anchor.layer_counts.nil?
-      return new(state: :neither_recorded, **context) unless baseline_recorded || anchor_recorded
-      return new(state: :baseline_unrecorded, **context) unless baseline_recorded
-      return new(state: :anchor_unrecorded, **context) unless anchor_recorded
-
-      sides = { baseline_has_layer: baseline.run.layer_counts.fetch(layer.to_sym, 0).positive?,
-                anchor_has_layer: baseline.anchor.layer_counts.fetch(layer.to_sym, 0).positive? }
+      from_tuples(SpecObservation.directory_runtime_growth_between(baseline.anchor, baseline.run,
+                                                                   limit: limit, layer: narrowed),
+                  sides, **context)
     end
-
-    from_tuples(SpecObservation.directory_runtime_growth_between(baseline.anchor, baseline.run,
-                                                                 limit: limit, layer: layer),
-                sides, **context)
   end
 
   # The five totals ride on every row and are identical on all of them, so they are read off the
@@ -129,82 +110,16 @@ class SpecDirectoryWindowRuntimeGrowth
   end
   private_class_method :from_tuples
 
-  def initialize(state:, branch: nil, window_run_count: 0, anchor_run: nil, baseline_run: nil,
-                 runs_back: 0, skipped_unmeasured_count: 0, skipped_assembled_differently_count: 0,
-                 rows: [], directory_count: 0, baseline_recorded_count: 0, anchor_recorded_count: 0,
-                 baseline_timed_count: 0, anchor_timed_count: 0, layer: nil)
-    @layer = layer&.to_s
-    @state = state
-    @branch = branch
-    @window_run_count = window_run_count
-    @anchor_run = anchor_run
-    @baseline_run = baseline_run
-    @runs_back = runs_back
-    @skipped_unmeasured_count = skipped_unmeasured_count
-    @skipped_assembled_differently_count = skipped_assembled_differently_count
-    @rows = rows
-    @directory_count = directory_count
-    @baseline_recorded_count = baseline_recorded_count
-    @anchor_recorded_count = anchor_recorded_count
+  def initialize(baseline_timed_count: 0, anchor_timed_count: 0, **window)
+    super(**window)
     @baseline_timed_count = baseline_timed_count
     @anchor_timed_count = anchor_timed_count
   end
 
-  # Which of the eleven states this is — one comparable, ten not. Different facts about the window, so
-  # the one that applies is named rather than collapsed into "cannot compare".
-  attr_reader :state
-
-  # The branch every figure here was drawn on.
-  attr_reader :branch
-
-  # How many runs the window HOLDS. Not how many the comparison spans: see {#covered_run_count}.
-  attr_reader :window_run_count
-
-  # The two runs the comparison was taken across; the baseline is nil where the walk found none.
-  attr_reader :anchor_run, :baseline_run
-
-  # How many runs back in the window the baseline sits.
-  attr_reader :runs_back
-
-  # How many runs OLDER than the baseline the walk stepped over, split by which condition rejected
-  # them.
-  attr_reader :skipped_unmeasured_count, :skipped_assembled_differently_count
-
-  # The comparison, largest movement in seconds first (areas an end did not time last). Never longer
-  # than the limit, and empty in every non-comparable state.
-  attr_reader :rows
-
-  # How many areas the comparison COVERED, counted before the `LIMIT`.
-  attr_reader :directory_count
-
-  # How many per-example rows each end recorded, and how many carried a timing — the denominators
-  # every figure is stated against. The LAYER's own when a layer was asked.
-  attr_reader :baseline_recorded_count, :anchor_recorded_count
+  # How many per-example rows each end recorded ({#baseline_recorded_count}, {#anchor_recorded_count})
+  # and how many carried a timing — the denominators every figure is stated against. The LAYER's own
+  # when a layer was asked.
   attr_reader :baseline_timed_count, :anchor_timed_count
-
-  # The declared layer this comparison was narrowed to, or nil. Carried in EVERY state, the walk's
-  # refusals included, so a contract block can say which layer's comparison was refused.
-  attr_reader :layer
-
-  def comparable? = state == :comparable
-
-  def layer? = !layer.nil?
-
-  # A layer was asked and NEITHER end has a single example of it: comparable, and empty.
-  def layer_empty? = layer? && comparable? && rows.empty?
-
-  def covered_run_count = runs_back + 1
-
-  def shortened? = skipped_count.positive?
-
-  def skipped_count = skipped_unmeasured_count + skipped_assembled_differently_count
-
-  # There are areas the comparison covered that the list does not show.
-  def truncated? = directory_count > rows.size
-
-  # At least one listed area's summed duration actually moved. The ranking is by absolute movement
-  # descending, so a false here is a claim about every area the comparison covered.
-  def any_movement? = rows.any?(&:moved?)
 
   # At least one LISTED area has both ends timed and did not move.
   def any_unmoved? = rows.any? { |row| row.comparable? && !row.moved? }

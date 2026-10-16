@@ -101,6 +101,8 @@
 # of them come back from one grouped aggregate or from the two runs the object chose, and the object
 # holds the rows and the sentences about them together.
 class SpecDirectoryWindowGrowth
+  include SpecDirectoryWindowContext
+
   # Builds the comparison, or the stated reason there isn't one.
   #
   # @param runs [RunWindow, Array<TestRun>] the window, ALREADY LOADED, handed in as a {RunWindow}
@@ -133,34 +135,11 @@ class SpecDirectoryWindowGrowth
   #   not `neither_recorded`. The walk's four states are unchanged and carry the layer so the
   #   contract block can echo it.
   def self.for(runs, branch: nil, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT, layer: nil)
-    layer = layer&.to_s
-    baseline = WindowBaseline.for(runs)
-    context = { branch: branch, window_run_count: baseline.window_run_count, anchor_run: baseline.anchor,
-                skipped_unmeasured_count: baseline.skipped_unmeasured_count,
-                skipped_assembled_differently_count: baseline.skipped_assembled_differently_count,
-                layer: layer }
-
-    # Not found: the state is the walk's own — see {WindowBaseline} for the three it can name and
-    # the precedence between the two the walk produces. The walk is shared with {LayerWindowGrowth},
-    # so the two presenters cannot land on different baselines for one window.
-    return new(state: baseline.state, **context) unless baseline.found?
-
-    context = context.merge(baseline_run: baseline.run, runs_back: baseline.runs_back)
-
-    if layer
-      # `layer_counts` is nil exactly when the run recorded no per-example rows (`intent_readings.recorded?`
-      # false) — the same fact, read off the value the window's one grouped read primes (SPGD-1829), so the
-      # endpoints cost no run-grain aggregate of their own.
-      baseline_recorded = !baseline.run.layer_counts.nil?
-      anchor_recorded = !baseline.anchor.layer_counts.nil?
-      return new(state: :neither_recorded, **context) unless baseline_recorded || anchor_recorded
-      return new(state: :baseline_unrecorded, **context) unless baseline_recorded
-      return new(state: :anchor_unrecorded, **context) unless anchor_recorded
+    resolve_window(runs, branch: branch, layer: layer) do |baseline, context, narrowed|
+      from_tuples(SpecObservation.directory_growth_between(baseline.anchor, baseline.run, limit: limit,
+                                                                                          layer: narrowed),
+                  **context)
     end
-
-    from_tuples(SpecObservation.directory_growth_between(baseline.anchor, baseline.run, limit: limit,
-                                                                                      layer: layer),
-                **context)
   end
 
   # The three window totals ride on every row of the aggregate and are identical on all of them, so
@@ -197,112 +176,6 @@ class SpecDirectoryWindowGrowth
     new(state: :comparable, rows: rows, **context, **totals)
   end
   private_class_method :from_tuples
-
-  def initialize(state:, branch: nil, window_run_count: 0, anchor_run: nil, baseline_run: nil,
-                 runs_back: 0, skipped_unmeasured_count: 0, skipped_assembled_differently_count: 0,
-                 rows: [], directory_count: 0, baseline_recorded_count: 0, anchor_recorded_count: 0,
-                 layer: nil)
-    @layer = layer&.to_s
-    @state = state
-    @branch = branch
-    @window_run_count = window_run_count
-    @anchor_run = anchor_run
-    @baseline_run = baseline_run
-    @runs_back = runs_back
-    @skipped_unmeasured_count = skipped_unmeasured_count
-    @skipped_assembled_differently_count = skipped_assembled_differently_count
-    @rows = rows
-    @directory_count = directory_count
-    @baseline_recorded_count = baseline_recorded_count
-    @anchor_recorded_count = anchor_recorded_count
-  end
-
-  # Which of the eight states this is — one comparable, seven not. A symbol rather than a boolean
-  # because the seven absences are different facts about the window and a reader is owed the one
-  # that applies: "every earlier run on this branch reported no tests", "they were all assembled
-  # differently from this one" and "the run at the far end recorded no per-example rows" are one
-  # blank panel and three different things to go and fix.
-  attr_reader :state
-
-  # The branch every figure here was drawn on — the trajectory's branch, because a comparison taken
-  # across branches is a comparison of different code.
-  attr_reader :branch
-
-  # How many runs the window HOLDS. Not how many the comparison spans: see `#covered_run_count`.
-  attr_reader :window_run_count
-
-  # The two runs the comparison was actually taken across. The anchor is the newest run of the
-  # window; the baseline is the oldest one that could be compared against it, and is nil in the
-  # states where the walk found none.
-  attr_reader :anchor_run, :baseline_run
-
-  # How many runs back in the window the baseline sits — 29 for a full thirty-run comparison, and
-  # less whenever the walk stepped over something. Stated rather than assumed, because it is the
-  # difference between the window a reader was promised and the one they were shown.
-  attr_reader :runs_back
-
-  # How many runs OLDER than the baseline the walk stepped over, split by which condition rejected
-  # them. Split rather than summed because they are two different repairs — a client that stopped
-  # reporting totals, and a branch whose sharding changed — and because a bare "4 runs were skipped"
-  # is a fact a reader cannot act on.
-  attr_reader :skipped_unmeasured_count, :skipped_assembled_differently_count
-
-  # The comparison, largest movement first. Never longer than the limit it was built with, and empty
-  # in every non-comparable state.
-  attr_reader :rows
-
-  # How many areas the comparison COVERED in total — every directory either run recorded a row in,
-  # counted before the `LIMIT` and therefore not `rows.size`. The list is capped, so its own length
-  # answers "how many rows am I looking at" and nothing else; a caption built on it would read "the
-  # areas that grew most" on a page showing ten of sixty-three.
-  attr_reader :directory_count
-
-  # How many per-example rows each end of the comparison recorded in total — the denominators the
-  # recorded-rows condition turned on, kept so the caption can state what the panel was measured
-  # over. Deliberately NOT `TestRun#total_specs_count`: that column is re-derived by SUM over shard
-  # reports and can legitimately differ from the rows the run actually wrote here, and every figure
-  # on this panel is counted off those rows.
-  attr_reader :baseline_recorded_count, :anchor_recorded_count
-
-  def comparable? = state == :comparable
-
-  # The declared layer this comparison was narrowed to (a `SpecObservation::DECLARED_LAYER_KEYS`
-  # member as a String), or nil when it was not — in which case every figure on this object is the
-  # un-narrowed one. With a layer, `directory_count` and both recorded counts are the LAYER's, and
-  # it is carried in EVERY state, the walk's refusals included, so the contract block can say which
-  # layer's comparison was refused.
-  attr_reader :layer
-
-  def layer? = !layer.nil?
-
-  # A layer was asked and NEITHER end of the window has a single example of it: comparable, and
-  # empty. Distinct from every refusal state — both ends recorded per-example rows, the layer just
-  # has none in either — so the panel can say "no <layer> examples at either end" instead of a
-  # table of nothing.
-  def layer_empty? = layer? && comparable? && rows.empty?
-
-  # How many runs of the window the comparison actually SPANS, endpoints included. Equal to
-  # `window_run_count` only where the walk stepped over nothing.
-  def covered_run_count = runs_back + 1
-
-  # The walk stepped over at least one run, so the comparison spans less of the window than the
-  # window holds — the caption's cue to say so rather than let a thirty-run heading stand over a
-  # twenty-six-run comparison.
-  def shortened? = skipped_count.positive?
-
-  def skipped_count = skipped_unmeasured_count + skipped_assembled_differently_count
-
-  # There are areas the comparison covered that the list does not show.
-  def truncated? = directory_count > rows.size
-
-  # At least one listed area's example count actually moved across the window. False for two
-  # endpoints that recorded the same number of examples in every area — a real answer, and one worth
-  # saying in words rather than showing as a table of `±0` under a heading promising areas that grew.
-  #
-  # Asked of the LISTED rows, which is sound in exactly one direction and that is the direction this
-  # needs: the ranking is by absolute movement descending, so if any area moved at all the top row
-  # is one that did. A false here is therefore a claim about every area the comparison covered.
-  def any_movement? = rows.any?(&:moved?)
 
   # At least one LISTED area did not move. The ranking is by absolute movement descending and the
   # list is capped, so unmoved areas can only appear in its tail — exactly when fewer areas moved
