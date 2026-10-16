@@ -1928,6 +1928,7 @@ RSpec.describe SpecObservation do
         expect(tuples.map { |tuple| tuple[0] }.uniq).to eq([identity_ids[6]])
         expect(tuples.map { |tuple| tuple[1] }).to match_array(window_ids)
         expect(tuples.map { |tuple| tuple[2] }).to all(be_within(0.0001).of(100.0 / 7))
+        expect(tuples.map { |tuple| tuple[3] }).to all(be_within(0.0001).of(100.0 / 7))
       end
 
       # @intent: { entity: "SpecObservation", action: "read each candidate's wall clock per run of the window", behavior: "a run in which every row of the identity was untimed reports a nil sum and never zero", layer: "unit" }
@@ -1937,7 +1938,8 @@ RSpec.describe SpecObservation do
         )
 
         expect(tuples.length).to eq(6)
-        expect(tuples.map(&:last)).to all(be_nil)
+        expect(tuples.map { |tuple| tuple[2] }).to all(be_nil)
+        expect(tuples.map { |tuple| tuple[3] }).to all(be_nil)
       end
 
       # @intent: { entity: "SpecObservation", action: "read each candidate's wall clock per run of the window", behavior: "an identity with several rows in one run is summed within that run rather than split into one tuple per row", layer: "unit" }
@@ -1953,7 +1955,8 @@ RSpec.describe SpecObservation do
         )
 
         expect(tuples.length).to eq(1)
-        expect(tuples.first.last).to be_within(0.0001).of(2 * (100.0 / 7))
+        expect(tuples.first[2]).to be_within(0.0001).of(2 * (100.0 / 7))
+        expect(tuples.first[3]).to be_within(0.0001).of(100.0 / 7) # the longest single row, not the sum
       end
 
       # @intent: { entity: "SpecObservation", action: "read each candidate's wall clock per run of the window", behavior: "only the handed window's runs contribute", layer: "unit" }

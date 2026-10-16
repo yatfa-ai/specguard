@@ -312,6 +312,81 @@ RSpec.describe SlowestTests do
     end
   end
 
+  # SPGD-1840 — the run that recorded a row's `slowest_seconds`, located by identity.
+  describe "locating the slowest single run" do
+    let(:spiker) { identity("Export renders the annual report") }
+    let(:reworded) { identity("Import maps the legacy columns") }
+    let(:silent) { identity("Audit trail is written") }
+    let(:flat) { identity("Login accepts a valid password") }
+
+    subject(:ranking) { described_class.for(repository, runs, branch: "main") }
+
+    before do
+      # Spikes in the MIDDLE of the window: neither endpoint carries it.
+      [1.0, 19.0, 2.0, 1.0].each_with_index do |seconds, index|
+        observe(runs[index], spec_identity: spiker, name: "spiker", path: "spec/export_spec.rb", duration: seconds)
+      end
+      # The max predates the current name: run 0 under the old spelling, the rest under the new one.
+      [8.0, 2.0, 2.0, 2.0].each_with_index do |seconds, index|
+        observe(runs[index], spec_identity: reworded, name: index.zero? ? "maps legacy columns" : "maps the legacy columns",
+                             path: "spec/import_spec.rb", duration: seconds)
+      end
+      runs.each { |run| observe(run, spec_identity: silent, name: "silent", path: "spec/audit_spec.rb", duration: nil) }
+      # A tie: the OLDEST run holding the value is the one named.
+      [3.0, 3.0, 1.0, 3.0].each_with_index do |seconds, index|
+        observe(runs[index], spec_identity: flat, name: "flat", path: "spec/login_spec.rb", duration: seconds)
+      end
+    end
+
+    def row_for(identity) = ranking.rows.find { |row| row.spec_identity_id == identity.id }
+
+    # @intent: { entity: "SlowestTests", action: "locate the slowest run", behavior: "a row names the commit and ingest time of the run that recorded its single longest duration, even mid-window", layer: "unit" }
+    it "names the run that holds the max, wherever it sits in the window" do
+      row = row_for(spiker)
+
+      expect(row.slowest_seconds).to eq(19.0)
+      expect(row.slowest_run_commit_sha).to eq(runs[1].commit_sha)
+      expect(row.slowest_run_ingested_at).to eq(runs[1].created_at)
+      expect(row.slowest_run_label).to start_with(runs[1].commit_sha.first(7))
+    end
+
+    # @intent: { entity: "SlowestTests", action: "locate the slowest run", behavior: "the located run's own max equals slowest_seconds exactly on every row", layer: "unit" }
+    it "keeps the located run's own max equal to slowest_seconds on every row" do
+      timed = ranking.rows.select(&:timed?)
+
+      expect(timed).not_to be_empty
+      timed.each { |row| expect(row.slowest_run_seconds).to eq(row.slowest_seconds) }
+    end
+
+    # @intent: { entity: "SlowestTests", action: "locate the slowest run", behavior: "an untimed row has nil location keys and an unreported label, never a zero", layer: "unit" }
+    it "leaves the location nil, never zero, for a test nothing timed" do
+      row = row_for(silent)
+
+      expect([row.slowest_run_commit_sha, row.slowest_run_ingested_at, row.slowest_run_seconds]).to all(be_nil)
+      expect(row.slowest_run_label).to eq("not reported")
+    end
+
+    # ⭐ The case the description-keyed drill-in cannot reach.
+    # @intent: { entity: "SlowestTests", action: "locate the slowest run", behavior: "a renamed test whose max predates its current name still names the run that recorded it", layer: "unit" }
+    it "names the run for a renamed test whose max predates the current name" do
+      row = row_for(reworded)
+
+      expect(row.renamed?).to be true
+      expect(row.slowest_seconds).to eq(8.0)
+      expect(row.slowest_run_commit_sha).to eq(runs[0].commit_sha)
+    end
+
+    # @intent: { entity: "SlowestTests", action: "locate the slowest run", behavior: "when several runs tie for the max the oldest is named", layer: "unit" }
+    it "names the oldest run when runs tie for the max" do
+      expect(row_for(flat).slowest_run_commit_sha).to eq(runs[0].commit_sha)
+    end
+
+    # @intent: { entity: "SlowestTests", action: "bound the reads", behavior: "locating the slowest run adds no query: still four", layer: "unit" }
+    it "adds no query to locate it" do
+      expect(count_queries { described_class.for(repository, runs, branch: "main").rows }).to eq(4)
+    end
+  end
+
   # SPGD-1836 — `Row#change` and its labels, on the rule that a missing endpoint is never a zero.
   describe SlowestTests::Row do
     def row(**attrs)

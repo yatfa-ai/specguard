@@ -196,7 +196,14 @@ class SlowestTests
   private_class_method :rank
 
   # ⭐ The two ENDPOINTS of each candidate's window — its wall clock in the OLDEST and in the NEWEST
-  # run of the window it appears in — as `{ identity_id => [first_seconds, latest_seconds] }`.
+  # run of the window it appears in — as `{ identity_id => [first_seconds, latest_seconds,
+  # slowest_run, slowest_run_seconds] }`.
+  #
+  # SPGD-1840: the last two LOCATE the row's `slowest_seconds`. The same per-run tuples carry each
+  # run's `MAX(duration_seconds)`, so the run holding the window's MAX is the argmax of those, picked
+  # here by identity (never by description, so a test whose max predates its current name still names
+  # its run). On a tie the OLDEST run holding the value wins — the one a reader bisects from. Both
+  # are `nil` — never `0` — when no run of the test was timed. `slowest_run` is the `TestRun` itself.
   #
   # One more grouped read (`SpecObservation.identity_run_durations_in`), issued right after the
   # composition read over the same candidates and run ids, and skipped when there are no candidates.
@@ -215,8 +222,10 @@ class SlowestTests
     SpecObservation.identity_run_durations_in(run_ids: position.keys, spec_identity_ids: identity_ids)
                    .group_by(&:first)
                    .transform_values do |per_run|
-      ordered = per_run.sort_by { |(_identity, run_id, _seconds)| position.fetch(run_id) }
-      [ordered.first.last, ordered.last.last]
+      ordered = per_run.sort_by { |(_identity, run_id, _seconds, _slowest)| position.fetch(run_id) }
+      # `max_by` returns the FIRST maximal element, i.e. the oldest run on a tie.
+      slowest = ordered.reject { |tuple| tuple[3].nil? }.max_by { |tuple| tuple[3] }
+      [ordered.first[2], ordered.last[2], (runs[position.fetch(slowest[1])] if slowest), slowest&.at(3)]
     end
   end
   private_class_method :window_endpoints
@@ -255,8 +264,11 @@ class SlowestTests
     @timed_count = timed_count
     @rows = tuples.map do |tuple|
       attributes = ROW_ATTRIBUTES.zip(tuple).to_h
-      first_seconds, latest_seconds = endpoints[attributes[:spec_identity_id]]
-      Row.new(**attributes, first_seconds: first_seconds, latest_seconds: latest_seconds)
+      first_seconds, latest_seconds, slowest_run, slowest_run_seconds = endpoints[attributes[:spec_identity_id]]
+      Row.new(**attributes, first_seconds: first_seconds, latest_seconds: latest_seconds,
+                            slowest_run_commit_sha: slowest_run&.commit_sha,
+                            slowest_run_ingested_at: slowest_run&.created_at,
+                            slowest_run_seconds: slowest_run_seconds)
     end.sort_by(&:sort_key)
   end
 
@@ -386,7 +398,8 @@ class SlowestTests
   # untimed. See {SlowestTests.window_endpoints}.
   Row = Struct.new(:spec_identity_id, :total_seconds, :recorded_count, :timed_count, :run_count,
                    :slowest_seconds, :names, :file_paths, :intent_layers,
-                   :first_seconds, :latest_seconds, keyword_init: true) do
+                   :first_seconds, :latest_seconds, :slowest_run_commit_sha, :slowest_run_ingested_at,
+                   :slowest_run_seconds, keyword_init: true) do
     # Slowest first, and a test nobody timed is NOT a test that cost nothing: the nil flag leads the
     # key rather than the total being coerced to zero, which is the `DESC NULLS LAST` rule
     # {NearDuplicateClusters} and `.file_durations_in` both sort by. `recorded_count` breaks the tie
@@ -424,6 +437,16 @@ class SlowestTests
     # sixty one-second runs of a cheap one, and a ranking ordered on the sum alone cannot tell the
     # reader which they are looking at.
     def slowest_label = SpecObservation.humanized_duration(slowest_seconds)
+
+    # WHERE that single longest run was recorded (SPGD-1840): the commit and ingest time of the run
+    # holding `slowest_seconds` (`slowest_run_seconds` is that run's own max, equal to it exactly).
+    # Located by identity across the window, so it survives a rename. `nil` — never a fabricated
+    # run — when the test was never timed; `#slowest_run_label` then reads "not reported".
+    def slowest_run_label
+      return "not reported" if slowest_run_commit_sha.nil?
+
+      "#{slowest_run_commit_sha.first(7)} · #{slowest_run_ingested_at&.utc&.strftime("%Y-%m-%d %H:%M UTC")}"
+    end
 
     # How the test moved across the window: its newest run's wall clock minus its oldest run's, in
     # seconds (negative = faster now). `nil` — never `0` — unless BOTH endpoints were timed AND the

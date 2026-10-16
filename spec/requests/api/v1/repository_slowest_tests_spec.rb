@@ -203,7 +203,8 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       expect(block["rows"].first.keys).to contain_exactly(
         "spec_identity_id", "total_seconds", "slowest_seconds", "run_count", "recorded_count",
         "timed_count", "untimed_count", "timed", "repeated_within_run", "moved", "renamed",
-        "descriptions", "files_seen", "declared_layers", "first_seconds", "latest_seconds", "change"
+        "descriptions", "files_seen", "declared_layers", "first_seconds", "latest_seconds", "change",
+        "slowest_run_commit_sha", "slowest_run_ingested_at"
       )
     end
 
@@ -270,7 +271,8 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       untimed = row_described(block, UNTIMED)
       expect(untimed).to include(
         "total_seconds" => nil, "slowest_seconds" => nil, "timed" => false,
-        "timed_count" => 0, "recorded_count" => 4, "untimed_count" => 4
+        "timed_count" => 0, "recorded_count" => 4, "untimed_count" => 4,
+        "slowest_run_commit_sha" => nil, "slowest_run_ingested_at" => nil
       )
       expect(block["rows"].last).to eq(untimed)
     end
@@ -714,6 +716,27 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       expect(endpoints_of(block, FIXED)).to eq("first_seconds" => 13.0, "latest_seconds" => 1.0, "change" => -12.0)
       expect(endpoints_of(block, REGRESSED)).to eq("first_seconds" => 1.0, "latest_seconds" => 9.0, "change" => 8.0)
       expect(endpoints_of(block, FLAT)).to eq("first_seconds" => 2.0, "latest_seconds" => 2.0, "change" => 0.0)
+    end
+
+    # SPGD-1840 — the two keys that LOCATE `slowest_seconds`. REGRESSED peaks in the NEWEST run, FIXED
+    # in the OLDEST; the commit is read off the window's run, and the instant off its ingest stamp.
+    # @intent: { entity: "SlowestTests", action: "serve the slowest run", behavior: "each test serves the commit sha and ISO ingest time of the run holding its slowest_seconds, and null for both when nothing was timed", layer: "request" }
+    it "serves the commit and ingest time of the run that recorded each test's slowest figure" do
+      endpoint_window
+      _window, block = blocks(query: { branch: "main" })
+      located = lambda do |name|
+        row = row_described(block, name)
+        [row["slowest_seconds"], row["slowest_run_commit_sha"], row["slowest_run_ingested_at"]]
+      end
+      run_at = ->(index) { repository.test_runs.find_by!(commit_sha: "end#{index}sha#{format("%07d", index)}") }
+
+      expect(located.call(FIXED)).to eq([13.0, run_at.call(0).commit_sha, run_at.call(0).created_at.iso8601])
+      expect(located.call(REGRESSED)).to eq([9.0, run_at.call(3).commit_sha, run_at.call(3).created_at.iso8601])
+      # A tie (4.0 in runs 2 and 3, untimed before): the OLDEST run holding the max is named.
+      tied = row_described(block, UNTIMED_FIRST)
+      expect(tied.slice("slowest_run_commit_sha", "slowest_run_ingested_at"))
+        .to eq("slowest_run_commit_sha" => run_at.call(2).commit_sha,
+               "slowest_run_ingested_at" => run_at.call(2).created_at.iso8601)
     end
 
     # The list is still ordered on the window SUM — the endpoints ride beside it and re-rank nothing.

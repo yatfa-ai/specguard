@@ -614,6 +614,11 @@ class RepositoryWindowRankingSerializer
   # run's cost. Each endpoint is `null` — never `0` — when that run's rows were all untimed, and
   # `change` is `null` unless both are non-null and the test appears in at least two runs.
   #
+  # `slowest_run_commit_sha` / `slowest_run_ingested_at` LOCATE `slowest_seconds` (SPGD-1840): the
+  # commit and ingest time of the window's run that recorded that single longest figure — the commit
+  # to bisect from. Matched by durable identity (a rename does not lose it); the oldest run wins a
+  # tie. Both are `null` — never a placeholder — when the test was never timed.
+  #
   # `timed` / `timed_count` / `untimed_count` keep a blank duration from being read as a zero. A row
   # that reaches this list untimed is ordinary, not a defect: an example that never ran has no
   # duration to report.
@@ -622,6 +627,8 @@ class RepositoryWindowRankingSerializer
       spec_identity_id: row.spec_identity_id,
       total_seconds: row.total_seconds,
       slowest_seconds: row.slowest_seconds,
+      slowest_run_commit_sha: row.slowest_run_commit_sha,
+      slowest_run_ingested_at: row.slowest_run_ingested_at&.iso8601,
       first_seconds: row.first_seconds,
       latest_seconds: row.latest_seconds,
       change: row.change,

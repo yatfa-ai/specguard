@@ -424,7 +424,12 @@ module ObservationGrainReads
   # The slowest-tests composition — the one identity-grained read selecting `MAX(duration_seconds)`.
   # `MAX` is what keeps it from matching the flakiness composition SPGD-758 moved onto the same
   # GROUP BY column, which aggregates outcomes and never a duration.
-  IDENTITY_COMPOSITION = /MAX\(duration_seconds\)/
+  #
+  # SPGD-1840: the per-run endpoint read now selects `MAX(duration_seconds)` too (to locate the
+  # slowest run), so `MAX` alone no longer separates the two. The composition is the one that does
+  # NOT group on the run as well — the lookahead excludes `IDENTITY_RUN_DURATIONS`' composite grouping.
+  IDENTITY_COMPOSITION =
+    /\A(?=.*MAX\(duration_seconds\))(?!.*GROUP BY "spec_observations"\."spec_identity_id", "spec_observations"\."test_run_id")/m
 
   # The slowest-tests per-run endpoint read (SPGD-1836) — `.identity_run_durations_in`, the one read
   # of this table grouping on the identity AND the run. The composite grouping is what keeps it from
