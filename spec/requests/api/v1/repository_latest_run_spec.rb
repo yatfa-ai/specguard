@@ -2326,7 +2326,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "ingested_at" => third.created_at.iso8601,
         # `create_test_run` stores no per-example rows, so this run has no declared-layer mix to
         # state: NULL, never five zeros. The populated shape is pinned in repository_history_layer_counts_spec.rb.
-        "layer_counts" => nil
+        "layer_counts" => nil,
+        # The machine-time twin of `layer_counts`, on the same rule: NULL for a run with no per-example rows.
+        "layer_durations" => nil
       )
     end
 
@@ -2390,11 +2392,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(row.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at",
-        "layer_counts"
+        "layer_counts", "layer_durations"
       )
-      # `layer_counts` is APPENDED: every earlier key keeps its position, so a client reading rows
-      # positionally or diffing key lists sees only an addition at the end.
-      expect(row.keys.last).to eq("layer_counts")
+      # `layer_counts` then `layer_durations` are APPENDED: every earlier key keeps its position, so a
+      # client reading rows positionally or diffing key lists sees only additions at the end.
+      expect(row.keys.last(2)).to eq(%w[layer_counts layer_durations])
     end
 
     # AC. Every figure re-derived straight from the table, in the ordering the model documents —
@@ -2911,9 +2913,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at",
-        "layer_counts"
+        "layer_counts", "layer_durations"
       )
-      expect(body["history"].first.keys.last).to eq("layer_counts")
+      expect(body["history"].first.keys.last(2)).to eq(%w[layer_counts layer_durations])
     end
 
     # AC8. The rows are `recent_test_runs`' own ordering, tie-break included, and the branch

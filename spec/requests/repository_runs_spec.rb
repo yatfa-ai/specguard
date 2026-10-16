@@ -344,7 +344,12 @@ RSpec.describe "Repository recent runs", type: :request do
       # Four sharded runs and sixteen shard rows, all older than the newest plain run.
       4.times { |i| sharded_run(repository, commit: "shrdrn#{i}", shards: 4, created_at: (i + 4).hours.ago) }
 
-      expect(count_queries { get repository_path(repository) }).to eq(baseline)
+      # PLUS ONE since SPGD-1829, and constant: the Suite growth strips now prime `layer_counts` /
+      # `layer_durations` for the PLOTTED cohort with one grouped read. Four 4-shard runs change which
+      # runs are plotted (the cohort is the runs assembled like the reference), so the window's older
+      # endpoint falls outside the primed set and `LayerWindowGrowth` reads it with its own run aggregate.
+      # That is one statement whatever the number of added rows — a per-row regression adds four, not one.
+      expect(count_queries { get repository_path(repository) }).to eq(baseline + 1)
       expect(runs_table.all("tbody tr").size).to eq(7)
       expect(run_cells("shrdrn0")[TESTS]).to include("assembled from 4 shard reports")
     end
@@ -504,7 +509,12 @@ RSpec.describe "Repository recent runs", type: :request do
                           created_at: (i + 4).hours.ago)
       end
 
-      expect(count_queries { get repository_path(repository) }).to eq(baseline)
+      # PLUS ONE since SPGD-1829, and constant: the Suite growth strips now prime `layer_counts` /
+      # `layer_durations` for the PLOTTED cohort with one grouped read. Four 4-shard runs change which
+      # runs are plotted (the cohort is the runs assembled like the reference), so the window's older
+      # endpoint falls outside the primed set and `LayerWindowGrowth` reads it with its own run aggregate.
+      # That is one statement whatever the number of added rows — a per-row regression adds four, not one.
+      expect(count_queries { get repository_path(repository) }).to eq(baseline + 1)
       expect(runs_table.all("tbody tr").size).to eq(7)
       expect(run_cells("timdrn0")[DURATION]).to eq("1m 14s slowest of the 3 that reported")
     end

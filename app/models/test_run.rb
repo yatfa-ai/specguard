@@ -80,7 +80,24 @@ class TestRun < ApplicationRecord
   # (the same rule as `layer_counts`). `total_seconds` is NIL, never 0, for a layer none of whose
   # examples carried a duration; `timed_count` says over how many of the layer's examples it was
   # summed. A SUM OF EXAMPLE DURATIONS (machine time), not wall clock.
-  def layer_durations = run_counts[2]
+  #
+  # Honours a primed memo (see {#preload_layer_durations}) — including a primed NIL — on the same
+  # terms as {#layer_counts}.
+  def layer_durations
+    return @layer_durations if defined?(@layer_durations)
+
+    run_counts[2]
+  end
+
+  # Hand this run the per-layer TIME a caller has already summed for a whole window of runs
+  # (`ShardCountPreloading#preload_layer_mix`, from `SpecObservation.run_layer_counts_and_durations_for`).
+  # Primes ONLY `layer_durations` — never `intent_readings` — and `nil` primes nil: a run with no
+  # recorded rows has no time to state and must not fall back to a per-run aggregate. A named method
+  # rather than an `attr_writer`, on the rule {#preload_layer_counts} states.
+  def preload_layer_durations(durations)
+    @layer_durations = durations
+    self
+  end
 
   def run_counts = @run_counts ||= SpecObservation.run_counts_in(self)
   private :run_counts

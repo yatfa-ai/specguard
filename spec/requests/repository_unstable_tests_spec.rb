@@ -944,7 +944,11 @@ RSpec.describe "Repository unstable tests", type: :request do
       #
       # RECOUNTED AT 25 by SPGD-1819: the "Declared layers by run" strip under Suite growth primes the
       # plotted runs' `layer_counts` with ONE grouped read — constant in window and suite size.
-      expect(large_queries.size).to eq(25)
+      #
+      # RECOUNTED AT 23 by SPGD-1829: the same grouped read now also primes the plotted runs'
+      # `layer_durations`, and the window's two endpoints are plotted runs, so the two endpoint run
+      # aggregates `LayerWindowGrowth` read are served from the primed memo instead.
+      expect(large_queries.size).to eq(23)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -960,7 +964,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(25)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(23) # 25 before SPGD-1829 primed the endpoints' layer mix
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -1005,7 +1009,9 @@ RSpec.describe "Repository unstable tests", type: :request do
       # ends are comparable — a gate of that panel, not of this one.
       # THE TWENTIETH is SPGD-1819's one grouped declared-layer read for the Suite growth strip,
       # asked whenever the trajectory is plottable — a gate of that panel, not of this one.
-      expect(queries.size).to eq(20)
+      # MINUS TWO since SPGD-1829: the Suite growth strips' grouped read primes the window endpoints'
+      # `layer_counts`, so `LayerWindowGrowth`'s two endpoint mixes (the seventeenth and eighteenth) are free.
+      expect(queries.size).to eq(18)
       # What the gate withholds is THIS panel's outcome-narrowed grouping over the WINDOW — the
       # candidate narrowing (`test_run_id IN` + `outcome = 'failed'`, grouped on the identity) and
       # the composition that follows it. The window-narrowed identity groupings that ARE on the

@@ -126,20 +126,17 @@ RSpec.describe "GET /api/v1/repository — layer_growth", type: :request do
                                 "anchor_commit_sha" => nil, "baseline_commit_sha" => nil, "runs_back" => nil)
     end
 
-    # Query budget (criterion 5): the comparable case adds exactly the two endpoint reads to what the
-    # run-over-run pair already issues, and nothing at all unfiltered.
-    #
-    # SINCE SPGD-1819 those two reads are `layer_runtime_window_growth`'s (its `layer_durations`),
-    # not `layer_growth`'s: the history window's `layer_counts` is primed by one grouped read, so
-    # `layer_growth` — which reads counts only — pays nothing of its own. `layer_reads` counts the
-    # run-layer aggregate statement, which is one statement whoever issues it, so this pin is
-    # unchanged; the attribution is pinned in repository_layer_runtime_window_growth_spec.rb.
-    # @intent: { entity: "layer_growth", action: "bound its reads", behavior: "a comparable branch-scoped window adds exactly two run-layer aggregates over the unfiltered request", layer: "request" }
-    it "adds exactly two run-layer reads, one per endpoint run" do
+    # Query budget (criterion 5): a comparable window adds NOTHING to what the run-over-run pair
+    # already issues. SPGD-1819 moved the two endpoint reads to `layer_runtime_window_growth` (its
+    # `layer_durations`); SPGD-1829 primes `layer_durations` with `layer_counts` in the history
+    # window's one grouped read, so neither object issues an endpoint aggregate any more. `layer_reads`
+    # counts the run-layer aggregate statement; the unfiltered request's two (latest + previous) remain.
+    # @intent: { entity: "layer_growth", action: "bound its reads", behavior: "a comparable branch-scoped window adds no run-layer aggregate over the unfiltered request", layer: "request" }
+    it "adds no run-layer read of its own" do
       unfiltered = layer_reads
       named = layer_reads(query: { branch: "main" })
 
-      expect(named - unfiltered).to eq(2)
+      expect(named - unfiltered).to eq(0)
       expect(unfiltered).to eq(2)
       reads = observation_reads { get_repository(query: { branch: "main" }) }
       expect(reads.length).to eq(classified_observation_reads { get_repository(query: { branch: "main" }) })
@@ -164,13 +161,13 @@ RSpec.describe "GET /api/v1/repository — layer_growth", type: :request do
     end
 
     # The unfiltered run-over-run pair reads the layer mix of the latest and previous run (2) when
-    # both are measured and assembled alike; the window adds its own on top of that.
+    # both are measured and assembled alike; the window adds none on top of that (SPGD-1829).
     # @intent: { entity: "layer_growth", action: "withhold with no baseline mix", behavior: "a baseline run that wrote no per-example rows serves baseline_unrecorded and a null block, never zeros", layer: "request" }
     it "serves baseline_unrecorded when the oldest comparable run wrote no per-example rows" do
       ingest([], commit_sha: "baseline0001", at: 30.days.ago, total: 10)
       ingest(mix("unit" => 2), commit_sha: "anchor000001", at: 10.days.ago)
 
-      expect_withheld("baseline_unrecorded", reads: 4)
+      expect_withheld("baseline_unrecorded", reads: 2)
     end
 
     # @intent: { entity: "layer_growth", action: "withhold from a totals-only anchor", behavior: "an anchor that wrote no per-example rows serves anchor_unrecorded and a null block", layer: "request" }
@@ -178,7 +175,7 @@ RSpec.describe "GET /api/v1/repository — layer_growth", type: :request do
       ingest(mix("unit" => 2), commit_sha: "baseline0001", at: 30.days.ago)
       ingest([], commit_sha: "anchor000001", at: 10.days.ago, total: 10)
 
-      expect_withheld("anchor_unrecorded", reads: 4)
+      expect_withheld("anchor_unrecorded", reads: 2)
     end
 
     # @intent: { entity: "layer_growth", action: "withhold when neither end recorded", behavior: "two totals-only ends serve neither_recorded and a null block", layer: "request" }
@@ -186,7 +183,7 @@ RSpec.describe "GET /api/v1/repository — layer_growth", type: :request do
       ingest([], commit_sha: "baseline0001", at: 30.days.ago, total: 10)
       ingest([], commit_sha: "anchor000001", at: 10.days.ago, total: 10)
 
-      expect_withheld("neither_recorded", reads: 4)
+      expect_withheld("neither_recorded", reads: 2)
     end
 
     # The remaining states are decided from rows in memory: the window issues no layer read at all,

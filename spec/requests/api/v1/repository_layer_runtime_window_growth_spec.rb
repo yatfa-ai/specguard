@@ -129,22 +129,23 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
                            "anchor_commit_sha" => nil, "baseline_commit_sha" => nil, "runs_back" => nil)
     end
 
-    # SPGD-1819 moved who pays for the two endpoint run aggregates. `history[].layer_counts` is now
-    # primed for the whole window by one grouped read, so `layer_growth` (which reads only counts)
-    # is free; the aggregates are paid by THIS pair, whose `layer_durations` the grouped read does
-    # not carry. Before, `layer_growth` paid them and this pair rode the run's memoized row. The
-    # endpoint total is unchanged by the move: it is exactly two endpoint reads, once.
-    # @intent: { entity: "layer_runtime_window_growth", action: "bound its reads", behavior: "the pair issues exactly the two endpoint run-layer aggregates for its layer_durations, and layer_growth adds none of its own", layer: "request" }
-    it "pays exactly the two endpoint run aggregates for its durations, and layer_growth adds none" do
+    # SPGD-1819 moved who pays for the two endpoint run aggregates (to this pair, whose `layer_durations`
+    # the counts-only grouped read did not carry). SPGD-1829 closes that: `history[].layer_durations` is
+    # now primed for the whole window by the SAME single grouped read as `layer_counts`, and the window's
+    # endpoints are runs of that window, so neither `layer_growth` nor this pair issues an endpoint
+    # aggregate of its own — the window adds NOTHING over the unfiltered request. (The pin went from
+    # +2 to +0 deliberately; the grouped statement itself is pinned in repository_history_layer_durations_spec.rb.)
+    # @intent: { entity: "layer_runtime_window_growth", action: "bound its reads", behavior: "the pair issues no run-layer aggregate of its own because the endpoints' layer_durations are primed by the history window's one grouped read", layer: "request" }
+    it "pays no endpoint run aggregate: the endpoints' durations are primed by the history read" do
       unfiltered = layer_reads
       named = layer_reads(query: { branch: "main" })
 
-      expect(named - unfiltered).to eq(2)
+      expect(named - unfiltered).to eq(0)
       with_pair = observation_reads { get_repository(query: { branch: "main" }) }.length
       allow(LayerWindowRuntimeGrowth).to receive(:for).and_return(nil)
       without_pair = observation_reads { get_repository(query: { branch: "main" }) }.length
 
-      expect(with_pair - without_pair).to eq(2)
+      expect(with_pair - without_pair).to eq(0)
       # And with the count window removed too, nothing else was reading the endpoints' mixes.
       allow(LayerWindowGrowth).to receive(:for).and_return(nil)
       expect(observation_reads { get_repository(query: { branch: "main" }) }.length).to eq(without_pair)
@@ -206,7 +207,7 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
       ingest([], commit_sha: "baseline0001", at: 30.days.ago, total: 10)
       ingest(timed_mix("unit" => [1.0]), commit_sha: "anchor000001", at: 10.days.ago)
 
-      expect_withheld("baseline_unrecorded", reads: 4)
+      expect_withheld("baseline_unrecorded", reads: 2)
     end
 
     # @intent: { entity: "layer_runtime_window_growth", action: "withhold from a totals-only anchor", behavior: "an anchor that wrote no per-example rows serves anchor_unrecorded and a null block", layer: "request" }
@@ -214,7 +215,7 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
       ingest(timed_mix("unit" => [1.0]), commit_sha: "baseline0001", at: 30.days.ago)
       ingest([], commit_sha: "anchor000001", at: 10.days.ago, total: 10)
 
-      expect_withheld("anchor_unrecorded", reads: 4)
+      expect_withheld("anchor_unrecorded", reads: 2)
     end
 
     # @intent: { entity: "layer_runtime_window_growth", action: "withhold when neither end recorded", behavior: "two totals-only ends serve neither_recorded and a null block", layer: "request" }
@@ -222,7 +223,7 @@ RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :
       ingest([], commit_sha: "baseline0001", at: 30.days.ago, total: 10)
       ingest([], commit_sha: "anchor000001", at: 10.days.ago, total: 10)
 
-      expect_withheld("neither_recorded", reads: 4)
+      expect_withheld("neither_recorded", reads: 2)
     end
 
     # @intent: { entity: "layer_runtime_window_growth", action: "withhold an untimed baseline", behavior: "a baseline whose examples were all untimed serves baseline_untimed and a null block, not a speedup from zero", layer: "request" }

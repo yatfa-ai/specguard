@@ -822,8 +822,10 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       # and TWENTY-ONE since SPGD-1744, whose `layer_growth` reads the layer mix of the window's two
       # endpoint runs — and TWENTY-TWO since SPGD-1788's `directory_runtime_window_growth` (above)
       # — and TWENTY-THREE since SPGD-1819's one grouped `history[].layer_counts` read (its own grain).
+      # — and TWENTY-ONE since SPGD-1829, whose same grouped read also primes `layer_durations`, retiring the two
+      # endpoint run aggregates `layer_runtime_window_growth` had been paying (see repository_layer_growth_spec.rb).
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(23)
+        .to eq(21)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

@@ -851,6 +851,32 @@ module RepositoriesHelper
       "request, system and undeclared; a bar's length is its share of that run, not its size."
   end
 
+  # The "Machine time by declared layer, by run" strip's data: `{layer => [[run, seconds], …]}` in
+  # `SpecObservation::DECLARED_LAYER_KEYS` order, oldest run first, for every layer that has at least
+  # one TIMED plotted run (`total_seconds` non-nil — a layer with no timed example is NOT a zero-second
+  # layer, so it contributes no point). A run whose `layer_durations` is nil (no per-example rows)
+  # contributes to no layer. `runs` are the plotted runs, oldest first, already primed.
+  def declared_layer_time_series(runs)
+    SpecObservation::DECLARED_LAYER_KEYS.index_with do |layer|
+      runs.filter_map do |run|
+        seconds = run.layer_durations&.dig(layer, :total_seconds)
+        [run, seconds] unless seconds.nil?
+      end
+    end.reject { |_, points| points.empty? }
+  end
+
+  # The strip's accessible text: names every drawn layer and states its oldest and newest drawn figure,
+  # as seconds — operands only, no verdict.
+  def declared_layer_time_summary(series, branch)
+    parts = series.map do |layer, points|
+      "#{layer} #{number_with_precision(points.first.last, precision: 1)} s in the oldest drawn run and " \
+        "#{number_with_precision(points.last.last, precision: 1)} s in the newest"
+    end
+    "Machine time by declared layer across the plotted runs on #{branch}: #{parts.join('; ')}. " \
+      "Each chart is one layer, oldest run first, on its own vertical axis that does not start at zero. " \
+      "Each figure is a sum of example durations — machine time, not wall clock."
+  end
+
   # The runs the pass/fail strips are drawn across, oldest first — the same window every other
   # trajectory panel reads, so a strip's cell N is the run the suite-growth chart's point N is.
   def trajectory_runs_for_strips = @suite_trajectory.runs

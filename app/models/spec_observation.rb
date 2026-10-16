@@ -1452,6 +1452,38 @@ class SpecObservation < ApplicationRecord
       .to_h { |id, *counts| [id, DECLARED_LAYER_KEYS.zip(counts.map(&:to_i)).to_h] }
   end
 
+  # The RUN-grain declared-layer mix AND per-layer TIME for MANY runs in ONE grouped read — `{run_id =>
+  # [layer_counts, layer_durations]}`, each element exactly what {.layer_counts_in} / {.layer_durations_in}
+  # would answer for that run (the SAME predicates: {.directory_layer_count_expressions} for the counts
+  # and the {.run_layer_duration_expressions} FILTER aggregates for the time, neither retyped). It is
+  # the history window's read (`RepositoryOverview#history_runs`, the Suite growth strips), which needs
+  # both series and so pays ONE statement for the pair rather than {.run_layer_counts_for} plus a second.
+  # The list surfaces keep {.run_layer_counts_for}: they draw no time and must not start paying for it.
+  #
+  # A run with no recorded rows has no group at all, so it is ABSENT from the result — NIL for the
+  # caller on both seams, never five zeros and never a layer of null seconds. A group exists only where
+  # at least one row does, so `recorded?` holds for every run present here, matching {.run_counts_in}.
+  # `total_seconds` is NIL (never 0) for a layer none of whose examples was timed. Empty ids ⇒ `{}`
+  # with no query. A SUM of example durations — machine time, not wall clock.
+  def self.run_layer_counts_and_durations_for(test_run_ids)
+    return {} if test_run_ids.blank?
+
+    width = DECLARED_LAYER_KEYS.length
+    where(test_run_id: test_run_ids)
+      .group(:test_run_id)
+      .pluck(:test_run_id, *directory_layer_count_expressions,
+             *run_layer_duration_expressions.map { |sql| Arel.sql(sql) })
+      .to_h do |id, *rest|
+        counts = DECLARED_LAYER_KEYS.zip(rest.first(width).map(&:to_i)).to_h
+        seconds = rest[width, width]
+        timed = rest[width * 2, width].map(&:to_i)
+        durations = DECLARED_LAYER_KEYS.each_with_index.to_h do |key, index|
+          [key, { total_seconds: seconds[index]&.to_f, timed_count: timed[index] }]
+        end
+        [id, [counts, durations]]
+      end
+  end
+
   # The five {.directory_layer_count_expressions}, ALIASED for the run grain — `run_layer_<key>_count`.
   #
   # Aliased for the reason {RUN_READING_COUNTS} is: this projection rides the run-grain read, and
