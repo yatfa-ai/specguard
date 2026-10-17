@@ -56,7 +56,7 @@
                           { label: "Timed", end: true }],
                 describedby: "slowest-tests-window-basis", sortable: true) do %>
             <% @slowest_tests.rows.each do |test| %>
-              <% title = test.descriptions.first || "no description reported" %>
+              <% title = test.name || "no description reported" %>
               <%= drawer_row(test.spec_identity_id, kind: "Test across the window", title: title,
                     facts: [["Total across window", test.duration_label],
                             ["Slowest single run", test.slowest_label],
@@ -68,12 +68,12 @@
                             ["Examples timed", test.coverage_label],
                             ["Declared layers", test.declared_layers.any? ? test.declared_layers.join(", ") : "undeclared"],
                             ["Recorded under", test.files_seen.any? ? test.files_seen.join(", ") : "not reported"],
-                            ["Also recorded as", (test.descriptions.drop(1).to_sentence if test.renamed?)],
+                            ["Also recorded as", (test.descriptions.reject { |d| d == test.name }.to_sentence if test.renamed?)],
                             ["Ran more than once in a run", (number_with_delimiter(test.recorded_count) + " rows" if test.repeated_within_run?)]],
-                    actions: [*(test.descriptions.any? ? [["Run by run", drill_down_path(@repository, unstable_test: test.descriptions.first, unstable_test_from: "slowest-examples", anchor: "unstable"), :primary]] : []),
+                    actions: [*(test.name ? [["Run by run", drill_down_path(@repository, unstable_test: test.name, unstable_test_from: "slowest-examples", anchor: "unstable"), :primary]] : []),
                               *test.files_seen.first(2).map { |path| ["Examples in #{path}", drill_down_path(@repository, spec_file: path, anchor: "slow"), :secondary] }]) do %>
                 <td>
-                  <%= test.descriptions.any? ? row_open(test.descriptions.first) : tag.span("no description reported", class: "text-app-content-secondary") %>
+                  <%= test.name ? row_open(test.name) : tag.span("no description reported", class: "text-app-content-secondary") %>
                   <%= declared_layers_label(test.declared_layers) %>
                   <span class="rc-sec mono"><%= test.files_seen.any? ? test.files_seen.first : "not reported" %><%= " +#{test.files_seen.size - 1} more" if test.moved? %></span>
                 </td>

@@ -1739,6 +1739,11 @@ class SpecObservation < ApplicationRecord
   # `FILTER` for the same reason: without it a never-annotated identity would arrive as `[nil]`
   # rather than `[]`. It is read off the stored column in the same grouped SELECT, so it costs no
   # query; `SlowestTests::Row#declared_layers` is its reader.
+  #
+  # `latest_name` is the identity's MOST RECENT description (newest `id`, ingest order), borrowed from
+  # `UNSTABLE_COMPOSITION` by reference so the two panels cannot drift: it is the name the
+  # description-keyed drill-in resolves the row under, and `SlowestTests::Row#name` reads it. `nil`
+  # exactly when `names` is empty (the FILTER excludes NULLs). Same grouped SELECT, one more aggregate.
   IDENTITY_DURATION_COMPOSITION = {
     total_seconds: "SUM(duration_seconds)",
     recorded_count: "COUNT(*)",
@@ -1746,6 +1751,7 @@ class SpecObservation < ApplicationRecord
     run_count: "COUNT(DISTINCT test_run_id)",
     slowest_seconds: "MAX(duration_seconds)",
     names: "ARRAY_AGG(DISTINCT name) FILTER (WHERE name IS NOT NULL)",
+    latest_name: UNSTABLE_COMPOSITION.fetch(:latest_name),
     file_paths: "ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)",
     intent_layers: "ARRAY_AGG(DISTINCT intent_layer) FILTER (WHERE intent_layer IS NOT NULL)"
   }.freeze

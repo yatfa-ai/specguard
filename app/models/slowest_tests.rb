@@ -397,9 +397,15 @@ class SlowestTests
   # two endpoints of the window, not a series. `nil`, never `0`, when that run's rows were all
   # untimed. See {SlowestTests.window_endpoints}.
   Row = Struct.new(:spec_identity_id, :total_seconds, :recorded_count, :timed_count, :run_count,
-                   :slowest_seconds, :names, :file_paths, :intent_layers,
+                   :slowest_seconds, :names, :latest_name, :file_paths, :intent_layers,
                    :first_seconds, :latest_seconds, :slowest_run_commit_sha, :slowest_run_ingested_at,
                    :slowest_run_seconds, keyword_init: true) do
+    # The description a reader recognises — the identity's MOST RECENT one, mirroring
+    # {UnstableTests::Row#name}: the drill-in (`UnstableTestRuns`, keyed on `name`) resolves the row
+    # to its runs under exactly this label, so the drawer must promote it rather than whichever name
+    # sorts first. Load-bearing for that reason. `nil` when no run reported a description.
+    def name = latest_name
+
     # Slowest first, and a test nobody timed is NOT a test that cost nothing: the nil flag leads the
     # key rather than the total being coerced to zero, which is the `DESC NULLS LAST` rule
     # {NearDuplicateClusters} and `.file_durations_in` both sort by. `recorded_count` breaks the tie
