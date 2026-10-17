@@ -275,6 +275,38 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect(fact_of(row_element("Webhook replays a failed delivery"), "Slowest run")).to eq("not reported")
     end
 
+    def read_run_links(name)
+      row_element(name).all("a", visible: :all).select { |link| link.text(:all).squish == "Read the slowest run" }
+    end
+
+    # SPGD-1850 — the located run becomes reachable: the drawer's "Read the slowest run" action
+    # carries the FULL sha (the tooltip and fact only show seven characters, which the exact-match
+    # run lookup cannot resolve), keeps the page's other asks, and lands on that run.
+    # @intent: {"entity": "GET /repositories/:id", "action": "read the slowest run", "behavior": "a row with a located slowest run exposes one Read the slowest run action carrying the full sha and the carried branch ask, following it anchors the page on that run, and an untimed row exposes no such action", "layer": "request"}
+    it "offers a drawer action that re-anchors the page on the row's slowest run, and none on an untimed row" do
+      repository = create_repository(user: @user)
+      [[1, 5.0], [0, 1.0]].each do |index, duration|
+        ingest(repository, [example_spec(name: "Search index rebuilds a shard", duration: duration,
+                                         file_path: "spec/models/search_spec.rb")],
+               commit_sha: "chg#{index}sha#{format("%07d", index)}", at: (30 - index).days.ago)
+      end
+      slowest_sha = "chg1sha#{format("%07d", 1)}"
+
+      get repository_path(repository, branch: "main")
+
+      links = read_run_links("Search index rebuilds a shard")
+      expect(links.size).to eq(1)
+      expect(links.first[:href]).to eq(repository_path(repository, branch: "main", commit_sha: slowest_sha, anchor: "summary"))
+
+      get links.first[:href].sub(/#.*\z/, "")
+      page = Capybara.string(response.body)
+      expect(page).to have_text("Reading run #{slowest_sha.first(7)}")
+      expect(page).to have_text("Show the newest run")
+
+      get repository_path(window_repository)
+      expect(read_run_links("Webhook replays a failed delivery")).to be_empty
+    end
+
     # @intent: {"entity": "GET /repositories/:id", "action": "render window change sign", "behavior": "a test that got slower reads a plus-signed change with a positive data-sort and the caption states the two-endpoint scope", "layer": "request"}
     it "signs a regression and states in the caption that the change is two endpoints, not a series" do
       repository = create_repository(user: @user)
