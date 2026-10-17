@@ -361,6 +361,32 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect(reworded[:notes]).to eq(["spec/models/invoice_spec.rb", "Invoice#finalize locks the line items"])
     end
 
+    # SPGD-1849 — the drawer resolves the identity under its LATEST description (mirroring
+    # UnstableTests::Row#name), not the alphabetically first one. The fixture above renames in an
+    # order that happens to agree with the alphabet; here the OLD name sorts first and the NEW one
+    # last, so promoting `descriptions.first` would link the stale name into the description-keyed
+    # drill-in and hide half the test's history.
+    # @intent: {"entity": "GET /repositories/:id", "action": "promote latest description", "behavior": "a test reworded from an alphabetically-first name to an alphabetically-last one is labelled with the newest name, whose Run by run action targets unstable_test=newest name, with the older name listed under Also recorded as", "layer": "request"}
+    it "resolves a reworded test under its newest description even when that sorts last" do
+      repository = create_repository(user: @user, github_full_name: "acme/adverse-rename")
+      4.times do |index|
+        spec = annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 3, duration: 0.5,
+                              name: index < 2 ? "Aaa Invoice#finalize locks the line items"
+                                              : "Zzz Invoice#finalize freezes every line")
+        ingest(repository, [spec], commit_sha: "run#{index}sha#{format("%07d", index)}", at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository)
+
+      row = row_named("Zzz Invoice#finalize freezes every line")
+      expect(row).to be_present
+      expect(rows.map { |r| r[:name] }).not_to include("Aaa Invoice#finalize locks the line items")
+      expect(row[:notes]).to eq(["spec/models/invoice_spec.rb", "Aaa Invoice#finalize locks the line items"])
+      run_by_run = row_element("Zzz Invoice#finalize freezes every line")
+                   .all("a", visible: :all).find { |link| link.text(:all).squish == "Run by run" }
+      expect(CGI.unescape(run_by_run[:href])).to include("unstable_test=Zzz Invoice#finalize freezes every line")
+    end
+
     # A test that never moved says nothing about moving — the disclosure is about this window, not
     # a decoration every row wears.
     # @intent: {"entity": "GET /repositories/:id", "action": "stay silent when unmoved", "behavior": "the test that neither moved nor was reworded carries only its file note, with no move or reword disclosure", "layer": "request"}

@@ -1848,12 +1848,14 @@ RSpec.describe SpecObservation do
         )
 
         expect(composed.length).to eq(1)
-        identity_id, total_seconds, recorded, timed, run_count, slowest, names, files, layers = composed.first
+        identity_id, total_seconds, recorded, timed, run_count, slowest, names, latest_name, files, layers = composed.first
         expect(identity_id).to eq(moved)
         expect(total_seconds).to be_within(0.0001).of(6 * (100.0 / MOVED_EXAMPLE))
         expect([recorded, timed, run_count]).to eq([6, 6, 6])
         expect(slowest).to be_within(0.0001).of(100.0 / MOVED_EXAMPLE)
         expect(names).to eq(["example #{MOVED_EXAMPLE}"])
+        # SPGD-1849: the identity's newest name (UNSTABLE_COMPOSITION's semantics), never nil here.
+        expect(latest_name).to eq("example #{MOVED_EXAMPLE}")
         # Both sides of the move, disclosed rather than smoothed over — a history spanning two files
         # is a fact about where the reader has to go looking.
         expect(files.sort).to eq(["spec/after_spec.rb", "spec/before_spec.rb"])
@@ -1867,13 +1869,13 @@ RSpec.describe SpecObservation do
           run_ids: window_ids, spec_identity_ids: [identity_ids[6]]
         )
 
-        # identity, total, recorded, timed, runs, slowest, names, files, layers —
+        # identity, total, recorded, timed, runs, slowest, names, latest_name, files, layers —
         # `SpecObservation::IDENTITY_DURATION_COMPOSITION`'s order, which the caller destructures by.
-        _id, total_seconds, recorded, timed, run_count, slowest, names, files, _layers = composed.first
+        _id, total_seconds, recorded, timed, run_count, slowest, names, latest_name, files, _layers = composed.first
         expect(total_seconds).to be_within(0.0001).of(6 * (100.0 / 7))
         expect([recorded, timed, run_count]).to eq([6, 6, 6])
         expect(slowest).to be_within(0.0001).of(100.0 / 7)
-        expect([names, files]).to eq([["example 7"], ["spec/f7_spec.rb"]])
+        expect([names, latest_name, files]).to eq([["example 7"], "example 7", ["spec/f7_spec.rb"]])
       end
 
       # Bounded to the window, never to the repository's whole history — the fourteen runs outside
