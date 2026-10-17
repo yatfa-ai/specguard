@@ -154,7 +154,7 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       # the column choice honest.
       expect(served.keys)
         .to eq(["similarity_floor", "similarity_basis", "layer_source", "ranking_basis",
-                "cluster_count", "layer_redundancy_counts", "truncated",
+                "cluster_count", "layer_redundancy_counts", "layer_redundancy_leaders", "truncated",
                 "saturated_identity_count", "unresolved_count", "recorded_count",
                 "identity_count", "clustered_identity_count", "clustered_timed_count",
                 "clustered_example_count", "clusters", "weighed_run_id", "computed_at"])

@@ -667,10 +667,45 @@ module RepositoriesHelper
     return nil unless [cross, same, undeclared].all?(Integer)
 
     total = cross + same + undeclared
-    "#{number_with_delimiter(cross)} of the #{number_with_delimiter(total)} #{"group".pluralize(total)} " \
-      "#{cross == 1 ? "spans" : "span"} more than one declared layer, " \
-      "#{number_with_delimiter(same)} #{same == 1 ? "is" : "are"} confined to one layer, " \
-      "#{number_with_delimiter(undeclared)} declared none."
+    clause = "#{number_with_delimiter(cross)} of the #{number_with_delimiter(total)} #{"group".pluralize(total)} " \
+             "#{cross == 1 ? "spans" : "span"} more than one declared layer, " \
+             "#{number_with_delimiter(same)} #{same == 1 ? "is" : "are"} confined to one layer, " \
+             "#{number_with_delimiter(undeclared)} declared none."
+    examples = near_duplicate_cross_layer_examples(census)
+    examples ? "#{clause} #{examples}" : clause
+  end
+
+  # How many stored cross-layer leaders the caption may name, and how long a description may run
+  # before it is cut — the stored key holds up to three rows (SPGD-1844).
+  NEAR_DUPLICATE_LEADER_ROWS = 3
+  NEAR_DUPLICATE_LEADER_DESCRIPTION = 80
+
+  # Names the census's best cross-layer groups after the tally — "e.g. A ↔ B (a_spec.rb + b_spec.rb)" —
+  # from the stored `layer_redundancy_leaders["cross_layer"]`, which is taken over EVERY cluster and so
+  # can name a group past the stored page. Degrades as stored: nil (the caption is exactly what it was)
+  # for a census stored before the key, for an empty kind, and for any non-conforming shape — not an
+  # Array of at most three rows, or a row without a description list and a file list of strings.
+  def near_duplicate_cross_layer_examples(census)
+    leaders = census["layer_redundancy_leaders"]
+    return nil unless leaders.is_a?(Hash)
+
+    rows = leaders["cross_layer"]
+    return nil unless rows.is_a?(Array) && rows.any? && rows.size <= NEAR_DUPLICATE_LEADER_ROWS
+
+    phrases = rows.map { |row| near_duplicate_leader_phrase(row) }
+    return nil if phrases.any?(&:nil?)
+
+    "e.g. #{phrases.join("; ")}."
+  end
+
+  def near_duplicate_leader_phrase(row)
+    return nil unless row.is_a?(Hash)
+
+    descriptions, files = row.values_at("descriptions", "files_seen")
+    return nil unless [descriptions, files].all? { |list| list.is_a?(Array) && list.any? && list.all?(String) }
+
+    names = descriptions.first(2).map { |text| truncate(text, length: NEAR_DUPLICATE_LEADER_DESCRIPTION) }
+    "#{names.join(" ↔ ")} (#{files.join(" + ")})"
   end
 
   # --- the console (`repositories/show`) -----------------------------------------------------

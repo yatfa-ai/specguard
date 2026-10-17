@@ -754,6 +754,36 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     expect(sentence).not_to include("declared layer")
   end
 
+  # @intent: {"entity": "NearDuplicateCensus", "action": "name the cross-layer leaders", "behavior": "the truncated caption names the stored cross-layer leaders after the tally, and renders exactly the tally-only caption for a census stored without the key, an empty kind or a malformed value", "layer": "request"}
+  it "names the stored cross-layer leaders after the tally and degrades as stored" do
+    ingest(repository, pair_specs)
+    census = NearDuplicateCensus.find_by!(repository_id: repository.id)
+    tally = { "cross_layer" => 4, "same_layer" => 2, "undeclared" => 1 }
+    leader = { "descriptions" => ["Export renders the annual report", "Import maps the legacy columns"],
+               "files_seen" => ["spec/models/export_spec.rb", "spec/requests/export_spec.rb"] }
+    base = census.payload.merge("truncated" => true, "cluster_count" => 7, "layer_redundancy_counts" => tally)
+    caption = lambda do
+      get repository_path(repository)
+      panel.find("#near-duplicate-clusters-page").text(normalize_ws: true)
+    end
+    tally_only = "1 declared none."
+
+    census.update!(payload: base.merge("layer_redundancy_leaders" => { "cross_layer" => [leader] }))
+    expect(caption.call).to end_with(
+      "#{tally_only} e.g. Export renders the annual report ↔ Import maps the legacy columns " \
+      "(spec/models/export_spec.rb + spec/requests/export_spec.rb)."
+    )
+
+    [nil, { "cross_layer" => [] }, { "cross_layer" => [leader] * 4 }, { "cross_layer" => ["junk"] },
+     { "cross_layer" => [{ "descriptions" => "x", "files_seen" => [] }] }, "junk"].each do |stored|
+      census.update!(payload: base.merge("layer_redundancy_leaders" => stored))
+      expect(caption.call).to end_with(tally_only)
+    end
+
+    census.update!(payload: base)
+    expect(caption.call).to end_with(tally_only)
+  end
+
   # @intent: {"entity": "NearDuplicateCensus", "action": "render overlap kind", "behavior": "each row says whether its group spans one spec file or several, from the stored key and, for a payload stored without it, derived from its members", "layer": "request"}
   it "shows the overlap kind per row, derived from members when the key is not stored" do
     ingest(repository, pair_specs)

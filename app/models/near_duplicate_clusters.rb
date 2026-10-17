@@ -360,6 +360,9 @@ class NearDuplicateClusters
   CROSS_LAYER_REDUNDANCY = "cross_layer"
   SAME_LAYER_REDUNDANCY = "same_layer"
 
+  # How many clusters of each redundancy kind the census stores as that kind's leaders (SPGD-1844).
+  LAYER_REDUNDANCY_LEADERS = 3
+
   # The shared empty for a member nothing declared a layer for — one frozen object rather than a
   # fresh array per member, and truthiness (`any?`) rather than nil-checks downstream, so "no
   # declaration" and "empty declaration set" cannot become two states.
@@ -467,10 +470,7 @@ class NearDuplicateClusters
   # `example_count` breaks the tie and the members' own texts break that one, so a repository whose
   # clusters total equally has one stable order rather than one that changes per request.
   def clusters
-    @clusters ||= @all_clusters.sort_by do |cluster|
-      [ cluster.multi_file? ? 0 : 1, cluster.total_seconds.nil? ? 1 : 0, -(cluster.total_seconds || 0.0),
-        -cluster.example_count, cluster.sort_key ]
-    end.first(@limit)
+    @clusters ||= @all_clusters.sort_by(&:ranking_key).first(@limit)
   end
 
   # How many near-duplicate clusters this repository holds IN TOTAL — the denominator `clusters.size`
@@ -568,6 +568,24 @@ class NearDuplicateClusters
       SAME_LAYER_REDUNDANCY.to_sym => tally.fetch(SAME_LAYER_REDUNDANCY, 0),
       undeclared: tally.fetch(nil, 0)
     }
+  end
+
+  # The best few clusters OF EACH redundancy kind — `{cross_layer: [...], same_layer: [...],
+  # undeclared: [...]}`, each an array of at most `per_kind` {Cluster}s (SPGD-1844). The locator the
+  # tally above cannot be: "7 groups span more than one layer" names no group, and the stored page
+  # need not hold any of the 7. Taken over `@all_clusters`, the same whole-census population the
+  # tally is counted over, so a leader may sit beyond the page — that is the point.
+  #
+  # Ordered by {Cluster#ranking_key}, the ONE array `#clusters` sorts by, so a kind's leaders are
+  # the best of that kind under the page's own order and never a re-ranking. A kind with no
+  # clusters is `[]`, a measured zero, never nil.
+  def layer_redundancy_leaders(per_kind = LAYER_REDUNDANCY_LEADERS)
+    by_kind = @all_clusters.group_by(&:layer_redundancy)
+    {
+      CROSS_LAYER_REDUNDANCY.to_sym => by_kind.fetch(CROSS_LAYER_REDUNDANCY, []),
+      SAME_LAYER_REDUNDANCY.to_sym => by_kind.fetch(SAME_LAYER_REDUNDANCY, []),
+      undeclared: by_kind.fetch(nil, [])
+    }.transform_values { |group| group.sort_by(&:ranking_key).first(per_kind) }
   end
 
   # The weighed run recorded per-example rows AT ALL — the question that decides whether the surface
@@ -787,6 +805,14 @@ class NearDuplicateClusters
     def overlap_kind = file_count > 1 ? "multi_file" : "single_file"
 
     def multi_file? = overlap_kind == "multi_file"
+
+    # THE RANKING ARRAY — the one literal the page (`NearDuplicateClusters#clusters`) and the
+    # per-kind leaders both sort by, so the two can never drift (SPGD-1844). `overlap_kind` leads
+    # (SPGD-1720: a multi-file group first), then a nil-total flag so an untimed group sorts after
+    # every timed one, then costliest, then most examples, then `sort_key` as the stable tiebreak.
+    def ranking_key
+      [ multi_file? ? 0 : 1, total_seconds.nil? ? 1 : 0, -(total_seconds || 0.0), -example_count, sort_key ]
+    end
 
     # Ties in the ranking are broken on this rather than on an id, so the order is a property of
     # what the repository contains rather than of what order it was ingested in.

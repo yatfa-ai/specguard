@@ -499,6 +499,55 @@ RSpec.describe NearDuplicateClusters do
       expect(result.layer_redundancy_counts.values.sum).to eq(result.cluster_count)
     end
 
+    # THE BEYOND-PAGE LOCATOR (SPGD-1844): the whole reason the leaders exist. The page (limit 1)
+    # holds only the costly undeclared pair; the cross-layer group sits past it and must still be
+    # the cross_layer leader.
+    # @intent: { entity: "NearDuplicateClusters", action: "locate layer redundancy leaders", behavior: "layer_redundancy_leaders names a cross-layer cluster that ranks outside the served page, with at most three per kind and an empty array for a kind with no clusters", layer: "unit" }
+    it "names the best cluster of each kind even when it sits past the page" do
+      observe(identity(EXPIRED, source: "intent", line: 3), layer: "unit", duration: 1.0)
+      observe(identity(OUTRIGHT, source: "intent", line: 9), layer: "request", duration: 1.0)
+      costly_a = identity(UNRELATED, source: "intent", line: 21, path: "spec/services/shipping_spec.rb")
+      costly_b = identity("Shipping calculates a delivery estimate outright", source: "intent", line: 29,
+                                                                               path: "spec/services/shipping_spec.rb")
+      observe(costly_a, duration: 90.0)
+      observe(costly_b, duration: 90.0)
+
+      result = described_class.for(repository, limit: 1)
+      leaders = result.layer_redundancy_leaders
+
+      expect(result.clusters.sole.layer_redundancy).to be_nil
+      expect(leaders.keys).to eq(%i[cross_layer same_layer undeclared])
+      expect(leaders[:cross_layer].sole.members.map(&:text)).to contain_exactly(EXPIRED, OUTRIGHT)
+      expect(leaders[:same_layer]).to eq([])
+      expect(leaders[:undeclared]).to eq(result.clusters)
+    end
+
+    # @intent: { entity: "NearDuplicateClusters", action: "locate layer redundancy leaders", behavior: "each kind keeps at most three leaders in the exact order of the page ranking, an untimed cluster sorting after timed ones", layer: "unit" }
+    it "caps each kind at three and orders them by the page's own ranking key" do
+      texts = [
+        ["Refunds are issued for a cancelled order", "Refunds are issued for a cancelled order outright", 5.0],
+        ["Invoices render the vat total", "Invoices render the vat total outright", 9.0],
+        ["Coupons expire after thirty days", "Coupons expire after thirty days outright", 1.0],
+        ["Warehouse picks the nearest bin", "Warehouse picks the nearest bin outright", nil]
+      ]
+      texts.each_with_index do |(a, b, seconds), i|
+        path = "spec/models/g#{i}_spec.rb"
+        ia = identity(a, source: "intent", line: 1, path: path)
+        ib = identity(b, source: "intent", line: 2, path: path)
+        observe(ia, layer: "unit", duration: seconds)
+        observe(ib, layer: "unit", duration: seconds)
+      end
+
+      result = described_class.for(repository)
+      same = result.layer_redundancy_leaders[:same_layer]
+
+      expect(result.layer_redundancy_counts[:same_layer]).to eq(4)
+      expect(same.size).to eq(3)
+      expect(same).to eq(result.clusters.select { |c| c.layer_redundancy == "same_layer" }.first(3))
+      expect(same.map(&:ranking_key)).to eq(same.map(&:ranking_key).sort)
+      expect(same.map(&:total_seconds)).to eq([18.0, 10.0, 2.0])
+    end
+
     # @intent: { entity: "NearDuplicateClusters", action: "tally layer redundancy", behavior: "a layer-free suite tallies every cluster as undeclared and an empty census tallies all zeros", layer: "unit" }
     it "states a layer-free suite as all undeclared and an empty census as all zeros" do
       expect(described_class.for(repository).layer_redundancy_counts)

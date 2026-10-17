@@ -83,6 +83,27 @@ RSpec.describe NearDuplicateCensus do
     # computes for the same data — read field by field off the LIVE object, never re-derived, so
     # the serve path can promise stored-equals-live rather than hope for it. (The stored payload
     # reads back with string keys — json round-trips — so the expectation stringifies its own.)
+    # @intent: { entity: "NearDuplicateCensus", action: "store the layer redundancy leaders", behavior: "refreshing stores layer_redundancy_leaders right after layer_redundancy_counts, an array per kind with an empty array for a kind with no clusters, each row compact with no member listings", layer: "unit" }
+    it "stores the per-kind leaders beside the counts, compact and with [] for empty kinds" do
+      near_duplicate_pair
+
+      described_class.refresh!(repository)
+
+      payload = described_class.find_by!(repository_id: repository.id).payload
+      live = NearDuplicateClusters.for(repository)
+      expect(payload.keys.index("layer_redundancy_leaders")).to eq(payload.keys.index("layer_redundancy_counts") + 1)
+      leaders = payload["layer_redundancy_leaders"]
+      expect(leaders.keys).to eq(%w[cross_layer same_layer undeclared])
+      expect(leaders["cross_layer"]).to eq([])
+      expect(leaders["same_layer"]).to eq([])
+      row = leaders["undeclared"].sole
+      expect(row.keys).to eq(%w[member_count example_count total_seconds timed_count similarity_range overlap_kind
+                                layer_redundancy declared_layers files_seen file_count descriptions])
+      expect(row["files_seen"]).to eq(live.clusters.sole.files_seen)
+      expect(row["descriptions"]).to eq(live.clusters.sole.members.map(&:text).sort.first(3))
+      expect(row).not_to include("members", "layer_groups")
+    end
+
     # @intent: { entity: "NearDuplicateCensus", action: "store the live computation", behavior: "refreshing stores a payload whose every summary figure equals the live NearDuplicateClusters computation over the same data", layer: "unit" }
     it "stores exactly what the live computation returns for the same data" do
       near_duplicate_pair

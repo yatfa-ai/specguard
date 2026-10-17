@@ -51,6 +51,17 @@ RSpec.describe NearDuplicateCensusView do
       expect(summary.keys).to eq(block.keys)
     end
 
+    # @intent: { entity: "NearDuplicateCensusView", action: "pass the leaders through", behavior: "the summary serves a stored layer_redundancy_leaders head key unchanged and in its stored position", layer: "unit" }
+    it "serves layer_redundancy_leaders unchanged in the stored position" do
+      leaders = { "cross_layer" => [{ "descriptions" => ["a"], "files_seen" => ["x"] }], "same_layer" => [], "undeclared" => [] }
+      stored = block.merge("layer_redundancy_leaders" => leaders)
+
+      summary = described_class.new(stored).summary
+
+      expect(summary["layer_redundancy_leaders"]).to eq(leaders)
+      expect(summary.keys).to eq(stored.keys)
+    end
+
     # @intent: { entity: "NearDuplicateCensusView", action: "derive the row keys", behavior: "each row keeps every stored scalar and gains a 1-based rank, sorted distinct files_seen, file_count and the distinct non-null declared_layers", layer: "unit" }
     it "derives rank, files_seen, file_count and declared_layers per row" do
       first, second = summary["clusters"]
