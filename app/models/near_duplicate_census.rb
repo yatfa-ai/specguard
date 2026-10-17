@@ -91,6 +91,9 @@
 # two halves of one block. Inside the payload, the layer view is exactly as old or as new as the
 # census it annotates, which is the only coherence a stamped artifact can promise.
 class NearDuplicateCensus < ApplicationRecord
+  # How many member descriptions a stored kind-leader carries (SPGD-1844) — enough to name the group.
+  LEADER_DESCRIPTIONS = 3
+
   belongs_to :repository
 
   class << self
@@ -195,6 +198,7 @@ class NearDuplicateCensus < ApplicationRecord
         ranking_basis: clusters.ranking_basis,
         cluster_count: clusters.cluster_count,
         layer_redundancy_counts: clusters.layer_redundancy_counts,
+        layer_redundancy_leaders: leaders_payload(clusters),
         truncated: clusters.truncated?,
         saturated_identity_count: clusters.saturated_identity_count,
         unresolved_count: clusters.unresolved_count,
@@ -238,6 +242,31 @@ class NearDuplicateCensus < ApplicationRecord
         layer_redundancy: cluster.layer_redundancy,
         layer_groups: cluster.layer_groups.map { |group| layer_group_payload(group) },
         members: cluster.members.map { |member| member_payload(member) }
+      }
+    end
+
+    # The per-kind leaders, each kind an array (`[]` for an empty kind — a measured zero, never nil).
+    def leaders_payload(clusters)
+      clusters.layer_redundancy_leaders.transform_values { |group| group.map { |cluster| leader_payload(cluster) } }
+    end
+
+    # ONE kind-leader (SPGD-1844): the compact, nameable row — the summary-row scalars plus the first
+    # few member texts — WITHOUT the member / layer_groups listings, which are not duplicated here
+    # (the full drill-in stays on the stored page's `?near_duplicate_cluster=` when the leader sits
+    # on it). Built from the cluster's own members, whose five fields `member_payload` owns.
+    def leader_payload(cluster)
+      {
+        member_count: cluster.member_count,
+        example_count: cluster.example_count,
+        total_seconds: cluster.total_seconds,
+        timed_count: cluster.timed_count,
+        similarity_range: cluster.similarity_range,
+        overlap_kind: cluster.overlap_kind,
+        layer_redundancy: cluster.layer_redundancy,
+        declared_layers: cluster.declared_layers,
+        files_seen: cluster.files_seen,
+        file_count: cluster.file_count,
+        descriptions: cluster.members.map { |member| member_payload(member)[:text] }.sort.first(LEADER_DESCRIPTIONS)
       }
     end
 
