@@ -71,6 +71,7 @@
                             ["Also recorded as", (test.descriptions.reject { |d| d == test.name }.to_sentence if test.renamed?)],
                             ["Ran more than once in a run", (number_with_delimiter(test.recorded_count) + " rows" if test.repeated_within_run?)]],
                     actions: [*(test.name ? [["Run by run", drill_down_path(@repository, unstable_test: test.name, unstable_test_from: "slowest-examples", anchor: "unstable"), :primary]] : []),
+                              *(test.slowest_run_commit_sha ? [["Read the slowest run", drill_down_path(@repository, commit_sha: test.slowest_run_commit_sha, anchor: "summary"), :primary]] : []),
                               *test.files_seen.first(2).map { |path| ["Examples in #{path}", drill_down_path(@repository, spec_file: path, anchor: "slow"), :secondary] }]) do %>
                 <td>
                   <%= test.name ? row_open(test.name) : tag.span("no description reported", class: "text-app-content-secondary") %>
