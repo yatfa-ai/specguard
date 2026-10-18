@@ -70,7 +70,19 @@
                 describedby: "unstable-test-runs-basis", sortable: true) do %>
             <% @unstable_test_runs.rows.each do |row| %>
               <tr>
-                <td><%= link_to row.commit_sha.first(7), @repository.github_commit_url(row.commit_sha), class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %></td>
+                <%# The Commit cell pairs the two destinations every sibling per-run affordance now
+                    offers: the sha out to GitHub, for the reader who wants the DIFF, and "read run"
+                    back into the page's own run anchor, for the one who wants the run's OWN
+                    telemetry (delivery line, shards, slowest examples) — the pairing Recent runs
+                    ("Read this run" / "Open commit on GitHub"), the near-duplicate stamp and the
+                    slowest-tests window's drawer all keep. `drill_down_path` is string composition
+                    off data the page already loaded, so the second link adds no query. No
+                    self-link suppression when the row IS the run being read: an extra path back is
+                    harmless, and Recent runs deliberately made the same call. %>
+                <td>
+                  <%= link_to row.commit_sha.first(7), @repository.github_commit_url(row.commit_sha), class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
+                  <%= link_to "read run", drill_down_path(@repository, commit_sha: row.commit_sha, anchor: "summary"), class: "rc-link" %>
+                </td>
                 <td>
                   <% if row.observation.file_path.present? && row.observation.line_number.present? %>
                     <%= link_to row.observation.location_label, @repository.github_blob_url(row.observation.file_path, row.observation.line_number, row.commit_sha),

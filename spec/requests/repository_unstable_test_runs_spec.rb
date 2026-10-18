@@ -66,11 +66,13 @@ RSpec.describe "Repository unstable test runs", type: :request do
   # One row as a reader meets it: which run, where the test was defined in it, on which branch, when
   # it landed, how long it took and what that run said happened. Whitespace-collapsed, because a
   # cell assembled across two ERB tags is one reading on the page whatever the source did with
-  # indentation.
+  # indentation. The commit cell is the exception since SPGD-1852: it pairs two links, and the
+  # label the reader scans is the GitHub anchor's seven characters, so its reading comes off that
+  # anchor rather than off the whole cell.
   def rows
     panel.all("tbody tr").map do |row|
       commit, definition_site, branch, ingested, duration, outcome =
-        row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+        [row.all("td")[0].first("a.rc-ext").text] + row.all("td")[1..].map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
       { commit: commit, definition_site: definition_site, branch: branch, ingested: ingested,
         duration: duration, outcome: outcome }
@@ -85,16 +87,27 @@ RSpec.describe "Repository unstable test runs", type: :request do
     panel.all("tbody tr").map { |row| row.all("td")[1].all("a").map { |link| link[:href] } }.flatten
   end
 
-  # The commit cell's LINKS, read the same way and for the same reason: the visible text is seven
-  # characters whatever ref the href was built from, so the departure this cell makes lives entirely
-  # inside the href. CELL-scoped by position (column 0), because the definition-site cell beside it
-  # is the other place this row's sha appears — a panel-wide `all("a")` would read both and pass off
-  # the neighbour with this cell's link deleted.
+  # The commit cell's LINKS, read as hrefs rather than as text — the departure this cell makes
+  # lives entirely inside the href, since the visible text is seven characters whatever ref the
+  # href was built from. SCOPED TO `a.rc-ext`, the GitHub anchor: the cell pairs that link with an
+  # in-app `rc-link` run link beside it (SPGD-1852), and these pins are about the GitHub link — a
+  # cell-wide `all("a")` would read the pairing and pass off the run link with the GitHub link
+  # deleted. Still CELL-scoped by position (column 0), because the definition-site cell beside it
+  # is the other place this row's sha appears.
   def commit_hrefs
-    panel.all("tbody tr").map { |row| row.all("td")[0].all("a").map { |link| link[:href] } }.flatten
+    panel.all("tbody tr").map { |row| row.all("td")[0].all("a.rc-ext").map { |link| link[:href] } }.flatten
   end
 
-  def commit_links = panel.all("tbody tr").filter_map { |row| row.all("td")[0].first("a") }
+  # The same scoping as `commit_hrefs`, for the attribute-level pins (target, rel, class): the
+  # first GitHub anchor of each commit cell, never the run link beside it.
+  def commit_links = panel.all("tbody tr").filter_map { |row| row.all("td")[0].first("a.rc-ext") }
+
+  # The commit cell's IN-APP run link, read per ROW as hrefs — exactly one beside the GitHub link
+  # (SPGD-1852, the family's internal+external pairing), and each one must carry that row's OWN
+  # sha, so a flattened list would let one row go empty while another carried two.
+  def run_link_hrefs
+    panel.all("tbody tr").map { |row| row.all("td")[0].all("a.rc-link").map { |link| link[:href] } }
+  end
 
   def duration_sequence = rows.map { |row| row[:duration] }
 
@@ -769,15 +782,19 @@ RSpec.describe "Repository unstable test runs", type: :request do
     end
   end
 
-  # THE COMMIT ITSELF, as a link out to GitHub — the join this panel is read for. It has printed a
-  # sha since it shipped and dead-ended there: the reader who has found the first failing row still
-  # had to leave the product, find the repository and paste seven characters into it by hand.
+  # THE COMMIT ITSELF, as a link — now the family's pairing, not the bare way out. The cell has
+  # printed the sha since it shipped and dead-ended there: the reader who has found the first
+  # failing row had to leave the product, find the repository and paste seven characters into it
+  # by hand. It still carries that GitHub link — the diff is GitHub's question — and, since
+  # SPGD-1852, a "read run" link beside it, because the flakiness reader's question ("what else
+  # was true of the run that flipped?") is answered by the run's OWN telemetry one URL away, not
+  # by anything on GitHub. Every sibling per-run affordance already pairs the two.
   describe "opening the commit that ran each row" do
     # THE assertion that separates per-row pinning from the page-level sha it would be copied from.
-    # The visible column is seven characters whatever ref the href carries, and a single-sha fixture
-    # renders the two byte-identical — so this reads TWO rows at TWO commits and asserts each href
-    # carries its OWN row's sha. Borrowing `@latest_test_run.commit_sha` would send every row to the
-    # newest commit and name the wrong culprit on every row but one.
+    # The visible sha label is seven characters whatever ref the href carries, and a single-sha
+    # fixture renders the two byte-identical — so this reads TWO rows at TWO commits and asserts
+    # each href carries its OWN row's sha. Borrowing `@latest_test_run.commit_sha` would send every
+    # row to the newest commit and name the wrong culprit on every row but one.
     # @intent: {"entity": "SpecObservation", "action": "link row's own commit", "behavior": "each row's commit href carries its own run's full sha \u2014 two rows, two distinct github.com commit URLs", "layer": "request"}
     it "links each row to the commit that ran it rather than to the page's newest" do
       repository = repository_with(%w[passed failed])
@@ -791,9 +808,9 @@ RSpec.describe "Repository unstable test runs", type: :request do
       expect(commit_hrefs.uniq.size).to eq(2)
     end
 
-    # The FULL sha goes to GitHub even though seven characters are what the reader sees. The
-    # abbreviation is a label for scanning; a link built from it would be a link built from the
-    # label, which GitHub can often resolve and is not what this row knows.
+    # The FULL sha goes to GitHub even though seven characters are what the reader sees of the
+    # commit. The abbreviation is a label for scanning; a link built from it would be a link built
+    # from the label, which GitHub can often resolve and is not what this row knows.
     # @intent: {"entity": "SpecObservation", "action": "link full sha", "behavior": "the visible commit text stays at 7 characters while the href ends with the full sha", "layer": "request"}
     it "links at the full sha while still printing the abbreviation" do
       repository = repository_with(%w[passed])
@@ -822,24 +839,44 @@ RSpec.describe "Repository unstable test runs", type: :request do
       expect(commit_link[:class]).to eq(definition_link[:class])
     end
 
-    # OUT to GitHub, never IN to the run-anchor drill-in. The Recent runs panel below links its own
-    # sha column to `?commit_sha=` and must keep doing so (SPGD-664); this cell answers the other
-    # question. Asserted as an absence because the failure mode is silent — a `?commit_sha=` href
-    # here renders an identical-looking seven characters.
-    # @intent: {"entity": "SpecObservation", "action": "link out to github", "behavior": "every commit href starts with https://github.com/ and includes /commit/, never a commit_sha= query back into this page", "layer": "request"}
-    it "leaves the product rather than re-opening the run on this page" do
+    # STILL OUT to GitHub — the pairing added a second gesture, it did not replace this one. The
+    # pin keeps the positive shape (github.com, /commit/) the old absence example asserted
+    # around: every GitHub href names a commit on the repository, whatever the run link beside
+    # each of them does.
+    # @intent: {"entity": "SpecObservation", "action": "link out to github", "behavior": "every commit-cell GitHub href starts with https://github.com/ and includes /commit/, whatever the in-app run link beside it carries", "layer": "request"}
+    it "still links each row's sha out to GitHub" do
       repository = repository_with(%w[passed failed])
 
       get repository_path(repository, unstable_test: flaky)
 
       expect(commit_hrefs).to all(start_with("https://github.com/"))
       expect(commit_hrefs).to all(include("/commit/"))
-      expect(commit_hrefs.join(" ")).not_to include("commit_sha=")
+      expect(commit_hrefs.uniq.size).to eq(2)
     end
 
-    # ZERO NEW QUERIES: `row.commit_sha` comes off a run already loaded for the window, `@repository`
-    # is loaded long before the partial renders, and `#github_commit_url` is string composition — so
-    # a table of many linked rows must cost exactly what a table of one row costs.
+    # AND back in — the run link the pairing adds, one per row beside the GitHub anchor. Each
+    # href must carry that row's OWN full sha (the same per-row discipline the GitHub link is
+    # pinned to; the page's newest sha would send every row to one run) and carry `unstable_test`
+    # through the drill, so the run-anchored page the reader lands on still shows this table with
+    # "Close test" intact. Asserted per row, not flattened: a row whose link went missing while a
+    # neighbour grew a second one would flatten to the same count.
+    # @intent: {"entity": "SpecObservation", "action": "link the run in-app", "behavior": "exactly one rc-link per row, href carries that row's own full sha as commit_sha and carries unstable_test through the drill", "layer": "request"}
+    it "re-opens the row's run in-app beside the GitHub link" do
+      repository = repository_with(%w[passed failed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(run_link_hrefs.map(&:size)).to eq([1, 1])
+      expect(run_link_hrefs[0].first).to include("commit_sha=#{sha_for(0)}")
+      expect(run_link_hrefs[1].first).to include("commit_sha=#{sha_for(1)}")
+      expect(run_link_hrefs.flatten).to all(include("unstable_test=#{CGI.escape(flaky)}"))
+      expect(run_link_hrefs.flatten).to all(end_with("#summary"))
+    end
+
+    # ZERO NEW QUERIES, for BOTH links the cell now carries: `row.commit_sha` comes off a run
+    # already loaded for the window, `@repository` is loaded long before the partial renders, and
+    # both destinations are string composition — `#github_commit_url` and `drill_down_path` alike —
+    # so a table of many linked rows must cost exactly what a table of one row costs.
     #
     # ROWS ARE VARIED AT A CONSTANT RUN COUNT, and that is the whole design of this example. Varying
     # the number of RUNS would measure the wrong thing: the window is per-run, so a longer history
@@ -852,7 +889,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # `count_queries` rather than a single-table `queries_against`, on the precedent the sibling
     # panels' guards set: the regression this forecloses is a per-ROW reach for `@repository`, which
     # would show up against `repositories` and be invisible to a count scoped to one other table.
-    # @intent: {"entity": "SpecObservation", "action": "constant link queries", "behavior": "a 9-row table of linked commits costs the same total query count as a 3-row one at the same run count", "layer": "request"}
+    # @intent: {"entity": "SpecObservation", "action": "constant link queries", "behavior": "a 9-row table of linked commit cells (a GitHub link and a run link per row) costs the same total query count as a 3-row one at the same run count", "layer": "request"}
     it "adds no query for a table of many linked rows over a table of one" do
       one_per_run = create_repository(user: @user, github_full_name: "acme/one-per-run")
       three_per_run = create_repository(user: @user, github_full_name: "acme/three-per-run")
