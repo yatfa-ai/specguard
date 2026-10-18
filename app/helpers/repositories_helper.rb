@@ -672,7 +672,10 @@ module RepositoriesHelper
              "#{number_with_delimiter(same)} #{same == 1 ? "is" : "are"} confined to one layer, " \
              "#{number_with_delimiter(undeclared)} declared none."
     examples = near_duplicate_cross_layer_examples(census)
-    examples ? "#{clause} #{examples}" : clause
+    # `safe_join`, not interpolation: the examples clause may carry the in-page anchor (SPGD-1856),
+    # and interpolating a SafeBuffer into a plain String strips its html_safe flag — the anchor
+    # would render as escaped text. The joined pieces are server-built, so the result stays safe.
+    examples ? safe_join([clause, " ", examples]) : clause
   end
 
   # How many stored cross-layer leaders the caption may name, and how long a description may run
@@ -680,9 +683,17 @@ module RepositoriesHelper
   NEAR_DUPLICATE_LEADER_ROWS = 3
   NEAR_DUPLICATE_LEADER_DESCRIPTION = 80
 
+  # The drawer kind the near-duplicate cluster table mints its rows under — shared between the
+  # partial that renders the rows and the caption that anchors to them, so the two ends of one
+  # in-page anchor read one constant rather than two literals free to drift.
+  NEAR_DUPLICATE_CLUSTER_DRAWER_KIND = "Group of tests that read alike"
+
   # Names the census's best cross-layer groups after the tally — "e.g. A ↔ B (a_spec.rb + b_spec.rb)" —
   # from the stored `layer_redundancy_leaders["cross_layer"]`, which is taken over EVERY cluster and so
-  # can name a group past the stored page. Degrades as stored: nil (the caption is exactly what it was)
+  # can name a group past the stored page. A leader whose stored `rank` sits ON the page renders as an
+  # in-page anchor to its drawer row (SPGD-1856); an off-page, unranked or unreadable leader renders
+  # the same phrase as plain text — its read is the API ask, and the caption's "a page of the census"
+  # sentence keeps disclosing the page. Degrades as stored: nil (the caption is exactly what it was)
   # for a census stored before the key, for an empty kind, and for any non-conforming shape — not an
   # Array of at most three rows, or a row without a description list and a file list of strings.
   def near_duplicate_cross_layer_examples(census)
@@ -692,20 +703,53 @@ module RepositoriesHelper
     rows = leaders["cross_layer"]
     return nil unless rows.is_a?(Array) && rows.any? && rows.size <= NEAR_DUPLICATE_LEADER_ROWS
 
-    phrases = rows.map { |row| near_duplicate_leader_phrase(row) }
+    phrases = rows.map { |row| near_duplicate_leader_phrase(row, near_duplicate_leader_anchor(census, row)) }
     return nil if phrases.any?(&:nil?)
 
-    "e.g. #{phrases.join("; ")}."
+    # `safe_join`, not interpolation: a phrase may carry the in-page anchor (SPGD-1856), and Array#join
+    # calls to_s on its elements — stripping a SafeBuffer's html_safe flag and leaving the anchor to
+    # render escaped. The pieces are server-built, so the joined result stays safe.
+    safe_join(["e.g. ", safe_join(phrases, "; "), "."])
   end
 
-  def near_duplicate_leader_phrase(row)
+  # The in-page anchor for a cross-layer leader the stored page holds: the drawer row id the table
+  # minted for the cluster at `rank - 1` — the SAME seed the partial passes
+  # (`cluster-#{index}-#{lead_text}`, index derived from the stored rank, never a second id scheme).
+  # `nil` — plain text — when the row carries no `rank` (a census stored before ranks existed),
+  # when the rank sits past the page (the drawer was deliberately not stored), or when the page row
+  # the rank names does not carry the leader's own smallest member text, so a hand-edited payload
+  # cannot anchor a phrase at a drawer that is not its group.
+  def near_duplicate_leader_anchor(census, row)
+    rank = row.is_a?(Hash) ? row["rank"] : nil
+    return nil unless rank.is_a?(Integer)
+
+    cluster = Array(census["clusters"])[rank - 1]
+    return nil unless cluster.is_a?(Hash)
+
+    members = Array(cluster["members"])
+    lead = members.first
+    return nil unless lead.is_a?(Hash) && lead["text"].present?
+
+    # The leader's descriptions are its member texts sorted, so the first one IS the cluster's
+    # smallest member text — the cheap identity check between the named leader and the page row
+    # the rank points at.
+    return nil unless Array(row["descriptions"]).first == members.filter_map { |m| m.is_a?(Hash) && m["text"] }.min
+
+    drawer_row_id(NEAR_DUPLICATE_CLUSTER_DRAWER_KIND, "cluster-#{rank - 1}-#{lead['text']}")
+  end
+
+  # The phrase itself: the first two stored descriptions joined around the group's files, wrapped in
+  # the in-page anchor when one was composed. The text is identical either way, so a reader (and a
+  # spec) reading the sentence sees the same words on both sides of the page boundary.
+  def near_duplicate_leader_phrase(row, anchor = nil)
     return nil unless row.is_a?(Hash)
 
     descriptions, files = row.values_at("descriptions", "files_seen")
     return nil unless [descriptions, files].all? { |list| list.is_a?(Array) && list.any? && list.all?(String) }
 
     names = descriptions.first(2).map { |text| truncate(text, length: NEAR_DUPLICATE_LEADER_DESCRIPTION) }
-    "#{names.join(" ↔ ")} (#{files.join(" + ")})"
+    phrase = "#{names.join(" ↔ ")} (#{files.join(" + ")})"
+    anchor ? link_to(phrase, "##{anchor}", class: "rc-link") : phrase
   end
 
   # --- the console (`repositories/show`) -----------------------------------------------------
@@ -811,11 +855,19 @@ module RepositoriesHelper
   end
 
   # --- the detail drawer -----------------------------------------------------------------------
+  # The DOM id `drawer_row` gives a row, derived from the row's kind and its seed — the ONE
+  # derivation an in-page anchor may compose against (SPGD-1856's caption anchors reuse it; a
+  # second scheme would mint a link to nowhere). `seed` is caller-shaped, so a caller that wants
+  # an anchorable row composes the SAME seed at both ends.
+  def drawer_row_id(kind, seed)
+    "row-#{kind.parameterize}-#{Digest::SHA1.hexdigest(seed.to_s).first(8)}"
+  end
+
   # A table row that opens the drawer. `facts` are [label, value] pairs; `actions` are
   # [label, href, variant] links (a row's real destinations — the server drill-in, GitHub);
   # `body` is optional extra markup. Nothing is fetched: the detail is a <template> in the row.
   def drawer_row(seed, kind:, title:, facts: [], actions: [], body: nil, row_data: {}, &cells)
-    id = "row-#{kind.parameterize}-#{Digest::SHA1.hexdigest(seed.to_s).first(8)}"
+    id = drawer_row_id(kind, seed)
     detail = tag.template(data: { drawer_body: "" }) do
       safe_join([
         (tag.dl(class: "rc-facts") do

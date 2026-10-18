@@ -108,7 +108,9 @@
           The <%= number_with_delimiter(census["clusters"].size) %> <%= ranked_multi_file_first ? "top-ranked" : "costliest" %> of
           <%= number_with_delimiter(census["cluster_count"]) %>
           <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>
-          — a page of the census, not all of it.<%= (layer_clause = near_duplicate_layer_redundancy_clause(census)) ? " #{layer_clause}" : "" %>
+          — a page of the census, not all of it.<%# `safe_join`, not interpolation: the clause may carry
+              the caption's in-page anchor (SPGD-1856), and interpolating a SafeBuffer into a plain
+              String strips its html_safe flag, leaving the anchor to render escaped. %><%= (layer_clause = near_duplicate_layer_redundancy_clause(census)) ? safe_join([" ", layer_clause]) : "" %>
         <% else %>
           All <%= number_with_delimiter(census["cluster_count"]) %>
           <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>.
@@ -177,7 +179,7 @@
                  end
                end)
              end %>
-          <%= drawer_row("cluster-#{index}-#{lead && lead['text']}", kind: "Group of tests that read alike", title: (lead ? lead["text"] : "Group #{index + 1}"),
+          <%= drawer_row("cluster-#{index}-#{lead && lead['text']}", kind: RepositoriesHelper::NEAR_DUPLICATE_CLUSTER_DRAWER_KIND, title: (lead ? lead["text"] : "Group #{index + 1}"),
                 facts: [["Tests", "#{number_with_delimiter(cluster['member_count'])} #{'member'.pluralize(cluster['member_count'].to_i)}"],
                         ["Examples", number_with_delimiter(cluster["example_count"])],
                         ["Time", cluster["total_seconds"].nil? ? "not timed" : "#{SpecObservation.humanized_duration(cluster['total_seconds'])}#{" (#{cluster['timed_count']} of #{cluster['example_count']} examples timed)" unless cluster['timed_count'].to_i == cluster['example_count'].to_i}"],

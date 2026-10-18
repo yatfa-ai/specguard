@@ -51,9 +51,10 @@ RSpec.describe NearDuplicateCensusView do
       expect(summary.keys).to eq(block.keys)
     end
 
-    # @intent: { entity: "NearDuplicateCensusView", action: "pass the leaders through", behavior: "the summary serves a stored layer_redundancy_leaders head key unchanged and in its stored position", layer: "unit" }
+    # @intent: { entity: "NearDuplicateCensusView", action: "pass the leaders through", behavior: "the summary serves a stored layer_redundancy_leaders head key unchanged and in its stored position, a stored rank on a leader row included", layer: "unit" }
     it "serves layer_redundancy_leaders unchanged in the stored position" do
-      leaders = { "cross_layer" => [{ "descriptions" => ["a"], "files_seen" => ["x"] }], "same_layer" => [], "undeclared" => [] }
+      leaders = { "cross_layer" => [{ "rank" => 7, "descriptions" => ["a"], "files_seen" => ["x"] }],
+                  "same_layer" => [], "undeclared" => [] }
       stored = block.merge("layer_redundancy_leaders" => leaders)
 
       summary = described_class.new(stored).summary
@@ -133,6 +134,72 @@ RSpec.describe NearDuplicateCensusView do
 
         expect(answered).to include("requested" => ask, "cluster" => nil, "member_listing" => nil)
       end
+    end
+
+    # SPGD-1856: the census's per-kind leaders are taken over every cluster, so a leader can sit
+    # past the stored page — and since the writer stores each leader's rank, that rank is a
+    # resolvable ask. The answer is the leader row REDUCED: stored scalars plus its descriptions,
+    # never a members/layer_groups listing the page cap deliberately did not store off-page, with
+    # `member_listing` saying "descriptions" so the coarser grain is disclosed, not discovered.
+    # @intent: { entity: "NearDuplicateCensusView", action: "resolve a past-page leader", behavior: "a rank past the stored page that equals a stored leader's rank answers the reduced leader row with member_listing descriptions, echoing the ask and the snapshot stamps", layer: "unit" }
+    it "answers a past-page leader rank with the reduced leader row" do
+      leader = { "rank" => 15, "member_count" => 3, "example_count" => 9, "total_seconds" => 4.0,
+                 "timed_count" => 3, "similarity_range" => [0.9, 0.86], "overlap_kind" => "multi_file",
+                 "layer_redundancy" => "cross_layer", "declared_layers" => %w[unit request],
+                 "files_seen" => %w[spec/a_spec.rb spec/b_spec.rb], "file_count" => 2,
+                 "descriptions" => ["Alpha describes", "Beta describes", "Gamma describes"] }
+      ranked = block.merge("cluster_count" => 34, "truncated" => true,
+                           "layer_redundancy_leaders" =>
+                             { "cross_layer" => [leader], "same_layer" => [], "undeclared" => [] })
+
+      answered = described_class.new(ranked).cluster("15")
+
+      expect(answered).to include("requested" => "15", "rank" => 15, "cluster_count" => 34,
+                                  "weighed_run_id" => 7, "computed_at" => "2026-10-08T00:00:00Z",
+                                  "member_listing" => "descriptions")
+      expect(answered["cluster"]).to eq(leader)
+      expect(answered["cluster"].keys).not_to include("members", "layer_groups")
+    end
+
+    # @intent: { entity: "NearDuplicateCensusView", action: "keep the on-page answer", behavior: "an on-page rank answers the stored cluster with its members carried once and never consults a stored leader row that carries the same rank", layer: "unit" }
+    it "answers an on-page rank from the stored page and never consults the leaders" do
+      impostor = { "rank" => 1, "member_count" => 1, "descriptions" => ["An impostor row"], "files_seen" => ["x"] }
+      ranked = block.merge("layer_redundancy_leaders" =>
+                             { "cross_layer" => [impostor], "same_layer" => [], "undeclared" => [] })
+
+      answered = described_class.new(ranked).cluster("1")
+
+      expect(answered["member_listing"]).to eq("members")
+      expect(answered["cluster"]).to eq(big.except("layer_groups"))
+      expect(JSON.generate(answered)).not_to include("An impostor row")
+    end
+
+    # @intent: { entity: "NearDuplicateCensusView", action: "refuse a past-page non-leader", behavior: "a past-page rank that is no stored leader's rank still answers a null cluster with the ask echoed", layer: "unit" }
+    it "keeps a past-page non-leader rank a null cluster, echoing the ask" do
+      leader = { "rank" => 15, "member_count" => 3, "descriptions" => ["Alpha describes"], "files_seen" => ["x"] }
+      ranked = block.merge("cluster_count" => 34, "layer_redundancy_leaders" =>
+                             { "cross_layer" => [leader], "same_layer" => [], "undeclared" => [] })
+
+      answered = described_class.new(ranked).cluster("12")
+
+      expect(answered).to include("requested" => "12", "rank" => 12, "cluster_count" => 34,
+                                  "cluster" => nil, "member_listing" => nil)
+    end
+
+    # A census stored before ranks existed — every census stored today — degrades exactly as
+    # stored: leader rows without a `rank` never match, so a past-page ask stays a null cluster.
+    # The non-numeric ask is the sharp edge: a rank-less row's missing `rank` is nil, and reading
+    # it against a nil ask without the guard would mint a leader out of an unparseable ask.
+    # @intent: { entity: "NearDuplicateCensusView", action: "degrade a rank-less census", behavior: "leader rows stored without a rank never answer a past-page ask, and a non-numeric ask stays null over rank-less leader rows", layer: "unit" }
+    it "answers a past-page ask null when the stored leaders carry no rank" do
+      leader = { "member_count" => 3, "descriptions" => ["Alpha describes"], "files_seen" => ["x"] }
+      ranked = block.merge("cluster_count" => 34, "layer_redundancy_leaders" =>
+                             { "cross_layer" => [leader], "same_layer" => [], "undeclared" => [] })
+
+      expect(described_class.new(ranked).cluster("15"))
+        .to include("requested" => "15", "rank" => 15, "cluster" => nil, "member_listing" => nil)
+      expect(described_class.new(ranked).cluster("abc"))
+        .to include("requested" => "abc", "rank" => nil, "cluster" => nil, "member_listing" => nil)
     end
   end
 end

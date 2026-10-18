@@ -610,6 +610,85 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
     end
   end
 
+  # SPGD-1856: the census's per-kind leaders are taken over EVERY cluster, so a leader can rank
+  # past the stored page — where the full member listings were deliberately not stored. The
+  # drill-in still reaches it, REDUCED: the leader row's stored scalars plus its descriptions,
+  # with `member_listing: "descriptions"` disclosing the coarser grain. Ten costly multi-file
+  # pairs fill the page; the cheap single-file cross-layer pair ranks 11th.
+  describe "a cross-layer leader that ranks past the stored page" do
+    let(:past_page_repository) { separate_repository("acme/past-page-leader") }
+    let(:past_page_key) { past_page_repository.api_keys.create! }
+
+    def past_page_projection(name, query: {})
+      get_repository(key: past_page_key, query: query)[name]
+    end
+
+    before do
+      topics = ["Inventory decrements a stocked item", "Billing invoices an overdue account",
+                "Coupons expire after thirty days", "Warehouse picks the nearest bin",
+                "Refunds restore the cancelled order", "Catalog lists the scarce titles",
+                "Pricing applies the seasonal discount", "Ledger closes the fiscal period",
+                "Shelves reserve the held copies", "Carts merge the duplicate entries"]
+      specs = topics.flat_map do |text|
+        slug = text.split.first.downcase
+        [unannotated(file_path: "spec/models/#{slug}_spec.rb", line_number: 3,
+                     name: text, id: "./spec/models/#{slug}_spec.rb[1:1]", duration: 90.0),
+         unannotated(file_path: "spec/requests/#{slug}_spec.rb", line_number: 9,
+                     name: "#{text} outright", id: "./spec/requests/#{slug}_spec.rb[1:1]", duration: 90.0)]
+      end
+      specs += [annotated_spec(file_path: "spec/models/checkout_spec.rb", line_number: 3,
+                               name: "Checkout rejects the expired card",
+                               entity: "Checkout", action: "rejects",
+                               behavior: "an expired card payment", layer: "unit"),
+                annotated_spec(file_path: "spec/models/checkout_spec.rb", line_number: 9,
+                               name: "Checkout rejects the expired card outright",
+                               entity: "Checkout", action: "rejects",
+                               behavior: "an expired card payment outright", layer: "request")]
+      ingest(past_page_repository, specs)
+    end
+
+    # @intent: { entity: "near_duplicate_cluster", action: "open a past-page leader", behavior: "a rank past the stored page that names the census's cross_layer leader answers the reduced leader row with member_listing descriptions and the snapshot echoed, never a null", layer: "request" }
+    it "answers the past-page leader's rank with the reduced block" do
+      full = past_page_projection("near_duplicates", query: { near_duplicates: "1" })
+      expect(full["cluster_count"]).to eq(11)
+      expect(full["clusters"].size).to eq(10)
+
+      leader = past_page_projection("near_duplicates_summary",
+                                    query: { near_duplicates_summary: "1" })["layer_redundancy_leaders"]["cross_layer"].sole
+      expect(leader).to include("rank" => 11, "layer_redundancy" => "cross_layer")
+
+      drilled = past_page_projection("near_duplicate_cluster", query: { near_duplicate_cluster: "11" })
+
+      expect(drilled).to include("requested" => "11", "rank" => 11, "cluster_count" => 11,
+                                 "weighed_run_id" => full["weighed_run_id"],
+                                 "computed_at" => full["computed_at"],
+                                 "member_listing" => "descriptions")
+      expect(drilled["cluster"]).to eq(leader)
+      expect(drilled["cluster"].keys).not_to include("members", "layer_groups")
+    end
+
+    # @intent: { entity: "near_duplicate_cluster", action: "refuse a past-page non-leader", behavior: "a past-page rank that is no stored leader's rank answers a null cluster with the ask echoed", layer: "request" }
+    it "answers a past-page non-leader rank null, echoing the ask" do
+      drilled = past_page_projection("near_duplicate_cluster", query: { near_duplicate_cluster: "12" })
+
+      expect(response).to have_http_status(:ok)
+      expect(drilled).to include("requested" => "12", "rank" => 12, "cluster_count" => 11,
+                                 "cluster" => nil, "member_listing" => nil)
+    end
+
+    # @intent: { entity: "near_duplicate_cluster", action: "read the stored row once on the leader arm", behavior: "the leader-resolution ask issues exactly one near_duplicate_censuses read and no spec_identities read", layer: "request" }
+    it "still issues exactly one census read on the leader-resolution arm" do
+      get_repository(key: past_page_key, query: { near_duplicate_cluster: "11" }) # warm shared caches
+
+      expect(queries_against("spec_identities") do
+        get_repository(key: past_page_key, query: { near_duplicate_cluster: "11" })
+      end).to be_empty
+      expect(queries_against("near_duplicate_censuses") do
+        get_repository(key: past_page_key, query: { near_duplicate_cluster: "11" })
+      end.size).to eq(1)
+    end
+  end
+
   def separate_repository(full_name)
     uid = (@separate_uid = (@separate_uid || 1001) + 1).to_s
 

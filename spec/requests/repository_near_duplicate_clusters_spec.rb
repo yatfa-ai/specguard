@@ -784,6 +784,47 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     expect(caption.call).to end_with(tally_only)
   end
 
+  # @intent: {"entity": "NearDuplicateCensus", "action": "anchor the caption to its drawer", "behavior": "an on-page cross-layer leader phrase renders as an in-page anchor to the drawer row id the page mints for its rank, while an off-page leader phrase stays plain text, at no extra query", "layer": "request"}
+  it "anchors an on-page cross-layer leader phrase to its drawer row and keeps an off-page one plain text" do
+    ingest(repository, pair_specs)
+    census = NearDuplicateCensus.find_by!(repository_id: repository.id)
+    page_cluster = census.payload["clusters"].sole
+    tally = { "cross_layer" => 4, "same_layer" => 2, "undeclared" => 1 }
+    leader = { "rank" => 1, "member_count" => page_cluster["member_count"],
+               "descriptions" => page_cluster["members"].map { it["text"] }.sort.first(3),
+               "files_seen" => ["spec/models/checkout_spec.rb"] }
+    # The anchor must point at the row the page renders: the SAME seed the partial mints
+    # (`cluster-#{index}-#{lead_text}`, index = rank - 1), run through the same id derivation.
+    seed = "cluster-0-#{page_cluster['members'].first['text']}"
+    expected_id = "row-#{'Group of tests that read alike'.parameterize}-#{Digest::SHA1.hexdigest(seed).first(8)}"
+    phrase = "Checkout rejects an expired card ↔ Checkout rejects an expired card outright (spec/models/checkout_spec.rb)"
+
+    caption = lambda do
+      get repository_path(repository)
+      panel.find("#near-duplicate-clusters-page")
+    end
+
+    census.update!(payload: census.payload.merge(
+      "truncated" => true, "cluster_count" => 7, "layer_redundancy_counts" => tally,
+      "layer_redundancy_leaders" => { "cross_layer" => [leader], "same_layer" => [], "undeclared" => [] }
+    ))
+    anchor = caption.call.find("a.rc-link")
+    expect(anchor["href"]).to end_with("##{expected_id}")
+    expect(anchor.text).to include(phrase)
+
+    # the anchor is composed from the stored hash in hand: the whole panel still reads ONE census row
+    expect(queries_against("near_duplicate_censuses") { get repository_path(repository) }.size).to eq(1)
+
+    # off-page: the same phrase, no anchor — the drawer was deliberately not stored
+    census.update!(payload: census.payload.merge(
+      "layer_redundancy_leaders" =>
+        { "cross_layer" => [leader.merge("rank" => 15)], "same_layer" => [], "undeclared" => [] }
+    ))
+    off_page = caption.call
+    expect(off_page.text).to include(phrase)
+    expect(off_page).not_to have_selector("a.rc-link")
+  end
+
   # @intent: {"entity": "NearDuplicateCensus", "action": "render overlap kind", "behavior": "each row says whether its group spans one spec file or several, from the stored key and, for a payload stored without it, derived from its members", "layer": "request"}
   it "shows the overlap kind per row, derived from members when the key is not stored" do
     ingest(repository, pair_specs)

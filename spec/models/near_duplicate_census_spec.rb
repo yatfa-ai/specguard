@@ -97,11 +97,57 @@ RSpec.describe NearDuplicateCensus do
       expect(leaders["cross_layer"]).to eq([])
       expect(leaders["same_layer"]).to eq([])
       row = leaders["undeclared"].sole
-      expect(row.keys).to eq(%w[member_count example_count total_seconds timed_count similarity_range overlap_kind
+      expect(row.keys).to eq(%w[rank member_count example_count total_seconds timed_count similarity_range overlap_kind
                                 layer_redundancy declared_layers files_seen file_count descriptions])
       expect(row["files_seen"]).to eq(live.clusters.sole.files_seen)
       expect(row["descriptions"]).to eq(live.clusters.sole.members.map(&:text).sort.first(3))
       expect(row).not_to include("members", "layer_groups")
+    end
+
+    # SPGD-1856: the leaders are taken over EVERY cluster, so a leader can sit past the stored page —
+    # and until a rank was stored, a caption that named such a leader pointed nowhere. Ten costly
+    # multi-file pairs fill the page (ranks 1–10); the cheap single-file cross-layer pair is the
+    # census's best cross_layer group and ranks 11th — past the page, exactly the row the caption
+    # names and the drill-in must reach.
+    # @intent: { entity: "NearDuplicateCensus", action: "store the leader ranks", behavior: "every stored leader row carries its 1-based rank in the full ranking, a cross_layer leader ranked past the stored page included, and the summary projection serves that rank untouched", layer: "unit" }
+    it "stores each leader's rank in the full ranking, past the page included" do
+      topics = ["Inventory decrements a stocked item", "Billing invoices an overdue account",
+                "Coupons expire after thirty days", "Warehouse picks the nearest bin",
+                "Refunds restore the cancelled order", "Catalog lists the scarce titles",
+                "Pricing applies the seasonal discount", "Ledger closes the fiscal period",
+                "Shelves reserve the held copies", "Carts merge the duplicate entries"]
+      specs = topics.flat_map do |text|
+        slug = text.split.first.downcase
+        [unannotated_spec(file_path: "spec/models/#{slug}_spec.rb", line_number: 3,
+                          name: text, id: "./spec/models/#{slug}_spec.rb[1:1]", duration: 90.0),
+         unannotated_spec(file_path: "spec/requests/#{slug}_spec.rb", line_number: 9,
+                          name: "#{text} outright", id: "./spec/requests/#{slug}_spec.rb[1:1]", duration: 90.0)]
+      end
+      specs += [annotated_spec(file_path: "spec/models/checkout_spec.rb", line_number: 3,
+                               name: "Checkout rejects the expired card",
+                               entity: "Checkout", action: "rejects",
+                               behavior: "an expired card payment", layer: "unit"),
+                annotated_spec(file_path: "spec/models/checkout_spec.rb", line_number: 9,
+                               name: "Checkout rejects the expired card outright",
+                               entity: "Checkout", action: "rejects",
+                               behavior: "an expired card payment outright", layer: "request")]
+      ingest(specs, commit_sha: "feedfacecafe0003")
+      described_class.refresh!(repository)
+
+      live = NearDuplicateClusters.for(repository)
+      expect(live.cluster_count).to eq(11)
+      expect(live.clusters.size).to eq(10) # the page is full; the cross-layer leader sits past it
+
+      stored = described_class.find_by!(repository_id: repository.id)
+      leaders = stored.payload["layer_redundancy_leaders"]
+      expect(leaders["cross_layer"].sole).to include("rank" => 11, "layer_redundancy" => "cross_layer")
+      # the page's own leaders carry their positions too: the best three of the ten it holds
+      expect(leaders["undeclared"].map { it["rank"] }).to eq([1, 2, 3])
+      expect(leaders["same_layer"]).to eq([])
+
+      # and the summary projection serves the stored rank untouched — the caption's read
+      summary = NearDuplicateCensusView.new(stored.serialized).summary
+      expect(summary["layer_redundancy_leaders"]["cross_layer"].sole["rank"]).to eq(11)
     end
 
     # @intent: { entity: "NearDuplicateCensus", action: "store the live computation", behavior: "refreshing stores a payload whose every summary figure equals the live NearDuplicateClusters computation over the same data", layer: "unit" }
