@@ -246,16 +246,28 @@ class NearDuplicateCensus < ApplicationRecord
     end
 
     # The per-kind leaders, each kind an array (`[]` for an empty kind — a measured zero, never nil).
+    # Each row also carries the leader's 1-based rank in the FULL ranking (SPGD-1856): the leaders
+    # are taken over every cluster, so a leader can sit past the stored page, and the rank is what
+    # makes a named leader findable — the drill-in resolves it past the page, and the caption can
+    # anchor to the drawer the page holds. The rank map is built once, off the one ranking the page
+    # itself sorts by — an in-memory lookup, no second sort and no query.
     def leaders_payload(clusters)
-      clusters.layer_redundancy_leaders.transform_values { |group| group.map { |cluster| leader_payload(cluster) } }
+      ranks = clusters.ranked_clusters.each_with_index.to_h { |cluster, index| [cluster, index + 1] }
+      clusters.layer_redundancy_leaders.transform_values do |group|
+        group.map { |cluster| leader_payload(cluster, ranks.fetch(cluster)) }
+      end
     end
 
     # ONE kind-leader (SPGD-1844): the compact, nameable row — the summary-row scalars plus the first
     # few member texts — WITHOUT the member / layer_groups listings, which are not duplicated here
     # (the full drill-in stays on the stored page's `?near_duplicate_cluster=` when the leader sits
     # on it). Built from the cluster's own members, whose five fields `member_payload` owns.
-    def leader_payload(cluster)
+    #
+    # `rank` (SPGD-1856) is the leader's 1-based position in the full ranking — the address the
+    # drill-in resolves past the stored page, where the full listings were deliberately not stored.
+    def leader_payload(cluster, rank)
       {
+        rank: rank,
         member_count: cluster.member_count,
         example_count: cluster.example_count,
         total_seconds: cluster.total_seconds,

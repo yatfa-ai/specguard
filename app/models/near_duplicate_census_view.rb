@@ -20,9 +20,26 @@
 # filtering here. A recompute can move every position, so the drill-in echoes `computed_at` and
 # `weighed_run_id` (and `cluster_count`) beside the rank: a rank without the snapshot it indexes
 # is a claim about nothing.
+#
+# == A rank past the stored page can still name a cluster
+#
+# The stored page caps at ten clusters, but the census's per-kind leaders are taken over EVERY
+# cluster and, since SPGD-1856, each stored leader row carries its 1-based rank in the full
+# ranking. When the asked rank exceeds the page AND equals a stored leader's rank, the drill-in
+# answers that leader row REDUCED — its stored scalars plus its `descriptions`, never a
+# members/layer_groups listing the page cap deliberately did not store off-page — with
+# `member_listing` saying `"descriptions"` so the listing's coarser grain (texts, no file/line
+# coordinates) is disclosed rather than discovered. On-page ranks keep the full answer and never
+# consult the leaders; a past-page rank that is no leader's rank still answers null.
 class NearDuplicateCensusView
   # The stored block's list of clusters.
   CLUSTERS_KEY = "clusters"
+
+  # `member_listing`'s value on a reduced leader block (SPGD-1856): the listing is the leader's
+  # stored `descriptions` — member TEXTS only, no file/line coordinates — because that is all the
+  # census stored off-page. The block's other two values (`members`, `layer_groups`) stay the
+  # full listings an on-page rank serves.
+  LEADER_LISTING = "descriptions"
 
   def initialize(block)
     @block = block
@@ -51,9 +68,14 @@ class NearDuplicateCensusView
   # position or `nil` — an unknown, zero, negative or non-numeric rank is a null cluster with the
   # ask echoed, never an error.
   #
-  # The members are carried ONCE: `layer_groups` when `layer_redundancy` is non-nil, else the flat
-  # `members` — the dashboard partial's own rule — and `member_listing` says which one the
-  # cluster holds.
+  # A rank PAST the stored page that equals a stored kind-leader's rank answers that leader REDUCED
+  # (see the class comment): stored scalars plus `descriptions`, `member_listing` saying
+  # `"descriptions"`. A census stored before ranks existed — leader rows without a `rank` — degrades
+  # exactly as stored: the drill answers `cluster: null`.
+  #
+  # On-page ranks keep today's answer and never consult the leaders. There the members are carried
+  # ONCE: `layer_groups` when `layer_redundancy` is non-nil, else the flat `members` — the
+  # dashboard partial's own rule — and `member_listing` says which one the cluster holds.
   #
   # `nil` when nothing is stored.
   def cluster(requested)
@@ -61,6 +83,7 @@ class NearDuplicateCensusView
 
     rank = parse_rank(requested)
     stored = rank && rank <= clusters.size ? clusters[rank - 1] : nil
+    leader = stored.nil? ? leader_at_rank(rank) : nil
 
     {
       "requested" => requested,
@@ -68,8 +91,8 @@ class NearDuplicateCensusView
       "cluster_count" => @block["cluster_count"],
       "weighed_run_id" => @block["weighed_run_id"],
       "computed_at" => @block["computed_at"],
-      "member_listing" => stored && member_listing(stored),
-      "cluster" => stored && single_listing(stored)
+      "member_listing" => stored ? member_listing(stored) : (leader ? LEADER_LISTING : nil),
+      "cluster" => stored ? single_listing(stored) : leader
     }
   end
 
@@ -85,6 +108,25 @@ class NearDuplicateCensusView
 
     rank = text.to_i
     rank.positive? ? rank : nil
+  end
+
+  # The stored kind-leader whose `rank` is the asked one — the head's three arrays scanned once
+  # (three kinds × at most three rows), no method call per kind. Rows stored without a `rank`
+  # (every census stored before SPGD-1856) never match, so the reduced arm exists only where the
+  # rank was stored; a `nil` rank (a non-numeric ask) reads nothing at all.
+  def leader_at_rank(rank)
+    return nil if rank.nil?
+
+    leaders = @block["layer_redundancy_leaders"]
+    return nil unless leaders.is_a?(Hash)
+
+    leaders.each_value do |rows|
+      next unless rows.is_a?(Array)
+
+      found = rows.find { |row| row.is_a?(Hash) && row["rank"] == rank }
+      return found if found
+    end
+    nil
   end
 
   def summary_row(cluster, rank)

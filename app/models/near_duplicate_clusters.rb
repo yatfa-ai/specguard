@@ -470,7 +470,17 @@ class NearDuplicateClusters
   # `example_count` breaks the tie and the members' own texts break that one, so a repository whose
   # clusters total equally has one stable order rather than one that changes per request.
   def clusters
-    @clusters ||= @all_clusters.sort_by(&:ranking_key).first(@limit)
+    @clusters ||= ranked_clusters.first(@limit)
+  end
+
+  # THE FULL RANKING — every cluster found, in the page's own order, uncapped (SPGD-1856).
+  # `#clusters` is this array's first `@limit`, and the per-kind leaders are taken over the whole
+  # census, so a leader can sit past the stored page: its 1-based position HERE is the rank the
+  # stored leader row carries, which is what makes a named leader findable by the drill-in. One
+  # array, one sort — the page, the leaders and the ranks all read the same order and never a
+  # second ranking.
+  def ranked_clusters
+    @ranked_clusters ||= @all_clusters.sort_by(&:ranking_key)
   end
 
   # How many near-duplicate clusters this repository holds IN TOTAL — the denominator `clusters.size`
