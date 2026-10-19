@@ -32,8 +32,10 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   # without exception, and that is what makes it legible as a SHA rather than as a word. Every
   # other assertion here goes through `have_text`, which discards markup — so a SHA that lost the
   # class would read identically green. Nothing else catches it either: `DesignSystemLint` counts
-  # headings, raw palette colours and raw `btn`, not this.
-  def basis_line_shas = basis_line.all("span.font-mono").map(&:text)
+  # headings, raw palette colours and raw `btn`, not this. The selector matches by CLASS, not by
+  # tag: since SPGD-1867 the two shas of the withheld-run sentence are the family's read links,
+  # and a restyle could as easily carry the class on the anchor as on a span around it.
+  def basis_line_shas = basis_line.all(".font-mono").map(&:text)
 
   def chart = trajectory_panel.find("#suite-trajectory-chart")
 
@@ -348,7 +350,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # A growth chart's unstated premise is that its right-hand end is "now". During a shard-layout
     # migration it is not: the cohort is the older, larger group, so the line stops before the SHA
     # the Overview names directly above. The counts disclose it arithmetically; nothing said it.
-    # @intent: {"entity": "Repository", "action": "announce missing newest run", "behavior": "when the newest main run is withheld the basis says The most recent run on main is not on this line: newwy00 and that the line ends at oldwy30, with both SHAs rendered in the font-mono span class", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "announce missing newest run", "behavior": "when the newest main run is withheld the basis says The most recent run on main is not on this line: newwy00 and that the line ends at oldwy30, with both SHAs named as the family's read links into those runs (font-mono kept, full-sha Summary hrefs)", "layer": "request"}
     it "says out loud when the most recent run is not on the line" do
       repository = create_repository(user: @user)
       4.times { |i| sharded_run(repository, commit_sha: "oldwy#{i}0000000", per_shard: 5_000 + i) }
@@ -365,6 +367,15 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       # Both SHAs in the sentence, not just the one. They sit in a single clause, so one of them in
       # the body font does not read as a second convention — it reads as a fault in the sentence.
       expect(basis_line_shas).to include("newwy00", "oldwy30")
+      # Each naming is the family's read link: the anchor carries the recomputed FULL-sha Summary
+      # href (`latest_test_run_for_commit` matches exactly, so a seven-character href would
+      # resolve nil and silently fall back to the newest run). Recomputed from the router,
+      # deliberately not through `drill_down_path`, which reads controller ivars this spec does
+      # not have — the documented reasoning of spec/requests/repository_previous_run_links_spec.rb.
+      expect(basis_line.all("a").map { |a| [a.text, a[:href]] }).to eq([
+        ["newwy00", repository_path(repository, commit_sha: "newwy00000000", anchor: "summary")],
+        ["oldwy30", repository_path(repository, commit_sha: "oldwy30000000", anchor: "summary")]
+      ])
     end
 
     # The ordinary case must not carry the caveat — a sentence that appears every time is a sentence

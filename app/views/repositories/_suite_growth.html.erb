@@ -89,11 +89,26 @@
                 numbers of parts cannot be differenced in either direction. That is not a claim
                 that these ones measured less than they should have.
               <% end %>
+              <%# The two shas the sentence exists to point at name themselves the family's read
+                  gesture: a link into each run's own page, anchored at the Summary — the same
+                  pattern _comparison_basis and _unstable_test_runs already use. No self-link
+                  suppression when the sha IS the run being read: the family's landed policy
+                  (_unstable_test_runs) covers it, and Recent runs made the same call. The href
+                  carries the FULL sha (`latest_test_run_for_commit` matches exactly, so a
+                  seven-character ask would resolve nil and silently fall back to the newest run),
+                  `drill_down_path` carries the page's open asks and the explicit commit_sha beats
+                  any carried run anchor, and the `font-mono` stays on the span so the sha keeps
+                  reading as a sha. +0 queries: `newest_run`/`last_run` are rows the trajectory
+                  already loaded. %>
               <% unless @suite_trajectory.plots_newest? %>
                 The most recent run on <%= @suite_trajectory.branch %> is not on this line:
-                <span class="font-mono"><%= @suite_trajectory.newest_run.commit_sha.first(7) %></span>
+                <span class="font-mono"><%= link_to @suite_trajectory.newest_run.commit_sha.first(7),
+                      drill_down_path(@repository, commit_sha: @suite_trajectory.newest_run.commit_sha,
+                                      anchor: "summary"), class: "rc-link" %></span>
                 is one of the withheld runs, so the line ends at
-                <span class="font-mono"><%= @suite_trajectory.last_run.commit_sha.first(7) %></span>,
+                <span class="font-mono"><%= link_to @suite_trajectory.last_run.commit_sha.first(7),
+                      drill_down_path(@repository, commit_sha: @suite_trajectory.last_run.commit_sha,
+                                      anchor: "summary"), class: "rc-link" %></span>,
                 <%= time_ago_in_words(@suite_trajectory.last_run.created_at) %> ago.
               <% end %>
             <% end %>
@@ -111,8 +126,15 @@
                 <p class="sr-only"><%= declared_layers_summary(layer_runs, @suite_trajectory.branch) %></p>
                 <ol class="space-y-1" aria-label="Declared layers by run on <%= @suite_trajectory.branch %>, oldest first">
                   <% layer_runs.each do |run| %>
+                    <%# The sha cell names the run the family's way: a link into that run's own
+                        page, anchored at the Summary. Full sha in the href
+                        (`latest_test_run_for_commit` matches exactly); +0 queries, the row is one
+                        the trajectory already loaded and primed. `data-commit-sha` and the stack
+                        beside it are untouched. %>
                     <li class="flex items-center gap-2" data-commit-sha="<%= run.commit_sha %>">
-                      <span class="font-mono text-xs w-16 shrink-0"><%= run.commit_sha.first(7) %></span>
+                      <span class="font-mono text-xs w-16 shrink-0"><%= link_to run.commit_sha.first(7),
+                            drill_down_path(@repository, commit_sha: run.commit_sha, anchor: "summary"),
+                            class: "rc-link" %></span>
                       <span class="flex-1"><%= layers_stack(run.layer_counts, key: false) %></span>
                     </li>
                   <% end %>
