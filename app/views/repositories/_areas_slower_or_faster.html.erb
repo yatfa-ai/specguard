@@ -1,3 +1,14 @@
+    <%# == AREAS THAT GOT SLOWER OR FASTER — the run pair at the AREA grain, in time
+    The basis run this panel measures against is named by sha at five sentences below, and every
+    naming is the family's read gesture (same pattern as _near_duplicate_clusters and the run
+    tables): a link into the named run's page, anchored at the Summary. The href carries the FULL
+    sha — latest_test_run_for_commit matches exactly, so a seven-character ask would resolve nil
+    and fall back to the newest run. drill_down_path carries the page's open asks and the explicit
+    commit_sha beats any carried run anchor, so the reader keeps their asks and lands on the basis
+    run. +0 queries: the row is the @previous_test_run the page already loaded. %>
+    <% previous_run_link = @previous_test_run && link_to(@previous_test_run.commit_sha.first(7),
+      drill_down_path(@repository, commit_sha: @previous_test_run.commit_sha, anchor: "summary"),
+      class: "rc-link") %>
     <% if @spec_directory_runtime_growth %>
       <%= render UI::PanelComponent.new(title: "Areas that got slower or faster",
                                         id: "spec-directory-runtime-growth") do %>
@@ -25,7 +36,7 @@
               recorded — largest movement first, in both directions
             <% end %>
             — measured between this run and
-            <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>, the
+            <span class="font-mono"><%= previous_run_link %></span>, the
             previous run on this branch.
             <% if @spec_directory_runtime_growth.any_unmoved? %>
               Where the movement runs out before the list does, areas whose time did not move are
@@ -86,33 +97,39 @@
                 ) %>
           <% when :previous_unmeasured %>
             <%= render UI::EmptyStateComponent.new(
-                  title: "No comparison to draw",
-                  description: "The previous run on this branch " \
-                               "(#{@previous_test_run.commit_sha.first(7)}) reported no tests, so " \
-                               "there is nothing to time this run's areas against. Counting the " \
-                               "whole suite as new time would charge a commit for a gap in the " \
-                               "reporting."
-                ) %>
+                  title: "No comparison to draw"
+                ) do |empty| %>
+              <% empty.with_description do %>
+                The previous run on this branch
+                (<%= previous_run_link %>) reported no tests, so there is nothing to time
+                this run's areas against. Counting the whole suite as new time would charge a
+                commit for a gap in the reporting.
+              <% end %>
+            <% end %>
           <% when :assembled_differently %>
             <%= render UI::EmptyStateComponent.new(
-                  title: "No comparison to draw",
-                  description: "This run was #{@latest_test_run.delivery_description}, while " \
-                               "#{@previous_test_run.commit_sha.first(7)} was " \
-                               "#{@previous_test_run.delivery_description} — so the two are not " \
-                               "measuring the same thing. A run's examples arrive shard by shard, " \
-                               "so a difference taken across two compositions would report areas " \
-                               "getting slower and faster that no commit touched."
-                ) %>
+                  title: "No comparison to draw"
+                ) do |empty| %>
+              <% empty.with_description do %>
+                This run was <%= @latest_test_run.delivery_description %>, while
+                <%= previous_run_link %> was <%= @previous_test_run.delivery_description %>
+                — so the two are not measuring the same thing. A run's examples arrive shard
+                by shard, so a difference taken across two compositions would report areas
+                getting slower and faster that no commit touched.
+              <% end %>
+            <% end %>
           <% when :previous_unrecorded %>
             <%= render UI::EmptyStateComponent.new(
-                  title: "No comparison to draw",
-                  description: "The previous run on this branch " \
-                               "(#{@previous_test_run.commit_sha.first(7)}) recorded no per-example " \
-                               "detail, so it has no areas to time against — every area of this " \
-                               "run would read as time newly appearing. A run ingested before that " \
-                               "detail was stored, or sent by a client that reports only totals, " \
-                               "has a suite size and none of these rows."
-                ) %>
+                  title: "No comparison to draw"
+                ) do |empty| %>
+              <% empty.with_description do %>
+                The previous run on this branch
+                (<%= previous_run_link %>) recorded no per-example detail, so it has no
+                areas to time against — every area of this run would read as time newly
+                appearing. A run ingested before that detail was stored, or sent by a client
+                that reports only totals, has a suite size and none of these rows.
+              <% end %>
+            <% end %>
           <% when :latest_unrecorded %>
             <%= render UI::EmptyStateComponent.new(
                   title: "No comparison to draw",
@@ -123,16 +140,18 @@
                 ) %>
           <% when :previous_untimed %>
             <%= render UI::EmptyStateComponent.new(
-                  title: "No comparison to draw",
-                  description: "The previous run on this branch " \
-                               "(#{@previous_test_run.commit_sha.first(7)}) reported no timings — " \
-                               "it recorded " \
-                               "#{number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count)} " \
-                               "#{@spec_directory_runtime_growth.layer? ? "#{@spec_directory_runtime_growth.layer}-layer " : ""}" \
-                               "examples and a duration for none of them — so there is nothing to " \
-                               "measure this run's areas against. Every area would otherwise read " \
-                               "as time newly appearing."
-                ) %>
+                  title: "No comparison to draw"
+                ) do |empty| %>
+              <% empty.with_description do %>
+                The previous run on this branch
+                (<%= previous_run_link %>) reported no timings — it recorded
+                <%= number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count) %>
+                <%= @spec_directory_runtime_growth.layer? ? "#{@spec_directory_runtime_growth.layer}-layer " : "" %>
+                examples and a duration for none of them — so there is nothing to measure
+                this run's areas against. Every area would otherwise read as time newly
+                appearing.
+              <% end %>
+            <% end %>
           <% when :latest_untimed %>
             <%= render UI::EmptyStateComponent.new(
                   title: "No comparison to draw",

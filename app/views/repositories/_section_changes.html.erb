@@ -38,7 +38,8 @@
             <% end %>
           <% end %>
           <% if @layer_run_growth&.comparable? %>
-            <p class="text-xs text-app-content-secondary" id="layer-run-growth">Since <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span> on <%= @latest_test_run.branch %>: <%= @layer_run_growth.label %></p>
+            <p class="text-xs text-app-content-secondary" id="layer-run-growth">Since <span class="font-mono"><%= link_to @previous_test_run.commit_sha.first(7),
+                        drill_down_path(@repository, commit_sha: @previous_test_run.commit_sha, anchor: "summary"), class: "rc-link" %></span> on <%= @latest_test_run.branch %>: <%= @layer_run_growth.label %></p>
           <% end %>
           <%= render UI::NoteComponent.new(summary: "How declared layers are counted", id: "declared-layers-basis") do %>
             "Declared layers" is how many of this run's <%= number_with_delimiter(readings.recorded) %>
@@ -104,7 +105,8 @@
             </p>
           <% end %>
           <% if @layer_runtime_growth&.comparable? %>
-            <p class="text-xs text-app-content-secondary" id="layer-runtime-growth">Since <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span> on <%= @latest_test_run.branch %>: <%= @layer_runtime_growth.label %></p>
+            <p class="text-xs text-app-content-secondary" id="layer-runtime-growth">Since <span class="font-mono"><%= link_to @previous_test_run.commit_sha.first(7),
+                        drill_down_path(@repository, commit_sha: @previous_test_run.commit_sha, anchor: "summary"), class: "rc-link" %></span> on <%= @latest_test_run.branch %>: <%= @layer_runtime_growth.label %></p>
           <% end %>
           <% if @layer_window_runtime_growth&.comparable? %>
             <p class="text-xs text-app-content-secondary" id="layer-window-runtime-growth">
