@@ -49,6 +49,17 @@ RSpec.describe "Repository Suite growth — Declared layers by run", type: :requ
 
       bars = strip.all("ol li")
       expect(bars.map { |li| li["data-commit-sha"] }).to eq(%w[layer0000001 layer0000002 layer0000003])
+      # Each row's sha cell is the family's read link into that run: the FULL sha in the href
+      # (`latest_test_run_for_commit` matches exactly, so a seven-character href would resolve nil
+      # and silently fall back to the newest run), recomputed from the router rather than through
+      # `drill_down_path`, which reads controller ivars this spec does not have. The example asks
+      # for the branch by name, so the carried branch ask rides beside the sha ask.
+      bars.each do |li|
+        sha = li["data-commit-sha"]
+        expect(li).to have_link(sha.first(7),
+                                href: repository_path(repository, commit_sha: sha, anchor: "summary",
+                                                                     branch: "main"))
+      end
       expect(strip.all("ol li span.rc-stack", count: 3).size).to eq(3)
       # The middle run's bar carries its own counts, so a rise-and-fall is a different shape per bar.
       expect(bars[1].find("span.rc-stack")["aria-label"]).to eq("unit 3, request 4, undeclared 1")
