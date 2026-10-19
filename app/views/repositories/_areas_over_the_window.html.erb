@@ -6,14 +6,20 @@
                    clear_id: "spec-directory-window-growth-clear-layer", anchor: "changes" %>
         <% if window_growth.layer_empty? %>
           <%= render UI::EmptyStateComponent.new(
-                title: "No #{window_growth.layer}-layer examples at either end of this window",
-                description: "Neither the run at the far end of this window nor the newest run has " \
-                             "an example that declared #{window_growth.layer} as its layer, so no " \
-                             "area gained or lost any across it. Both ends recorded per-example " \
-                             "detail; the layer is simply absent from both. " \
-                             "#{spec_directory_window_growth_baseline_sentence(window_growth)} " \
-                             "#{spec_directory_window_growth_span_sentence(window_growth)}"
-              ) %>
+                title: "No #{window_growth.layer}-layer examples at either end of this window"
+              ) do |empty| %>
+            <%# The description travels as the block slot, not the param: the baseline sentence is a
+                SafeBuffer (a live link since SPGD-1865), and the param renders ESCAPED — the anchor
+                would print as visible text. %>
+            <% empty.with_description do %>
+              Neither the run at the far end of this window nor the newest run has an example that
+              declared <%= window_growth.layer %> as its layer, so no area gained or lost any
+              across it. Both ends recorded per-example detail; the layer is simply absent from
+              both.
+              <%= spec_directory_window_growth_baseline_sentence(window_growth) %>
+              <%= spec_directory_window_growth_span_sentence(window_growth) %>
+            <% end %>
+          <% end %>
         <% elsif window_growth.comparable? && window_growth.any_movement? %>
           <%= render UI::NoteComponent.new(summary: "How to read this", id: "spec-directory-window-growth-basis") do %>
             <% if window_growth.truncated? %>
@@ -64,18 +70,21 @@
           <% end %>
         <% elsif window_growth.comparable? %>
           <%= render UI::EmptyStateComponent.new(
-                title: "No area moved across this window",
-                description: "Every one of the " \
-                             "#{number_with_delimiter(window_growth.directory_count)} " \
-                             "#{'area'.pluralize(window_growth.directory_count)} the two ends of " \
-                             "this window recorded holds the same number of " \
-                             "#{window_growth.layer? ? "#{window_growth.layer}-layer " : ""}" \
-                             "examples in both. " \
-                             "#{spec_directory_window_growth_baseline_sentence(window_growth)} " \
-                             "#{spec_directory_window_growth_span_sentence(window_growth)} Only " \
-                             "those two ends were compared, so an area that grew and shrank back " \
-                             "in between is counted here as an area that did not move."
-              ) %>
+                title: "No area moved across this window"
+              ) do |empty| %>
+            <%# Block slot, not the param: the baseline sentence is a SafeBuffer (SPGD-1865) and the
+                param renders ESCAPED. %>
+            <% empty.with_description do %>
+              Every one of the <%= number_with_delimiter(window_growth.directory_count) %>
+              <%= "area".pluralize(window_growth.directory_count) %> the two ends of this window
+              recorded holds the same number of
+              <%= window_growth.layer? ? "#{window_growth.layer}-layer " : "" %>examples in both.
+              <%= spec_directory_window_growth_baseline_sentence(window_growth) %>
+              <%= spec_directory_window_growth_span_sentence(window_growth) %>
+              Only those two ends were compared, so an area that grew and shrank back in between is
+              counted here as an area that did not move.
+            <% end %>
+          <% end %>
         <% else %>
           <% case window_growth.state %>
           <% when :anchor_unmeasured %>
@@ -99,15 +108,19 @@
                 ) %>
           <% when :baseline_unrecorded %>
             <%= render UI::EmptyStateComponent.new(
-                  title: "No comparison to draw",
-                  description: "The run this comparison landed on " \
-                               "(#{window_growth.baseline_run.commit_sha.first(7)}, " \
-                               "#{window_growth.runs_back} back in this window) recorded no " \
-                               "per-example detail, so it has no areas to compare against — every " \
-                               "area of this run would read as new. A run ingested before that " \
-                               "detail was stored, or sent by a client that reports only totals, " \
-                               "has a suite size and none of these rows."
-                ) %>
+                  title: "No comparison to draw"
+                ) do |empty| %>
+              <%# Block slot, not the param: the sha names itself the family's read gesture (a live
+                  link into the baseline run, SPGD-1865) and the param renders ESCAPED. %>
+              <% empty.with_description do %>
+                The run this comparison landed on
+                (<%= spec_directory_window_baseline_run_link(window_growth) %>,
+                <%= window_growth.runs_back %> back in this window) recorded no per-example
+                detail, so it has no areas to compare against — every area of this run would read
+                as new. A run ingested before that detail was stored, or sent by a client that
+                reports only totals, has a suite size and none of these rows.
+              <% end %>
+            <% end %>
           <% when :anchor_unrecorded %>
             <%= render UI::EmptyStateComponent.new(
                   title: "No comparison to draw",
@@ -118,13 +131,18 @@
                 ) %>
           <% else %>
             <%= render UI::EmptyStateComponent.new(
-                  title: "No comparison to draw",
-                  description: "Neither this run nor " \
-                               "#{window_growth.baseline_run.commit_sha.first(7)}, the run at the " \
-                               "far end of this window, recorded per-example detail, so there are " \
-                               "no areas to compare. Suite growth over the window as a whole is on " \
-                               "the chart above, which reads the run totals rather than these rows."
-                ) %>
+                  title: "No comparison to draw"
+                ) do |empty| %>
+              <%# Block slot, not the param: the sha is a live link (SPGD-1865) and the param
+                  renders ESCAPED. %>
+              <% empty.with_description do %>
+                Neither this run nor
+                <%= spec_directory_window_baseline_run_link(window_growth) %>, the run at the far
+                end of this window, recorded per-example detail, so there are no areas to compare.
+                Suite growth over the window as a whole is on the chart above, which reads the run
+                totals rather than these rows.
+              <% end %>
+            <% end %>
           <% end %>
         <% end %>
         <% if @layer_window_growth&.comparable? %>

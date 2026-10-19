@@ -36,6 +36,11 @@
                 description: spec_directory_window_runtime_growth_unmoved_description(window_growth)
               ) %>
         <% else %>
+          <%# `description` is a plain String on every arm that names no run, and a SafeBuffer on the
+              four that name the baseline by sha (SPGD-1865 — the read gesture, built in the helper
+              with safe_join). The component renders a String param ESCAPED and a SafeBuffer through,
+              so the one param here is correct for both; never "simplify" a linked arm back onto a
+              plain-string param, and never reach for .html_safe. %>
           <% title, description = spec_directory_window_runtime_growth_refusal(window_growth) %>
           <%= render UI::EmptyStateComponent.new(title: title, description: description) %>
         <% end %>

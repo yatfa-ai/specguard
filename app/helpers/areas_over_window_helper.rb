@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 # The sentences of the "Areas that grew or shrank over the window" panel on repositories#show. Lifted
-# out of RepositoriesHelper, which had grown past what one file can be read as; the methods are
-# unchanged. `window_branch_clause` stays in RepositoriesHelper (shared with other panels) and is
-# reached here by implicit receiver, since every helper is mixed into the one view class.
+# out of RepositoriesHelper, which had grown past what one file can be read as (the lift itself
+# moved no behavior; SPGD-1865 later gave the baseline sentence its link and a SafeBuffer return).
+# `window_branch_clause` stays in RepositoriesHelper (shared with other panels) and is reached here
+# by implicit receiver, since every helper is mixed into the one view class.
 module AreasOverWindowHelper
   # == The "Areas that grew or shrank over the window" panel's sentences
 
@@ -19,6 +20,22 @@ module AreasOverWindowHelper
   # Three facts, because three different readers need different ones: the commit, so it can be looked
   # up; how far back, so the figure can be sized against the window; and how long ago, because "26
   # runs back" is a week on one branch and a quarter on another.
+  #
+  # Since SPGD-1865 the sha names itself the family's read gesture: a link into that run's own page,
+  # anchored at the Summary — the same pattern _comparison_basis, _areas_grew_or_shrank,
+  # _recent_runs and _unstable_test_runs already use. The href carries the FULL sha on purpose
+  # (`latest_test_run_for_commit` matches exactly, so a seven-character ask would resolve nil,
+  # silently fall back to the newest run and only the run-anchor notice would say so);
+  # `drill_down_path` carries the page's open asks (branch, window, layer, limit, drill-ins) and the
+  # explicit commit_sha beats any carried run anchor, so the reader keeps every ask they opened and
+  # lands on this baseline run rather than the page they were on. +0 queries: `baseline_run` is the
+  # walk's own loaded row (`SpecDirectoryWindowContext`), and the link is built from it in memory.
+  #
+  # Returns a SafeBuffer, not a String. Every composer that embeds this sentence MUST join it with
+  # `safe_join` or a block slot — interpolating it into a plain String strips html_safe at every
+  # nesting level and the anchor renders as escaped text with no error, and a text assertion cannot
+  # tell the difference. The five composers in `AreasRuntimeOverWindowHelper` and the two
+  # EmptyState-interpolating partials are the consumers to keep honest.
   def spec_directory_window_growth_baseline_sentence(growth)
     position =
       if growth.runs_back == 1
@@ -27,8 +44,21 @@ module AreasOverWindowHelper
         "#{number_with_delimiter(growth.runs_back)} runs back"
       end
 
-    "Measured against #{growth.baseline_run.commit_sha.first(7)} — #{position} in this window, " \
-      "#{time_ago_in_words(growth.baseline_run.created_at)} ago — and this run."
+    safe_join(["Measured against ",
+               spec_directory_window_baseline_run_link(growth),
+               " — #{position} in this window, " \
+               "#{time_ago_in_words(growth.baseline_run.created_at)} ago — and this run."])
+  end
+
+  # The window family's one spelling of the baseline naming: seven characters as the link text,
+  # the FULL sha in the href, the Summary as the anchor. Defined once here so the runtime helper,
+  # the refusal arms and the partials that compose their own sentences around a bare sha cannot
+  # drift into four spellings of one gesture. +0 queries by construction: `growth.baseline_run` is
+  # the walk's own row and nothing here re-reads it.
+  def spec_directory_window_baseline_run_link(growth)
+    link_to(growth.baseline_run.commit_sha.first(7),
+            drill_down_path(@repository, commit_sha: growth.baseline_run.commit_sha, anchor: "summary"),
+            class: "rc-link")
   end
 
   # How much of the window the comparison actually spans, and what the walk stepped over to reach

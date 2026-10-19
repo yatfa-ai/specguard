@@ -73,15 +73,19 @@
           <% end %>
         <% elsif file_growth.recorded? %>
           <%= render UI::EmptyStateComponent.new(
-                title: "No file moved across this window",
-                description: "Every one of the " \
-                             "#{number_with_delimiter(file_growth.file_count)} " \
-                             "#{'spec file'.pluralize(file_growth.file_count)} either end of this " \
-                             "window recorded in #{file_growth.path} holds the same number of " \
-                             "examples at both. #{spec_directory_window_growth_baseline_sentence(file_growth)} " \
-                             "Only those two ends were compared, so a file that grew and shrank back " \
-                             "in between is counted here as a file that did not move."
-              ) %>
+                title: "No file moved across this window"
+              ) do |empty| %>
+            <%# Block slot, not the param: the baseline sentence is a SafeBuffer (SPGD-1865) and the
+                param renders ESCAPED. %>
+            <% empty.with_description do %>
+              Every one of the <%= number_with_delimiter(file_growth.file_count) %>
+              <%= "spec file".pluralize(file_growth.file_count) %> either end of this window
+              recorded in <%= file_growth.path %> holds the same number of examples at both.
+              <%= spec_directory_window_growth_baseline_sentence(file_growth) %>
+              Only those two ends were compared, so a file that grew and shrank back in between is
+              counted here as a file that did not move.
+            <% end %>
+          <% end %>
         <% elsif file_growth.layer? %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No #{file_growth.layer}-layer examples in this directory",

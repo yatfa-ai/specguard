@@ -29,7 +29,10 @@ module AreasRuntimeOverWindowHelper
                  "losing the same amount, with nothing having got slower and nothing faster — and " \
                  "across a window this long, that rename may be one nobody remembers."
     sentences << spec_directory_window_runtime_growth_denominator_sentence(growth)
-    sentences.join(" ")
+    # `safe_join`, not Array#join: the baseline sentence now returns a SafeBuffer, and joining an
+    # array with `join` calls to_s on its elements — the anchor would render as escaped text with
+    # no error.
+    safe_join(sentences, " ")
   end
 
   # "The 10 areas whose time moved most, of the 63 either end recorded — largest movement first, in
@@ -55,30 +58,39 @@ module AreasRuntimeOverWindowHelper
       "the Summary at the top of this page, which is a maximum over the run's shards."
   end
 
-  # The comparable-but-nothing-moved empty state.
+  # The comparable-but-nothing-moved empty state. `safe_join`, not interpolation: the baseline
+  # sentence is a SafeBuffer, and interpolating it into a plain String would strip html_safe and
+  # render the anchor escaped.
   def spec_directory_window_runtime_growth_unmoved_description(growth)
-    "Every area the two ends of this window timed took the same time at both, so no area of the " \
-      "suite got slower or faster across it. #{spec_directory_window_runtime_growth_denominator_sentence(growth)} " \
-      "#{spec_directory_window_growth_baseline_sentence(growth)} " \
-      "#{spec_directory_window_growth_span_sentence(growth)} Only those two ends were compared, so " \
-      "an area that got slower and faster again in between is counted here as one that did not move."
+    safe_join(["Every area the two ends of this window timed took the same time at both, so no " \
+               "area of the suite got slower or faster across it. ",
+               spec_directory_window_runtime_growth_denominator_sentence(growth), " ",
+               spec_directory_window_growth_baseline_sentence(growth), " ",
+               spec_directory_window_growth_span_sentence(growth),
+               " Only those two ends were compared, so an area that got slower and faster again in " \
+               "between is counted here as one that did not move."])
   end
 
-  # The layer-empty-at-both-ends empty state.
+  # The layer-empty-at-both-ends empty state. `safe_join` for the same reason as above.
   def spec_directory_window_runtime_growth_layer_empty_description(growth)
-    "Neither the run at the far end of this window nor the newest run has an example that declared " \
-      "#{growth.layer} as its layer, so there is no #{growth.layer}-layer time to compare area by " \
-      "area. Both ends recorded per-example detail; the layer is simply absent from both. " \
-      "#{spec_directory_window_growth_baseline_sentence(growth)} " \
-      "#{spec_directory_window_growth_span_sentence(growth)}"
+    safe_join(["Neither the run at the far end of this window nor the newest run has an example " \
+               "that declared #{growth.layer} as its layer, so there is no #{growth.layer}-layer " \
+               "time to compare area by area. Both ends recorded per-example detail; the layer is " \
+               "simply absent from both. ",
+               spec_directory_window_growth_baseline_sentence(growth), " ",
+               spec_directory_window_growth_span_sentence(growth)])
   end
 
   # The description for each refusal state the panel can be in. The two walk states that name no
   # baseline are worded by {AreasOverWindowHelper}; the rest are about the two ends' per-example rows.
-  # Returns [title, description].
+  # Returns [title, description], where the four sha-bearing arms return the description as a
+  # SafeBuffer (the sha is the family's read gesture, a live link into the named run — see
+  # {AreasOverWindowHelper#spec_directory_window_baseline_run_link}) and the rest as the plain
+  # String they have always been. `UI::EmptyStateComponent` renders a String param ESCAPED and a
+  # SafeBuffer through — both shapes land correctly through the one `description:` param the
+  # splat at the template already passes, so no arm and no call site changes shape here.
   def spec_directory_window_runtime_growth_refusal(growth)
     layer = growth.layer? ? "#{growth.layer}-layer " : ""
-    baseline = growth.baseline_run&.commit_sha&.first(7)
 
     case growth.state
     when :anchor_unmeasured
@@ -93,10 +105,12 @@ module AreasRuntimeOverWindowHelper
       ["No comparison to draw", spec_directory_window_growth_no_baseline_description(growth)]
     when :baseline_unrecorded
       ["No comparison to draw",
-       "The run this comparison landed on (#{baseline}, #{growth.runs_back} back in this window) " \
-       "recorded no per-example detail, so it has no areas to time against — every area of the " \
-       "newest run would read as time newly appearing. A run ingested before that detail was " \
-       "stored, or sent by a client that reports only totals, has a suite size and none of these rows."]
+       safe_join(["The run this comparison landed on (",
+                  spec_directory_window_baseline_run_link(growth),
+                  ", #{growth.runs_back} back in this window) recorded no per-example detail, so " \
+                  "it has no areas to time against — every area of the newest run would read as " \
+                  "time newly appearing. A run ingested before that detail was stored, or sent by " \
+                  "a client that reports only totals, has a suite size and none of these rows."])]
     when :anchor_unrecorded
       ["No comparison to draw",
        "This run recorded no per-example detail, so it has no areas to time — every area of the " \
@@ -104,10 +118,12 @@ module AreasRuntimeOverWindowHelper
        "only totals sends a suite size and none of these rows."]
     when :baseline_untimed
       ["No comparison to draw",
-       "The run at the far end of this window (#{baseline}, #{growth.runs_back} back) reported no " \
-       "timings — it recorded #{number_with_delimiter(growth.baseline_recorded_count)} #{layer}examples " \
-       "and a duration for none of them — so there is nothing to measure the newest run's areas " \
-       "against. Every area would otherwise read as time newly appearing."]
+       safe_join(["The run at the far end of this window (",
+                  spec_directory_window_baseline_run_link(growth),
+                  ", #{growth.runs_back} back) reported no timings — it recorded " \
+                  "#{number_with_delimiter(growth.baseline_recorded_count)} #{layer}examples " \
+                  "and a duration for none of them — so there is nothing to measure the newest " \
+                  "run's areas against. Every area would otherwise read as time newly appearing."])]
     when :anchor_untimed
       ["No comparison to draw",
        "This run reported no timings — it recorded #{number_with_delimiter(growth.anchor_recorded_count)} " \
@@ -116,14 +132,18 @@ module AreasRuntimeOverWindowHelper
        "is a reporting gap and not a speedup."]
     when :neither_timed
       ["No comparison to draw",
-       "Neither this run nor #{baseline}, the run at the far end of this window, reported a duration " \
-       "for any #{layer}example, so there is no time to compare area by area. Both recorded their " \
-       "examples; neither client sent timings with them."]
+       safe_join(["Neither this run nor ",
+                  spec_directory_window_baseline_run_link(growth),
+                  ", the run at the far end of this window, reported a duration for any " \
+                  "#{layer}example, so there is no time to compare area by area. Both recorded " \
+                  "their examples; neither client sent timings with them."])]
     else
       ["No comparison to draw",
-       "Neither this run nor #{baseline}, the run at the far end of this window, recorded " \
-       "per-example detail, so there are no areas to time. Suite growth over the window as a whole " \
-       "is on the chart above, which reads the run totals rather than these rows."]
+       safe_join(["Neither this run nor ",
+                  spec_directory_window_baseline_run_link(growth),
+                  ", the run at the far end of this window, recorded per-example detail, so there " \
+                  "are no areas to time. Suite growth over the window as a whole is on the chart " \
+                  "above, which reads the run totals rather than these rows."])]
     end
   end
 
@@ -150,7 +170,8 @@ module AreasRuntimeOverWindowHelper
     sentences << "This area is the immediate parent of the files listed, so a nested area such as a " \
                  "subdirectory of it is its own area rather than part of this list."
     sentences << spec_directory_window_file_runtime_growth_denominator_sentence(growth)
-    sentences.join(" ")
+    # `safe_join`, not Array#join: the baseline sentence is a SafeBuffer, and `join` would strip it.
+    safe_join(sentences, " ")
   end
 
   # "The 10 spec files whose time moved most across this window, of the 41 either end recorded in
@@ -179,13 +200,15 @@ module AreasRuntimeOverWindowHelper
       "run's shards."
   end
 
-  # The comparable-but-nothing-moved empty state.
+  # The comparable-but-nothing-moved empty state. `safe_join`, not interpolation: the baseline
+  # sentence is a SafeBuffer (see {AreasOverWindowHelper#spec_directory_window_growth_baseline_sentence}).
   def spec_directory_window_file_runtime_growth_unmoved_description(growth)
-    "Every one of the #{number_with_delimiter(growth.file_count)} " \
-      "#{"spec file".pluralize(growth.file_count)} the two ends of this window timed in " \
-      "#{growth.path} took the same time at both. " \
-      "#{spec_directory_window_file_runtime_growth_denominator_sentence(growth)} " \
-      "#{spec_directory_window_growth_baseline_sentence(growth)} Only those two ends were compared, " \
-      "so a file that got slower and faster again in between is counted here as one that did not move."
+    safe_join(["Every one of the #{number_with_delimiter(growth.file_count)} " \
+               "#{"spec file".pluralize(growth.file_count)} the two ends of this window timed in " \
+               "#{growth.path} took the same time at both. ",
+               spec_directory_window_file_runtime_growth_denominator_sentence(growth), " ",
+               spec_directory_window_growth_baseline_sentence(growth),
+               " Only those two ends were compared, so a file that got slower and faster again in " \
+               "between is counted here as one that did not move."])
   end
 end
