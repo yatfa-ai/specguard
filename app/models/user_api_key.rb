@@ -39,6 +39,18 @@ class UserApiKey < ApplicationRecord
   TOKEN_PREFIX = "sgu_"
   TOKEN_BYTES = 24
 
+  # The longest `name` a mint accepts — the cap `ApiKey::NAME_MAX_LENGTH` measures and derives
+  # against the 4KB session cookie every web mint writes the reveal flash into; that constant's
+  # comment carries the budget, the measured table, and the provenance of the number. This
+  # surface's own mint measures within ~20B of the repository row that table was taken on (guard
+  # 1,246B at the cap through a real `POST /account/api_keys`), and it is pinned the same way: a
+  # cap raised past where the cookie binds fails the budget example in
+  # `spec/requests/account_api_keys_spec.rb`. Stated HERE, as this model's own constant feeding
+  # its own guard below — rather than read across the class boundary at the `validates` line —
+  # for the same reason the NUL refusal beside it is this model's own sentence: the guard and the
+  # number it enforces read together, and `spec/models/user_api_key_spec.rb` pins both.
+  NAME_MAX_LENGTH = ApiKey::NAME_MAX_LENGTH
+
   belongs_to :user
 
   # The retirement split, named once and used everywhere a caller needs one side of it — the same
@@ -64,6 +76,15 @@ class UserApiKey < ApplicationRecord
   # NUL before this one answers.
   validates :name, presence: true,
                    format: { without: /\u0000/, message: "must not contain a NUL character" }
+  # `NAME_MAX_LENGTH` extends the same rule to length: an over-budget name is refused with the
+  # model's sentence ("Name is too long (maximum is … characters)") rather than truncated or
+  # committed. Unlike the NUL check it is scoped to mints and name changes, mirroring
+  # `ApiKey`: neither model has a save path today that touches an existing row, but if one is
+  # added (a rotation, a rename), a save that leaves the name untouched must not die on a name
+  # minted before the cap existed. Legacy over-cap rows are intentionally left valid; the cap
+  # binds new rows and name changes only.
+  validates :name, length: { maximum: NAME_MAX_LENGTH },
+                   if: -> { new_record? || will_save_change_to_name? }
 
   def self.digest(token)
     OpenSSL::Digest::SHA256.hexdigest(token.to_s)

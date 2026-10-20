@@ -147,6 +147,37 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
       expect(repository.api_keys.last.name).to eq('CI\u0000x')
     end
 
+    # SPGD-1878: a name past NAME_MAX_LENGTH is refused by the model's length validator through
+    # the same 400 funnel as the NUL refusal above. This surface writes no session cookie — an
+    # API mint never touches one — so the cap here is not a budget but the same uniform bound
+    # every mint surface answers to, and the refusal arrives as this API's own JSON, nothing
+    # written.
+    # @intent: { entity: "api key", action: "refuse an over-length name", behavior: "minting a key whose name is one character past ApiKey::NAME_MAX_LENGTH answers 400 bad_request JSON with no key written", layer: "request" }
+    it "answers 400 bad_request and writes nothing when the name exceeds NAME_MAX_LENGTH" do
+      expect {
+        post mint_path, params: { name: "x" * (ApiKey::NAME_MAX_LENGTH + 1) },
+                        headers: bearer(owner_key.raw_token)
+      }.not_to change(ApiKey, :count)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body).to include("error" => "bad_request")
+      # The model's sentence rides both the `details` array and the repeated `message`.
+      expect(response.parsed_body["details"].to_s).to include("maximum is #{ApiKey::NAME_MAX_LENGTH}")
+      expect(response.parsed_body["message"]).to include("maximum is #{ApiKey::NAME_MAX_LENGTH}")
+    end
+
+    # Counterweight: exactly at the cap the mint succeeds and the full-length name is stored
+    # byte-unchanged, so the cap refuses strictly past itself and no name an agent could
+    # legitimately send is over-refused.
+    # @intent: { entity: "api key", action: "mint a name at the cap", behavior: "minting with a name of exactly ApiKey::NAME_MAX_LENGTH characters answers 201 and stores the full-length name, so the cap refuses strictly past itself", layer: "request" }
+    it "still mints a name of exactly NAME_MAX_LENGTH characters" do
+      post mint_path, params: { name: "x" * ApiKey::NAME_MAX_LENGTH },
+                      headers: bearer(owner_key.raw_token)
+
+      expect(response).to have_http_status(:created)
+      expect(repository.api_keys.last.name.length).to eq(ApiKey::NAME_MAX_LENGTH)
+    end
+
     # @intent: { entity: "api key", action: "mint for a member", behavior: "a member granted keys.manage mints successfully and the new key is attributed to that member", layer: "request" }
     it "mints for a member granted keys.manage, attributed to them" do
       create_membership(repository: repository, user: member, permissions: %w[view keys.manage])

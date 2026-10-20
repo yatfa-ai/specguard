@@ -54,6 +54,59 @@ class ApiKey < ApplicationRecord
 
   before_validation :assign_token, on: :create
 
+  # The longest `name` a mint accepts — measured against the budget that actually binds it, never
+  # estimated (SPGD-1080's rule).
+  #
+  # ## The budget
+  #
+  # This app has no `config/initializers/session_store.rb`, so the session — the reveal flash
+  # included — is Rails' default cookie store, whose ceiling is
+  # `ActionDispatch::Cookies::MAX_COOKIE_SIZE` (4,096 bytes of cookie name + value). A web mint
+  # commits the key row on `save`, writes the reveal flash (`revealed_api_key` +
+  # `revealed_api_key_name`) and a notice into the session, and redirects — and the session cookie
+  # only serializes afterwards, at `commit_session`. An oversize flash therefore does not answer
+  # as a validation error: it raises `CookieOverflow` at `commit_session`, a 500 with the key row
+  # already committed and the reveal-once token lost with the overflowing cookie — nothing can
+  # re-serve that token afterwards, because only the SHA-256 digest persists. The bound lives
+  # HERE, in the data, on the same refuse-don't-coerce rule the NUL validation below states; the
+  # length refusal lands in the refusal channel every mint surface already renders — the web
+  # else branches, the API mint's `render_bad_request`.
+  #
+  # ## The measurement
+  #
+  # Sizes below are the ceiling check's OWN arithmetic — `cookie_name.bytesize + value.bytesize`
+  # on the serialized value, i.e. `EncryptedKeyRotatingCookieJar#check_for_overflow!`'s inputs —
+  # recorded by wrapping that check around a real `POST /repositories/:id/api_keys` mint in a
+  # signed-in spec session. (The Set-Cookie line runs ~110-200B above the guard at these sizes —
+  # wire escaping plus the `; path=/; HttpOnly;` attributes — but the guard is what actually
+  # raises, so the table reads the guard.)
+  #
+  #   name bytes | guard B | outcome at that name
+  #   -----------|---------|------------------------------------------------------
+  #             2 |     774 | baseline mint, name "CI"
+  #           256 |   1,230 | this cap, ASCII — Set-Cookie line 1,343B
+  #         1,024 |   2,594 | this cap's worst byte shape (256 four-byte
+  #                     characters still count as 256) — line 2,787B
+  #         1,860 |   4,078 | last name the spec-session ceiling tolerates
+  #         1,870 |   4,098 | ActionDispatch::Cookies::CookieOverflow
+  #
+  # The `/account` mints measure within ~20B of the repository rows at this cap (`sgu_`/`sga_`:
+  # 1,246B / 1,250B) — same reveal-flash shape, same cookie, same budget.
+  #
+  # ## Why 256
+  #
+  # A key name is a label, and 256 characters is already several times the longest realistic
+  # credential label. The cookie only binds near 1,860-byte names in a spec session — lower in a
+  # real one, which measures heavier (~200B on SPGD-1075's live measurement) — so a cap at that
+  # boundary would spend the whole budget on a label. 256 is chosen inside the measured budget
+  # instead, leaving ~2.8KB (and, at the worst four-byte-per-character shape, ~1.5KB) of headroom
+  # for everything else a real session carries today and may carry tomorrow. A constant raised
+  # past where the cookie binds fails the budget example pinned on THIS constant
+  # (`spec/requests/api_keys_spec.rb`) — a mint at the raised cap either raises `CookieOverflow`
+  # in the example or drives the recorded guard total across `MAX_COOKIE_SIZE` — instead of
+  # surfacing in production as the post-commit 500 this cap exists to prevent.
+  NAME_MAX_LENGTH = 256
+
   validates :token_digest, presence: true, uniqueness: true
   # A NUL in `name` is refused, not scrubbed: Postgres cannot store that character, so a row that
   # passed validation would die at INSERT with `ArgumentError: string contains null byte` and the
@@ -63,6 +116,16 @@ class ApiKey < ApplicationRecord
   # can run a query with the NUL before this one answers.
   validates :name, presence: true,
                    format: { without: /\u0000/, message: "must not contain a NUL character" }
+  # `NAME_MAX_LENGTH` extends the same rule to length: an over-budget name is refused with the
+  # model's sentence ("Name is too long (maximum is … characters)") rather than truncated or
+  # committed. Unlike the NUL check it is scoped to mints and name changes, because `regenerate!`
+  # saves the row with its name untouched and rotation is the only recovery path for a lost token
+  # (the row holds only the SHA-256 digest). Unscoped, the cap would break that recovery for any
+  # row minted before it existed — the API mint accepted any length, the web mint ~1,860
+  # characters — turning `save!` in `regenerate!` into `RecordInvalid`. Legacy over-cap rows are
+  # therefore intentionally left valid: the cap binds new rows and name changes only.
+  validates :name, length: { maximum: NAME_MAX_LENGTH },
+                   if: -> { new_record? || will_save_change_to_name? }
 
   def self.digest(token)
     OpenSSL::Digest::SHA256.hexdigest(token.to_s)

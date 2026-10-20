@@ -350,4 +350,48 @@ RSpec.describe "Account API keys", type: :request do
     expect(flash[:alert]).to be_present
     expect(flash[:revealed_user_api_key]).to be_nil
   end
+
+  # SPGD-1878: a name past NAME_MAX_LENGTH is refused by the model's length validator through the
+  # same else branch as the NUL refusal above — the model's sentence, nothing written, no reveal
+  # flash — instead of committing the row and losing the reveal-once token to a CookieOverflow
+  # 500 on the redirect. The length is counted in characters, the unit the validator and the
+  # constant both speak.
+  # @intent: {"entity": "UserApiKey", "action": "refuse an over-length name", "behavior": "minting a key whose name is one character past UserApiKey::NAME_MAX_LENGTH redirects back to /account with the model's too-long sentence, writes no key, and sets no reveal flash", "layer": "request"}
+  it "redirects with an alert and writes nothing when the name exceeds NAME_MAX_LENGTH" do
+    expect {
+      post account_api_keys_path,
+           params: { user_api_key: { name: "x" * (UserApiKey::NAME_MAX_LENGTH + 1) } }
+    }.not_to change(UserApiKey, :count)
+
+    expect(response).to redirect_to(account_path)
+    expect(flash[:alert]).to include("maximum is #{UserApiKey::NAME_MAX_LENGTH}")
+    expect(flash[:revealed_user_api_key]).to be_nil
+  end
+
+  # SPGD-1878: the cap is a cookie budget, pinned the way SPGD-1075 pinned MAX_NAMES_IN_NOTICE —
+  # the REAL constant driven through the REAL mint, sized by the session ceiling check's own
+  # arithmetic. A constant raised past where the cookie binds fails right here, never again in
+  # production as the post-commit 500 the cap exists to prevent. (NAME_MAX_LENGTH's comment
+  # carries the derivation this example holds in place.)
+  # @intent: {"entity": "UserApiKey", "action": "keep a name at the cap inside the cookie", "behavior": "minting with a name of exactly UserApiKey::NAME_MAX_LENGTH characters commits the row, writes the reveal flash, and keeps every serialized session cookie within ActionDispatch::Cookies::MAX_COOKIE_SIZE by the ceiling check's own arithmetic", "layer": "request"}
+  it "keeps a name at the cap inside the session cookie's ceiling" do
+    guard_totals = []
+    allow_any_instance_of(ActionDispatch::Cookies::EncryptedKeyRotatingCookieJar)
+      .to receive(:check_for_overflow!).and_wrap_original do |method, cookie_name, options|
+        guard_totals << cookie_name.bytesize + options[:value].bytesize
+        method.call(cookie_name, options)
+      end
+
+    expect {
+      post account_api_keys_path,
+           params: { user_api_key: { name: "n" * UserApiKey::NAME_MAX_LENGTH } }
+    }.to change(UserApiKey, :count).by(1)
+
+    expect(response).to redirect_to(account_path(anchor: "revealed-key"))
+    expect(flash[:revealed_user_api_key]).to be_present
+    expect(flash[:revealed_user_api_key_name].length).to eq(UserApiKey::NAME_MAX_LENGTH)
+    expect(person.user_api_keys.sole.name.length).to eq(UserApiKey::NAME_MAX_LENGTH)
+    expect(guard_totals).to be_present
+    expect(guard_totals.max).to be <= ActionDispatch::Cookies::MAX_COOKIE_SIZE
+  end
 end

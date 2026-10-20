@@ -13,6 +13,26 @@ RSpec.describe ApiKey do
     expect(api_key.errors).to include(:name)
   end
 
+  # SPGD-1878: an over-budget `name` is refused, not truncated — the same refuse-don't-coerce
+  # shape as the NUL refusal above, with the number `NAME_MAX_LENGTH`'s comment measures against
+  # the session-cookie budget the reveal flash rides.
+  # @intent: { entity: "ApiKey", action: "refuse an over-length name", behavior: "a key built with a name one character past NAME_MAX_LENGTH is invalid with an error on :name, so an over-budget mint is refused by validation instead of committing a row whose reveal flash would overflow the session cookie", layer: "unit" }
+  it "refuses a name longer than NAME_MAX_LENGTH" do
+    api_key = repository.api_keys.new(name: "x" * (described_class::NAME_MAX_LENGTH + 1))
+
+    expect(api_key).not_to be_valid
+    expect(api_key.errors).to include(:name)
+  end
+
+  # The boundary the refusal above implies: exactly at the cap the name is valid, so the cap
+  # refuses strictly past itself and no name a form could legitimately send is over-refused.
+  # @intent: { entity: "ApiKey", action: "accept a name at the cap", behavior: "a key built with a name of exactly NAME_MAX_LENGTH characters is valid, so the cap refuses strictly past itself", layer: "unit" }
+  it "accepts a name of exactly NAME_MAX_LENGTH characters" do
+    api_key = repository.api_keys.new(name: "x" * described_class::NAME_MAX_LENGTH)
+
+    expect(api_key).to be_valid
+  end
+
   # @intent: { entity: "ApiKey", action: "store a token", behavior: "only the SHA-256 digest reaches the database, so the raw sgk_ value exists solely in memory after creation", layer: "unit" }
   it "never persists the raw token — only its SHA-256 digest" do
     api_key = repository.api_keys.create!
