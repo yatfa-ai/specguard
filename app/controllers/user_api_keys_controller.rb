@@ -47,9 +47,10 @@ class UserApiKeysController < ApplicationController
       redirect_to account_path(anchor: REVEAL_ANCHOR),
                   notice: "API key created. Copy it now — it is shown only once."
     else
-      # A refused mint (a `name` carrying a NUL is the case the model guards) redirects back to
-      # /account with the model's sentence, matching `AgentApiKeysController`'s else branch on the
-      # same page. Nothing was written, so there is no reveal flash to clean up.
+      # A refused mint (a `name` carrying a NUL or one past `NAME_MAX_LENGTH` is what the model
+      # refuses) redirects back to /account with the model's sentence, matching
+      # `AgentApiKeysController`'s else branch on the same page. Nothing was written, so there is
+      # no reveal flash to clean up.
       redirect_to account_path,
                   alert: user_api_key.errors.full_messages.to_sentence
     end

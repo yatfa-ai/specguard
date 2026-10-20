@@ -26,7 +26,8 @@ class ApiKeysController < ApplicationController
       reveal(api_key)
       redirect_to reveal_path(repository), notice: "API key created. Copy it now — it is shown only once."
     else
-      # A refused mint (a `name` carrying a NUL is the case the model guards) redirects back to the
+      # A refused mint (a `name` carrying a NUL or one past `NAME_MAX_LENGTH` is what the model
+      # refuses) redirects back to the
       # repository page with the model's sentences, the same idiom `AgentApiKeysController`'s else
       # branch uses. Nothing was written, so there is no reveal flash to clean up.
       redirect_to repository_path(repository),

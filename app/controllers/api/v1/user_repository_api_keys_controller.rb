@@ -76,7 +76,8 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
   # The name is optional and defaults to the same constant the other three minting paths read
   # (`ApiKeysController`, `UserRepositoriesController#create`, `BulkRegistration`), so a key minted
   # by an agent and one minted in a browser are named by one rule rather than two conventions.
-  # A refused mint (a `name` carrying a NUL is the case the model guards) answers this API's own
+  # A refused mint (a `name` carrying a NUL or one past `NAME_MAX_LENGTH` is what the model
+  # refuses) answers this API's own
   # 400 JSON through `render_bad_request`, the same funnel `UserRepositoriesController` and the
   # members controller mint-side refusals take — a raise at INSERT would surface as an HTML 500
   # and break the JSON-error contract, so `new` + `save` keeps the refusal inside the API's own
