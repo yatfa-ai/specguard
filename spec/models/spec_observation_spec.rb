@@ -2157,7 +2157,23 @@ RSpec.describe SpecObservation do
 
         expect(ten).to be <= 10 * runs.size * 2
         expect(three).to be <= 3 * runs.size * 2
-        expect(three).to be < ten
+        # No `three < ten` across these two measurements, though the shape begs for one. rows_touched
+        # prices HEAP fetches, and the planner reaches the heap two ways per invocation: a BitmapAnd
+        # against the run index fetches only the rows both predicates match (`count x window.size`),
+        # while a lone by-identity scan fetches every row the candidates have in the table
+        # (`count x runs.size`) and lets the heap filter drop the rest. Which of the two each
+        # invocation takes is a cost tiebreak that moves with catalog bloat — the same tiebreak
+        # INDEXED_BY_RUN above refuses to pin — and the two invocations price it independently. On
+        # this seed worst(3) = 3 x runs.size EQUALS best(10) = 10 x window.size (60 = 60), so the
+        # mixed shapes tie exactly: CI run 39356791625 reddened on precisely that, invocation 1 a
+        # BitmapAnd at actual rows=60, invocation 2 a lone scan at 60 fetched / 42 filter-removed.
+        # A pair that cannot tie here is no sharper a guard than the ceilings above: a (1, 10)
+        # comparison is implied outright by them, since worst(1) = 20 sits under the ten-call's
+        # own 60-row return cardinality, and the one non-implied spelling, (2, 10), holds by a
+        # 20-row margin (worst(2) = 40 against best(10) = 60) that a fixture tweak could silently
+        # tie — the exact knife-edge class this removal fixes. So the candidate-scaling criterion
+        # is carried by the per-count ceilings alone — the same instrument the sibling bound specs
+        # above and below use, and the one that still reds the moment the read follows the window.
         expect(ten).to be < 1800 / 5
       end
     end
