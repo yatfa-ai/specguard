@@ -41,6 +41,10 @@ class SpecObservation < ApplicationRecord
   # they stay class methods of this model, and the constants they read stay below.
   extend RunReads
 
+  # The ten run-grain history reads (`layer_counts_in` through `run_counts_in`), moved out whole;
+  # they stay class methods of this model, and the constants they read stay below.
+  extend HistoryReads
+
   belongs_to :test_run
   belongs_to :repository
   # Which delivery brought this row in. Null for a run no CI provider named — those runs have no
@@ -842,139 +846,6 @@ class SpecObservation < ApplicationRecord
     failed_count: "COUNT(*) FILTER (WHERE outcome = 'failed')",
     pending_count: "COUNT(*) FILTER (WHERE outcome = 'pending')"
   }.freeze
-
-  # The RUN-grain declared-layer mix — how many of the run's recorded examples DECLARED each layer in
-  # their `@intent`, plus how many declared none: `{unit:, integration:, request:, system:,
-  # undeclared:}` in {DECLARED_LAYER_KEYS} order, a measured zero where nothing declared that layer
-  # (never nil), summing to `IntentReadings#recorded`. NIL for a run with no recorded per-example rows:
-  # a run that stored no detail has no mix to state, and five zeros would read as a measurement of an
-  # empty suite. Operands only, no verdict — and the path is never consulted (see
-  # {.directory_layer_count_expressions}).
-  #
-  # The SAME aggregate row as {.reading_counts_in}, not a second read: see {.run_counts_in}.
-  def self.layer_counts_in(test_run)
-    run_counts_in(test_run)[1]
-  end
-
-  # The RUN-grain declared-layer mix for MANY runs in ONE grouped read — `{run_id => {unit:,
-  # integration:, request:, system:, undeclared:}}` in {DECLARED_LAYER_KEYS} order, each value
-  # exactly what {.layer_counts_in} would answer for that run. The list surfaces
-  # (`GET /api/v1/repositories`, the repositories grid) prime `TestRun#layer_counts` from it so a
-  # page of N cards pays one `spec_observations` statement instead of N.
-  #
-  # A run with no recorded rows has no group at all, so it is ABSENT from the result — and absent
-  # means NIL for the caller (`TestRun#preload_layer_counts` primes nil), the same "no detail
-  # stored, no mix to state" rule {.run_counts_in} follows; never five zeros. Empty ids ⇒ `{}` with
-  # no query. The predicates are {.directory_layer_count_expressions}, not retyped.
-  def self.run_layer_counts_for(test_run_ids)
-    return {} if test_run_ids.blank?
-
-    where(test_run_id: test_run_ids)
-      .group(:test_run_id)
-      .pluck(:test_run_id, *directory_layer_count_expressions)
-      .to_h { |id, *counts| [id, DECLARED_LAYER_KEYS.zip(counts.map(&:to_i)).to_h] }
-  end
-
-  # The RUN-grain declared-layer mix AND per-layer TIME for MANY runs in ONE grouped read — `{run_id =>
-  # [layer_counts, layer_durations]}`, each element exactly what {.layer_counts_in} / {.layer_durations_in}
-  # would answer for that run (the SAME predicates: {.directory_layer_count_expressions} for the counts
-  # and the {.run_layer_duration_expressions} FILTER aggregates for the time, neither retyped). It is
-  # the history window's read (`RepositoryOverview#history_runs`, the Suite growth strips), which needs
-  # both series and so pays ONE statement for the pair rather than {.run_layer_counts_for} plus a second.
-  # The list surfaces keep {.run_layer_counts_for}: they draw no time and must not start paying for it.
-  #
-  # A run with no recorded rows has no group at all, so it is ABSENT from the result — NIL for the
-  # caller on both seams, never five zeros and never a layer of null seconds. A group exists only where
-  # at least one row does, so `recorded?` holds for every run present here, matching {.run_counts_in}.
-  # `total_seconds` is NIL (never 0) for a layer none of whose examples was timed. Empty ids ⇒ `{}`
-  # with no query. A SUM of example durations — machine time, not wall clock.
-  def self.run_layer_counts_and_durations_for(test_run_ids)
-    return {} if test_run_ids.blank?
-
-    width = DECLARED_LAYER_KEYS.length
-    where(test_run_id: test_run_ids)
-      .group(:test_run_id)
-      .pluck(:test_run_id, *directory_layer_count_expressions,
-             *run_layer_duration_expressions.map { |sql| Arel.sql(sql) })
-      .to_h do |id, *rest|
-        counts = DECLARED_LAYER_KEYS.zip(rest.first(width).map(&:to_i)).to_h
-        seconds = rest[width, width]
-        timed = rest[width * 2, width].map(&:to_i)
-        durations = DECLARED_LAYER_KEYS.each_with_index.to_h do |key, index|
-          [key, { total_seconds: seconds[index]&.to_f, timed_count: timed[index] }]
-        end
-        [id, [counts, durations]]
-      end
-  end
-
-  # The five {.directory_layer_count_expressions}, ALIASED for the run grain — `run_layer_<key>_count`.
-  #
-  # Aliased for the reason {RUN_READING_COUNTS} is: this projection rides the run-grain read, and
-  # `spec/support/observation_grain_reads.rb` partitions this endpoint's reads by SQL only one read
-  # can produce. Built lazily because the expressions quote through the live connection.
-  def self.run_layer_count_expressions
-    @run_layer_count_expressions ||= DECLARED_LAYER_KEYS.zip(directory_layer_count_expressions).map do |key, expression|
-      "#{expression} AS run_layer_#{key}_count"
-    end.freeze
-  end
-
-  # The run-grain per-layer TIME operands, aliased `run_layer_<key>_seconds` (the summed
-  # `duration_seconds` of the layer's rows — SQL NULL when none of them was timed) and
-  # `run_layer_<key>_timed_count` (how many of them carried a duration). Five of each, in
-  # {DECLARED_LAYER_KEYS} order: ALL the seconds first, then ALL the timed counts, so
-  # {.run_counts_in} reads them by the explicit offsets below.
-  #
-  # Aliased for the reason {.run_layer_count_expressions} is — emitted here and nowhere else — and
-  # built from {.declared_layer_predicates} so the predicate is not retyped.
-  def self.run_layer_duration_expressions
-    @run_layer_duration_expressions ||= [
-      *DECLARED_LAYER_KEYS.zip(declared_layer_predicates).map do |key, predicate|
-        "SUM(duration_seconds) FILTER (WHERE #{predicate}) AS run_layer_#{key}_seconds"
-      end,
-      *DECLARED_LAYER_KEYS.zip(declared_layer_predicates).map do |key, predicate|
-        "COUNT(duration_seconds) FILTER (WHERE #{predicate}) AS run_layer_#{key}_timed_count"
-      end
-    ].freeze
-  end
-
-  # Where each group of {.run_counts_in}'s projection starts. Explicit, so appending a further group
-  # AFTER these can never shift a slice an earlier group is read by.
-  # (Methods rather than constants: they read {DECLARED_LAYER_KEYS}, which is defined further down.)
-  def self.run_layer_count_offset = RUN_READING_COUNTS.length
-  def self.run_layer_seconds_offset = run_layer_count_offset + DECLARED_LAYER_KEYS.length
-  def self.run_layer_timed_offset = run_layer_seconds_offset + DECLARED_LAYER_KEYS.length
-
-  # The RUN-grain per-layer TIME — where the run's example time goes by declared layer:
-  # `{unit: {total_seconds:, timed_count:}, … undeclared: {…}}` in {DECLARED_LAYER_KEYS} order. NIL
-  # for a run with no recorded per-example rows, the same rule as {.layer_counts_in}.
-  # `total_seconds` is NIL (never 0) for a layer none of whose examples was timed. A SUM OF EXAMPLE
-  # DURATIONS, not wall clock. The SAME aggregate row as {.reading_counts_in}: see {.run_counts_in}.
-  def self.layer_durations_in(test_run)
-    run_counts_in(test_run)[2]
-  end
-
-  # ONE single-row aggregate over ONE run answering ALL the run-grain questions — `[IntentReadings,
-  # layer_counts, layer_durations]` — so the page pays nothing extra for the layer mix or its time.
-  # All memoize on `TestRun`.
-  def self.run_counts_in(test_run)
-    counts = where(test_run_id: test_run.id)
-             .pick(*[*RUN_READING_COUNTS, *run_layer_count_expressions, *run_layer_duration_expressions]
-                      .map { |sql| Arel.sql(sql) })
-
-    width = DECLARED_LAYER_KEYS.length
-    readings = IntentReadings.new(authored: counts[0].to_i, derived: counts[1].to_i, unreadable: counts[2].to_i,
-                                  recorded: counts[3].to_i)
-    return [readings, nil, nil] unless readings.recorded?
-
-    layers = DECLARED_LAYER_KEYS.zip(counts[run_layer_count_offset, width].map(&:to_i)).to_h
-    seconds = counts[run_layer_seconds_offset, width]
-    timed = counts[run_layer_timed_offset, width].map(&:to_i)
-    durations = DECLARED_LAYER_KEYS.each_with_index.to_h do |key, index|
-      [key, { total_seconds: seconds[index]&.to_f, timed_count: timed[index] }]
-    end
-
-    [readings, layers, durations]
-  end
 
   # How many distinct descriptions one narrowing may hand the composition step below.
   #
