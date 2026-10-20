@@ -36,6 +36,30 @@ RSpec.describe AgentApiKey do
       expect(key.errors).to include(:name)
     end
 
+    # SPGD-1878: an over-budget `name` is refused, not truncated — the same refuse-don't-coerce
+    # shape as the NUL refusal above, with the number `NAME_MAX_LENGTH`'s comment derives from
+    # `ApiKey::NAME_MAX_LENGTH`'s session-cookie measurement.
+    # @intent: { entity: "AgentApiKey", action: "refuse an over-length name", behavior: "a key built with a name one character past NAME_MAX_LENGTH is invalid with an error on :name, so an over-budget mint is refused by validation instead of committing a row whose reveal flash would overflow the session cookie", layer: "unit" }
+    it "refuses a name longer than NAME_MAX_LENGTH" do
+      user = create_user
+      key = AgentApiKey.new(user: user, repository_ids: [create_repository(user: user).id],
+                            name: "x" * (described_class::NAME_MAX_LENGTH + 1))
+
+      expect(key).not_to be_valid
+      expect(key.errors).to include(:name)
+    end
+
+    # The boundary the refusal above implies: exactly at the cap the name is valid, so the cap
+    # refuses strictly past itself and no name a form could legitimately send is over-refused.
+    # @intent: { entity: "AgentApiKey", action: "accept a name at the cap", behavior: "a key built with a name of exactly NAME_MAX_LENGTH characters is valid, so the cap refuses strictly past itself", layer: "unit" }
+    it "accepts a name of exactly NAME_MAX_LENGTH characters" do
+      user = create_user
+      key = AgentApiKey.new(user: user, repository_ids: [create_repository(user: user).id],
+                            name: "x" * described_class::NAME_MAX_LENGTH)
+
+      expect(key).to be_valid
+    end
+
     it "requires at least one repository" do
       key = AgentApiKey.new(name: "x", user: create_user, repository_ids: [])
 

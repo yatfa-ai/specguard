@@ -103,6 +103,55 @@ RSpec.describe "Account agent keys", type: :request do
     expect(flash[:alert]).to be_present
   end
 
+  # SPGD-1878: a name past NAME_MAX_LENGTH is refused by the model's length validator through the
+  # same else branch as the NUL refusal above — the model's sentence, nothing written, no reveal
+  # flash — instead of committing the row and losing the reveal-once token to a CookieOverflow
+  # 500 on the redirect. The length is counted in characters, the unit the validator and the
+  # constant both speak.
+  # @intent: { entity: "AgentApiKey", action: "refuse an over-length name", behavior: "minting a key whose name is one character past AgentApiKey::NAME_MAX_LENGTH redirects back to /account with the model's too-long sentence and writes no key", layer: "request" }
+  it "redirects with an alert and writes nothing when the name exceeds NAME_MAX_LENGTH" do
+    repository = mint_grant
+
+    expect {
+      post account_agent_keys_path,
+           params: { agent_api_key: { name: "x" * (AgentApiKey::NAME_MAX_LENGTH + 1),
+                                      repository_ids: [repository.id] } }
+    }.not_to change(AgentApiKey, :count)
+
+    expect(response).to redirect_to(account_path(anchor: "agent-keys"))
+    expect(flash[:alert]).to include("maximum is #{AgentApiKey::NAME_MAX_LENGTH}")
+    expect(flash[:revealed_agent_api_key]).to be_nil
+  end
+
+  # SPGD-1878: the cap is a cookie budget, pinned the way SPGD-1075 pinned MAX_NAMES_IN_NOTICE —
+  # the REAL constant driven through the REAL mint, sized by the session ceiling check's own
+  # arithmetic. A constant raised past where the cookie binds fails right here, never again in
+  # production as the post-commit 500 the cap exists to prevent. (NAME_MAX_LENGTH's comment
+  # carries the derivation this example holds in place.)
+  # @intent: { entity: "AgentApiKey", action: "keep a name at the cap inside the cookie", behavior: "minting with a name of exactly AgentApiKey::NAME_MAX_LENGTH characters commits the row, writes the reveal flash, and keeps every serialized session cookie within ActionDispatch::Cookies::MAX_COOKIE_SIZE by the ceiling check's own arithmetic", layer: "request" }
+  it "keeps a name at the cap inside the session cookie's ceiling" do
+    repository = mint_grant
+    guard_totals = []
+    allow_any_instance_of(ActionDispatch::Cookies::EncryptedKeyRotatingCookieJar)
+      .to receive(:check_for_overflow!).and_wrap_original do |method, cookie_name, options|
+        guard_totals << cookie_name.bytesize + options[:value].bytesize
+        method.call(cookie_name, options)
+      end
+
+    expect {
+      post account_agent_keys_path,
+           params: { agent_api_key: { name: "n" * AgentApiKey::NAME_MAX_LENGTH,
+                                      repository_ids: [repository.id] } }
+    }.to change(AgentApiKey, :count).by(1)
+
+    expect(response).to redirect_to(account_path(anchor: "revealed-agent-key"))
+    expect(flash[:revealed_agent_api_key]).to be_present
+    expect(flash[:revealed_agent_api_key_name].length).to eq(AgentApiKey::NAME_MAX_LENGTH)
+    expect(person.agent_api_keys.sole.name.length).to eq(AgentApiKey::NAME_MAX_LENGTH)
+    expect(guard_totals).to be_present
+    expect(guard_totals.max).to be <= ActionDispatch::Cookies::MAX_COOKIE_SIZE
+  end
+
   # REVOCATION IS A RETIREMENT: the token stops authenticating over the API, the row stays so the
   # still-presenting token remains attributable, and the account page keeps showing it.
   # @intent: { entity: "AgentApiKey", action: "revoke from the account page", behavior: "DELETE retires the key so its token answers 401 while the row and the page listing remain", layer: "request" }

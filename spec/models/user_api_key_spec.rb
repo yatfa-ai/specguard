@@ -241,4 +241,24 @@ RSpec.describe UserApiKey do
     expect(user_api_key).not_to be_valid
     expect(user_api_key.errors).to include(:name)
   end
+
+  # SPGD-1878: an over-budget `name` is refused, not truncated — the same refuse-don't-coerce
+  # shape as the NUL refusal above, with the number `NAME_MAX_LENGTH`'s comment derives from
+  # `ApiKey::NAME_MAX_LENGTH`'s session-cookie measurement.
+  # @intent: { entity: "UserApiKey", action: "refuse an over-length name", behavior: "a key built with a name one character past NAME_MAX_LENGTH is invalid with an error on :name, so an over-budget mint is refused by validation instead of committing a row whose reveal flash would overflow the session cookie", layer: "unit" }
+  it "refuses a name longer than NAME_MAX_LENGTH" do
+    user_api_key = user.user_api_keys.new(name: "x" * (described_class::NAME_MAX_LENGTH + 1))
+
+    expect(user_api_key).not_to be_valid
+    expect(user_api_key.errors).to include(:name)
+  end
+
+  # The boundary the refusal above implies: exactly at the cap the name is valid, so the cap
+  # refuses strictly past itself and no name a form could legitimately send is over-refused.
+  # @intent: { entity: "UserApiKey", action: "accept a name at the cap", behavior: "a key built with a name of exactly NAME_MAX_LENGTH characters is valid, so the cap refuses strictly past itself", layer: "unit" }
+  it "accepts a name of exactly NAME_MAX_LENGTH characters" do
+    user_api_key = user.user_api_keys.new(name: "x" * described_class::NAME_MAX_LENGTH)
+
+    expect(user_api_key).to be_valid
+  end
 end

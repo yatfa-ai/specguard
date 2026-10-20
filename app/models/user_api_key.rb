@@ -39,6 +39,18 @@ class UserApiKey < ApplicationRecord
   TOKEN_PREFIX = "sgu_"
   TOKEN_BYTES = 24
 
+  # The longest `name` a mint accepts — the cap `ApiKey::NAME_MAX_LENGTH` measures and derives
+  # against the 4KB session cookie every web mint writes the reveal flash into; that constant's
+  # comment carries the budget, the measured table, and the provenance of the number. This
+  # surface's own mint measures within ~20B of the repository row that table was taken on (guard
+  # 1,246B at the cap through a real `POST /account/api_keys`), and it is pinned the same way: a
+  # cap raised past where the cookie binds fails the budget example in
+  # `spec/requests/account_api_keys_spec.rb`. Stated HERE, as this model's own constant feeding
+  # its own guard below — rather than read across the class boundary at the `validates` line —
+  # for the same reason the NUL refusal beside it is this model's own sentence: the guard and the
+  # number it enforces read together, and `spec/models/user_api_key_spec.rb` pins both.
+  NAME_MAX_LENGTH = ApiKey::NAME_MAX_LENGTH
+
   belongs_to :user
 
   # The retirement split, named once and used everywhere a caller needs one side of it — the same
@@ -61,9 +73,10 @@ class UserApiKey < ApplicationRecord
   # mint would surface as a 500 with nothing written. The same refuse-don't-coerce rule
   # `Ingest::Payload` states and `Repository` follows for `github_full_name` (see its `NUL`
   # comment). There is no uniqueness validator on `name`, so no validator can run a query with the
-  # NUL before this one answers.
+  # NUL before this one answers. `NAME_MAX_LENGTH` above extends the same rule to length.
   validates :name, presence: true,
-                   format: { without: /\u0000/, message: "must not contain a NUL character" }
+                   format: { without: /\u0000/, message: "must not contain a NUL character" },
+                   length: { maximum: NAME_MAX_LENGTH }
 
   def self.digest(token)
     OpenSSL::Digest::SHA256.hexdigest(token.to_s)

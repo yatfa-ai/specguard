@@ -70,6 +70,54 @@ RSpec.describe "Repository API keys (web)", type: :request do
       expect(flash[:alert]).to be_present
       expect(flash[:revealed_api_key]).to be_nil
     end
+
+    # SPGD-1878: a name past NAME_MAX_LENGTH is refused by the model's length validator through
+    # the same else branch as the NUL refusal above — the model's sentence, nothing written, no
+    # reveal flash — instead of committing the row and losing the reveal-once token to a
+    # CookieOverflow 500 on the redirect. The length is counted in characters, the unit the
+    # validator and the constant both speak; the byte weight of that character count at the
+    # worst four-byte-per-character shape is part of the constant's measured derivation.
+    # @intent: {"entity": "POST /repositories/:id/api_keys", "action": "refuse an over-length name", "behavior": "minting a key whose name is one character past ApiKey::NAME_MAX_LENGTH redirects back to the repository page with the model's too-long sentence, writes no key, and reveals no token", "layer": "request"}
+    it "redirects with an alert and writes nothing when the name exceeds NAME_MAX_LENGTH" do
+      expect {
+        post repository_api_keys_path(repository),
+             params: { api_key: { name: "x" * (ApiKey::NAME_MAX_LENGTH + 1) } }
+      }.not_to change(ApiKey, :count)
+
+      expect(response).to redirect_to(repository_path(repository))
+      expect(flash[:alert]).to include("maximum is #{ApiKey::NAME_MAX_LENGTH}")
+      expect(flash[:revealed_api_key]).to be_nil
+    end
+
+    # SPGD-1878: the cap is a cookie budget, so it is pinned the way SPGD-1075 pinned
+    # MAX_NAMES_IN_NOTICE — the REAL constant driven through the REAL mint, sized by the session
+    # ceiling check's own arithmetic (`cookie_name.bytesize + value.bytesize`, the inputs
+    # `EncryptedKeyRotatingCookieJar#check_for_overflow!` raises on). A constant raised past
+    # where the cookie binds fails right here: the mint at the raised cap either raises
+    # CookieOverflow inside this example or drives the recorded guard total across
+    # MAX_COOKIE_SIZE — never again in production as the post-commit 500 the cap exists to
+    # prevent. (NAME_MAX_LENGTH's comment carries the derivation this example holds in place.)
+    # @intent: {"entity": "POST /repositories/:id/api_keys", "action": "keep a name at the cap inside the cookie", "behavior": "minting with a name of exactly ApiKey::NAME_MAX_LENGTH characters commits the row, writes the reveal flash, and keeps every serialized session cookie within ActionDispatch::Cookies::MAX_COOKIE_SIZE by the ceiling check's own arithmetic", "layer": "request"}
+    it "keeps a name at the cap inside the session cookie's ceiling" do
+      guard_totals = []
+      allow_any_instance_of(ActionDispatch::Cookies::EncryptedKeyRotatingCookieJar)
+        .to receive(:check_for_overflow!).and_wrap_original do |method, cookie_name, options|
+          guard_totals << cookie_name.bytesize + options[:value].bytesize
+          method.call(cookie_name, options)
+        end
+
+      expect {
+        post repository_api_keys_path(repository),
+             params: { api_key: { name: "n" * ApiKey::NAME_MAX_LENGTH } }
+      }.to change(ApiKey, :count).by(1)
+
+      expect(response).to redirect_to(repository_path(repository, anchor: "revealed-key"))
+      expect(flash[:revealed_api_key]).to be_present
+      expect(flash[:revealed_api_key_name].length).to eq(ApiKey::NAME_MAX_LENGTH)
+      expect(repository.api_keys.last.name.length).to eq(ApiKey::NAME_MAX_LENGTH)
+      expect(guard_totals).to be_present
+      expect(guard_totals.max).to be <= ActionDispatch::Cookies::MAX_COOKIE_SIZE
+    end
   end
 
   describe "revoking (DELETE /repositories/:id/api_keys/:key_id)" do
