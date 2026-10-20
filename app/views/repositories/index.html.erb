@@ -499,6 +499,23 @@
               <% if layer_mix %>
                 <div class="mt-1"><%= layer_mix %></div>
               <% end %>
+              <%# The request+system share `?sort=pyramid` orders by, stated on the card the bar
+                  above draws the mix with — the same basis-beside-the-figure rule the annotated
+                  share above the bar is held to, and this grid needs it more than a single
+                  repository page would: it renders N repositories at once and a row of cards is a
+                  comparison by construction, so a reader must be able to see HOW THIN the thinnest
+                  card is and what separates two adjacent ones, not only their order. One seam
+                  (`test_run_pyramid_share`) with the ordering (`RepositoryNarrowing#pyramid_share`
+                  through `PyramidShare`), so the card cannot word the sort key differently from
+                  what the sort computes; the counts are the bar's own primed hash, +0 queries.
+                  Rendered on every sort — the figure belongs to the run, not to the URL. Nil for a
+                  run with no mix or nothing declared: no sentence rather than a 0.0% with no
+                  denominator, so the figure arrives where the order came from and stays absent
+                  where there is no share to state. %>
+              <% pyramid_share = test_run_pyramid_share(run) %>
+              <% if pyramid_share %>
+                <p class="text-xs text-app-muted"><%= pyramid_share %></p>
+              <% end %>
               <%# What that run COST, beside what it contains. The badge above says how BIG each
                   suite is; nothing on this grid said what any of them is worth in CI minutes, which
                   is the question a page rendering N repositories at once exists to answer — the

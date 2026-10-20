@@ -248,6 +248,29 @@ module ApplicationHelper
       "of #{number_with_delimiter(test_run.total_specs_count.to_i)} tests carry an @intent."
   end
 
+  # The request+system share of a run's declared-layer mix, as the one sentence the grid card
+  # prints under its mix bar: "Request+system 33.3% of declared layers — 2 of 6 declared tests."
+  # `?sort=pyramid` orders the grid by this share (`RepositoryNarrowing#pyramid_first`) and,
+  # before this seam, the figure the order was taken on appeared nowhere on the page — the
+  # basis-beside-the-figure rule the share above is held to, applied to the pyramid ordering's
+  # own operand. The operands and the nil branch are `PyramidShare`'s — the ONE expression of the
+  # rule, shared with the ordering — never re-spelled here.
+  #
+  # Nil for a run that recorded no per-example rows or whose declared total is 0: a share needs a
+  # denominator, and no sentence at all rather than a "0.0% of declared layers" with nothing
+  # declared — the philosophy the share above states, on a deliberately different predicate: that
+  # one branches on `suite_size_measured?`, this one on the mix itself, the pyramid share's actual
+  # denominator. A measured zero (declared tests exist, none request or system) is a real 0.0%.
+  # Free of queries: `layer_counts` is a primed hash on the run the grid already holds, the same
+  # basis the bar beside this sentence draws from.
+  def test_run_pyramid_share(test_run)
+    top, declared = PyramidShare.operands(test_run&.layer_counts)
+    return nil unless top
+
+    "Request+system #{(top.fdiv(declared) * 100).round(1)}% of declared layers — " \
+      "#{number_with_delimiter(top)} of #{number_with_delimiter(declared)} declared tests."
+  end
+
   # What a run COST, as the rows of a definition list — the labels, the pairing with their
   # denominators, and the choice between one row and two. Every surface that states a run's cost
   # renders these: the single-repository Overview panel and the repositories grid's card.

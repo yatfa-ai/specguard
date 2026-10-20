@@ -169,11 +169,12 @@ module RepositoryNarrowing
 
   # The request+system share of a declared-layer mix, or nil when there is nothing declared to
   # take a share of (no mix at all, or every example undeclared).
+  #
+  # Delegates to `PyramidShare.of` — the ONE expression of the rule, shared with the sentence the
+  # grid card prints beside its mix bar (`ApplicationHelper#test_run_pyramid_share`). A second
+  # body here would be free to drift from the one the card states, which is exactly the shape the
+  # grid's own comment forbids for the rules it renders.
   def pyramid_share(counts)
-    return nil if counts.nil?
-
-    top = counts.fetch(:request, 0) + counts.fetch(:system, 0)
-    declared = top + counts.fetch(:unit, 0) + counts.fetch(:integration, 0)
-    declared.zero? ? nil : top.fdiv(declared)
+    PyramidShare.of(counts)
   end
 end

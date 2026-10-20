@@ -5291,6 +5291,103 @@ RSpec.describe "Repository registration and API keys", type: :request do
         pyramid = count_queries { get repositories_path, params: { sort: "pyramid" } }
         expect(pyramid).to eq(annotated)
       end
+
+      # The share the pyramid sort orders by, stated on the card — through the one
+      # `test_run_pyramid_share` seam, on the same pin shape the annotated-share cards above use:
+      # each example asserts the card against the helper's output for the SAME run, so the card's
+      # markup (not a copy of its wording) is under test, and the figure-fragment assertions
+      # beside a pin hold the arithmetic to the fixture's own operands.
+      describe "the request+system share stated on each card" do
+        def share_helper = ApplicationController.helpers
+
+        # @intent: { entity: "RepositoriesController", action: "print pyramid share", behavior: "a card whose newest run's mix is 2 unit, 2 integration, 1 request, 1 system prints the shared helper's pyramid sentence — 33.3% over 2 of 6 declared tests — on both the unsorted and the pyramid-sorted page", layer: "request" }
+        it "prints the pyramid sort's operand, equal to the shared helper's output, on every sort" do
+          repos = pyramid_fixture
+          foxtrot = repos["foxtrot"].latest_test_run
+
+          get repositories_path
+
+          expect(page_text).to include("33.3%")
+          expect(page_text).to include("2 of 6")
+          expect(page_text).to include(share_helper.test_run_pyramid_share(foxtrot))
+
+          get repositories_path, params: { sort: "pyramid" }
+
+          expect(page_text).to include(share_helper.test_run_pyramid_share(foxtrot))
+        end
+
+        # A measured zero is a real zero: bravo's ten unit tests have a denominator, and the
+        # sentence must state it (0.0% over 0 of 10) rather than go absent — the opposite branch
+        # of the same nil rule the all-undeclared example below pins.
+        # @intent: { entity: "RepositoriesController", action: "print pyramid share", behavior: "a card whose newest run is ten unit tests prints the shared helper's pyramid sentence as a real 0.0% over 0 of 10 declared tests, never an absent figure", layer: "request" }
+        it "prints a real zero share, with its denominator, for a measured all-unit run" do
+          repos = pyramid_fixture
+          bravo = repos["bravo"].latest_test_run
+
+          get repositories_path
+
+          expect(page_text).to include(share_helper.test_run_pyramid_share(bravo))
+        end
+
+        # Free extra pins off the same fixture: the two remaining declared mixes, so the
+        # arithmetic is held on four cards, not one.
+        # @intent: { entity: "RepositoriesController", action: "print pyramid share", behavior: "cards whose mixes are 3 unit + 1 request and 6 unit + 4 request print the shared helper's pyramid sentences at 25.0% over 1 of 4 and 40.0% over 4 of 10", layer: "request" }
+        it "prints the helper's sentence for the other declared mixes off the same fixture" do
+          repos = pyramid_fixture
+          golf = repos["golf"].latest_test_run
+          alpha = repos["alpha"].latest_test_run
+
+          get repositories_path
+
+          expect(page_text).to include("1 of 4")
+          expect(page_text).to include("4 of 10")
+          expect(page_text).to include(share_helper.test_run_pyramid_share(golf))
+          expect(page_text).to include(share_helper.test_run_pyramid_share(alpha))
+          # ...and nothing beyond the four declared cards carries a share: the all-undeclared
+          # card and the never-ingested one contribute no sentence, so the four known ones are
+          # the whole of what this page states — the nil branches pinned without naming wording.
+          sentences = %w[alpha bravo golf foxtrot].map do |name|
+            share_helper.test_run_pyramid_share(repos[name].latest_test_run)
+          end
+          expect(sentences.sum { |sentence| page_text.scan(sentence).size }).to eq(4)
+        end
+
+        # The nil branches, each alone on its own page so the absence assertion reads the whole
+        # page. An all-undeclared run and a run that recorded no per-example rows have no share
+        # to state — no sentence at all rather than a 0.0% with no denominator, the annotated
+        # share's philosophy on the pyramid share's own predicate — and a never-ingested card has
+        # no run to state one about.
+        # @intent: { entity: "RepositoriesController", action: "omit pyramid share", behavior: "a run whose every example is undeclared renders no pyramid sentence on its card and never a 0.0% of declared layers", layer: "request" }
+        it "renders no pyramid sentence for a run with nothing declared" do
+          repository = create_repository(user: @user, github_full_name: "acme/all-undeclared")
+          run = create_test_run(repository: repository, commit_sha: "cafe3381c", total_specs_count: 3)
+          observe_layers(run, :undeclared, 3)
+
+          get repositories_path
+
+          expect(page_text).not_to match(/% of declared layers/)
+        end
+
+        # @intent: { entity: "RepositoriesController", action: "omit pyramid share", behavior: "a run that recorded no per-example rows (nil layer_counts) renders no pyramid sentence on its card", layer: "request" }
+        it "renders no pyramid sentence for a run with no per-example rows" do
+          create_test_run(repository: create_repository(user: @user, github_full_name: "acme/no-rows"),
+                          commit_sha: "cafe3381n", total_specs_count: 4, annotated_specs_count: 4)
+
+          get repositories_path
+
+          expect(page_text).not_to match(/% of declared layers/)
+        end
+
+        # @intent: { entity: "RepositoriesController", action: "omit pyramid share", behavior: "a never-ingested repository prints No runs yet and no pyramid sentence", layer: "request" }
+        it "renders no pyramid sentence for a never-ingested repository" do
+          create_repository(user: @user, github_full_name: "acme/never-ingested")
+
+          get repositories_path
+
+          expect(page_text).to include("No runs yet")
+          expect(page_text).not_to match(/% of declared layers/)
+        end
+      end
     end
 
     describe "the three asks together" do
