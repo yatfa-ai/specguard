@@ -69,7 +69,8 @@ class ApiKey < ApplicationRecord
   # already committed and the reveal-once token lost with the overflowing cookie — nothing can
   # re-serve that token afterwards, because only the SHA-256 digest persists. The bound lives
   # HERE, in the data, on the same refuse-don't-coerce rule the NUL validation below states; the
-  # length refusal lands in the else branch every mint already renders.
+  # length refusal lands in the refusal channel every mint surface already renders — the web
+  # else branches, the API mint's `render_bad_request`.
   #
   # ## The measurement
   #
