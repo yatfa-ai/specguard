@@ -73,10 +73,18 @@ class UserApiKey < ApplicationRecord
   # mint would surface as a 500 with nothing written. The same refuse-don't-coerce rule
   # `Ingest::Payload` states and `Repository` follows for `github_full_name` (see its `NUL`
   # comment). There is no uniqueness validator on `name`, so no validator can run a query with the
-  # NUL before this one answers. `NAME_MAX_LENGTH` above extends the same rule to length.
+  # NUL before this one answers.
   validates :name, presence: true,
-                   format: { without: /\u0000/, message: "must not contain a NUL character" },
-                   length: { maximum: NAME_MAX_LENGTH }
+                   format: { without: /\u0000/, message: "must not contain a NUL character" }
+  # `NAME_MAX_LENGTH` extends the same rule to length: an over-budget name is refused with the
+  # model's sentence ("Name is too long (maximum is … characters)") rather than truncated or
+  # committed. Unlike the NUL check it is scoped to mints and name changes, mirroring
+  # `ApiKey`: neither model has a save path today that touches an existing row, but if one is
+  # added (a rotation, a rename), a save that leaves the name untouched must not die on a name
+  # minted before the cap existed. Legacy over-cap rows are intentionally left valid; the cap
+  # binds new rows and name changes only.
+  validates :name, length: { maximum: NAME_MAX_LENGTH },
+                   if: -> { new_record? || will_save_change_to_name? }
 
   def self.digest(token)
     OpenSSL::Digest::SHA256.hexdigest(token.to_s)

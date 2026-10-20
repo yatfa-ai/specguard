@@ -125,6 +125,31 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(reloaded.last_used_at).to eq(stamped)
       expect(reloaded).to be_rotated_and_unused
     end
+
+    # SPGD-1878: the name cap binds mints and name changes, not every save. Rows written before
+    # the cap existed can carry longer names — the API mint accepted any length and the web mint
+    # ~1,860 characters — and rotation is the ONLY recovery path for such a key's lost token (the
+    # row holds a SHA-256 digest, so the plaintext is gone). A cap that ran on every save would
+    # turn that recovery into `RecordInvalid`. The name reaches past the cap the way a production
+    # legacy row does — below validation, through `update_column`.
+    # @intent: {"entity": "ApiKey", "action": "rotate a legacy over-cap name", "behavior": "a key whose name was set past NAME_MAX_LENGTH by update_column still regenerates: the POST reveals a fresh sgk_ token and preserves the row's over-cap name", "layer": "request"}
+    it "regenerates a key whose legacy name is longer than NAME_MAX_LENGTH" do
+      api_key = repository.api_keys.create!(name: "CI")
+      legacy_name = "L" * (ApiKey::NAME_MAX_LENGTH + 1)
+      api_key.update_column(:name, legacy_name)
+
+      post regenerate_repository_api_key_path(repository, api_key)
+      follow_redirect!
+
+      replacement = revealed_token
+      expect(replacement).to be_present
+      # The rotation itself: the stored digest is the replacement's, not the retired token's.
+      expect(api_key.reload.token_digest).to eq(ApiKey.digest(replacement))
+      expect(ApiKey.authenticate(replacement)).to eq(api_key)
+      # And the legacy name rides along untouched — a rotation is an event on this key, not a
+      # renaming it fails to survive.
+      expect(api_key.name).to eq(legacy_name)
+    end
   end
 
   describe "the reveal panel" do
