@@ -48,6 +48,17 @@ RSpec.describe "Repository Suite growth — Machine time by declared layer", typ
       timed("tm000000003", 1.day.ago, request: 6.0)
     end
 
+    # @intent: { entity: "Repository", action: "link layer time run labels", behavior: "each label cell of a layer's machine-time table links to its run by full sha anchored at summary", layer: "request" }
+    it "links each machine-time table label to its run" do
+      get repository_path(repository, branch: "main")
+
+      hrefs = strip.find("#suite-trajectory-layer-time-request")
+                   .all("details table tbody tr td:first-child a", visible: :all).map { |a| a[:href] }
+      expect(hrefs).to eq(%w[tm000000001 tm000000002 tm000000003].map do |sha|
+        repository_path(repository, branch: "main", commit_sha: sha, anchor: "summary")
+      end)
+    end
+
     # @intent: { entity: "Repository", action: "draw the layer time strip", behavior: "the Suite growth panel draws one machine-time chart per layer that has timed runs, with the machine-time-not-wall-clock caption and an accessible summary", layer: "request" }
     it "draws one chart per timed layer with the caption and a text summary" do
       get repository_path(repository, branch: "main")

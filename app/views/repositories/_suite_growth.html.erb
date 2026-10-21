@@ -30,7 +30,8 @@
                  UI::SparklineComponent::Point.new(
                    label: run.commit_sha.first(7),
                    value: run.total_specs_count.to_i,
-                   detail: "#{time_ago_in_words(run.created_at)} ago"
+                   detail: "#{time_ago_in_words(run.created_at)} ago",
+                   href: drill_down_path(@repository, commit_sha: run.commit_sha, anchor: "summary")
                  )
                end %>
             <%= render UI::SparklineComponent.new(
@@ -175,7 +176,9 @@
                         id: "suite-trajectory-layer-time-#{layer}",
                         points: points.map { |run, seconds|
                           UI::SparklineComponent::Point.new(label: run.commit_sha.first(7), value: seconds,
-                                                            detail: "#{time_ago_in_words(run.created_at)} ago")
+                                                            detail: "#{time_ago_in_words(run.created_at)} ago",
+                                                            href: drill_down_path(@repository, commit_sha: run.commit_sha,
+                                                                                  anchor: "summary"))
                         },
                         label: "#{layer.to_s.capitalize} machine time on #{@suite_trajectory.branch}",
                         coverage: "#{points.size} of #{@suite_trajectory.plotted.size} plotted runs",
@@ -216,7 +219,8 @@
                    UI::SparklineComponent::Point.new(
                      label: run.commit_sha.first(7),
                      value: run.duration_seconds.to_f,
-                     detail: "#{time_ago_in_words(run.created_at)} ago"
+                     detail: "#{time_ago_in_words(run.created_at)} ago",
+                     href: drill_down_path(@repository, commit_sha: run.commit_sha, anchor: "summary")
                    )
                  end %>
               <%= render UI::SparklineComponent.new(

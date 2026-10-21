@@ -1470,4 +1470,62 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(runtime_chart).to have_css("svg circle", count: 11, visible: :all)
     end
   end
+
+  # SPGD-1880: the three "Show the N plotted figures" tables name each run by a seven-character sha;
+  # the label cell is now the family's read link. The href carries the FULL sha (the lookup
+  # exact-matches), anchored at Summary.
+  describe "the plotted tables' run labels" do
+    def full_a = "aaaaaaa1111222233334444555566667777aaaa"
+
+    def full_b = "bbbbbbb1111222233334444555566667777bbbb"
+
+    def label_hrefs(chart_id)
+      trajectory_panel.find("##{chart_id}").all("details table tbody tr td:first-child a", visible: :all).map { |a| a[:href] }
+    end
+
+    def with_two_runs(repository)
+      [[full_a, 20.days.ago], [full_b, 1.hour.ago]].each_with_index do |(sha, at), i|
+        repository.test_runs.create!(commit_sha: sha, branch: "main", total_specs_count: 1_000 + i,
+                                     annotated_specs_count: 250, duration_seconds: 60.0 + i,
+                                     created_at: at)
+      end
+    end
+
+    # @intent: {"entity": "Repository", "action": "link plotted run labels", "behavior": "every label cell of the suite size and wall clock tables holds one link whose href is the full-sha run page anchored at summary", "layer": "request"}
+    it "links each label cell of the size and wall-clock tables to its run by full sha" do
+      repository = create_repository(user: @user)
+      with_two_runs(repository)
+
+      get repository_path(repository)
+
+      expected = [full_a, full_b].map { |sha| repository_path(repository, commit_sha: sha, anchor: "summary") }
+      expect(label_hrefs("suite-trajectory-chart")).to eq(expected)
+      expect(label_hrefs("suite-trajectory-runtime-chart")).to eq(expected)
+      expect(plotted_labels).to eq(%w[aaaaaaa bbbbbbb])
+    end
+
+    # @intent: {"entity": "Repository", "action": "open unrecorded plotted run", "behavior": "a plotted run with no per-example rows is absent from the layers strip yet its size-table label links to its run", "layer": "request"}
+    it "makes a run absent from the layers strip openable from the size table" do
+      repository = create_repository(user: @user)
+      with_two_runs(repository)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-layers")
+      expect(label_hrefs("suite-trajectory-chart")).to include(repository_path(repository, commit_sha: full_a, anchor: "summary"))
+    end
+
+    # @intent: {"entity": "Repository", "action": "add no sha read", "behavior": "building the plotted tables' links issues no test_runs query keyed on a commit sha", "layer": "request"}
+    it "pays no sha-keyed test_runs read to build the links" do
+      repository = create_repository(user: @user)
+      with_two_runs(repository)
+
+      sha_reads = queries_against(/FROM "test_runs" WHERE .*"commit_sha" =/) do
+        get repository_path(repository)
+      end
+
+      expect(label_hrefs("suite-trajectory-chart").size).to eq(2)
+      expect(sha_reads).to be_empty
+    end
+  end
 end
