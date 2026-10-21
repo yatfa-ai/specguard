@@ -16,6 +16,15 @@
       <% if readings.recorded? %>
         <div class="space-y-3">
           <%= layers_stack(@latest_test_run.layer_counts, key: false) %>
+          <%# The request+system share of THIS run, stated beside the bar it describes — the one
+              `test_run_pyramid_share` seam the repositories grid card and `?sort=pyramid` read, so
+              the page cannot word the figure differently from them. A LEVEL, not a movement: it
+              names no delta, which is the Since line's job below. Nil (no sentence) when nothing is
+              declared. +0 queries: the bar above already reads this memoized `layer_counts`. %>
+          <% pyramid_share = test_run_pyramid_share(@latest_test_run) %>
+          <% if pyramid_share %>
+            <p class="text-xs text-app-muted" id="layer-pyramid-share"><%= pyramid_share %></p>
+          <% end %>
           <%= render UI::TableComponent.new(
                 columns: ["Layer", { label: "Tests", end: true }, { label: "Since previous run", end: true },
                           { label: "Across the window", end: true }],
@@ -39,7 +48,11 @@
           <% end %>
           <% if @layer_run_growth&.comparable? %>
             <p class="text-xs text-app-content-secondary" id="layer-run-growth">Since <span class="font-mono"><%= link_to @previous_test_run.commit_sha.first(7),
-                        drill_down_path(@repository, commit_sha: @previous_test_run.commit_sha, anchor: "summary"), class: "rc-link" %></span> on <%= @latest_test_run.branch %>: <%= @layer_run_growth.label %></p>
+                        drill_down_path(@repository, commit_sha: @previous_test_run.commit_sha, anchor: "summary"), class: "rc-link" %></span> on <%= @latest_test_run.branch %>: <%= @layer_run_growth.label %><%# The PREVIOUS run's share, as a second labeled level — the same seam on the other run, never a
+                subtraction. It lives inside the comparable gate on purpose: `LayerRunGrowth.for` reads
+                `previous.layer_counts` only once that gate passes, so this operand is already memoized
+                (+0 queries) and an incomparable pair states one level, not two. Nil previous mix or
+                nothing declared there: no sentence. %><% previous_share = test_run_pyramid_share(@previous_test_run) %><% if previous_share %> That run read <%= previous_share %><% end %></p>
           <% end %>
           <%= render UI::NoteComponent.new(summary: "How declared layers are counted", id: "declared-layers-basis") do %>
             "Declared layers" is how many of this run's <%= number_with_delimiter(readings.recorded) %>
