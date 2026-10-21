@@ -784,8 +784,8 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     expect(caption.call).to end_with(tally_only)
   end
 
-  # @intent: {"entity": "NearDuplicateCensus", "action": "anchor the caption to its drawer", "behavior": "an on-page cross-layer leader phrase renders as an in-page anchor to the drawer row id the page mints for its rank, while an off-page leader phrase stays plain text, at no extra query", "layer": "request"}
-  it "anchors an on-page cross-layer leader phrase to its drawer row and keeps an off-page one plain text" do
+  # @intent: {"entity": "NearDuplicateCensus", "action": "anchor the caption to its drawer", "behavior": "an on-page cross-layer leader phrase renders as an in-page anchor to the drawer row id the page mints for its rank, while an off-page leader phrase renders as a link to the page's own rank-drill ask carrying that drawer's id, at no extra query", "layer": "request"}
+  it "anchors an on-page cross-layer leader phrase to its drawer row and links an off-page one to its rank drill" do
     ingest(repository, pair_specs)
     census = NearDuplicateCensus.find_by!(repository_id: repository.id)
     page_cluster = census.payload["clusters"].sole
@@ -815,14 +815,100 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     # the anchor is composed from the stored hash in hand: the whole panel still reads ONE census row
     expect(queries_against("near_duplicate_censuses") { get repository_path(repository) }.size).to eq(1)
 
-    # off-page: the same phrase, no anchor — the drawer was deliberately not stored
+    # off-page (SPGD-1888): the same phrase, now a link to the page's rank-drill ask, whose fragment
+    # is the id the reduced drawer mints from the leader row alone (rank at BOTH ends of the seed)
+    off_rank = 15
+    off_leader = leader.merge("rank" => off_rank)
     census.update!(payload: census.payload.merge(
-      "layer_redundancy_leaders" =>
-        { "cross_layer" => [leader.merge("rank" => 15)], "same_layer" => [], "undeclared" => [] }
+      "layer_redundancy_leaders" => { "cross_layer" => [off_leader], "same_layer" => [], "undeclared" => [] }
     ))
+    off_seed = "cluster-#{off_rank - 1}-#{off_leader['descriptions'].min}"
+    off_id = "row-#{'Group of tests that read alike'.parameterize}-#{Digest::SHA1.hexdigest(off_seed).first(8)}"
     off_page = caption.call
-    expect(off_page.text).to include(phrase)
-    expect(off_page).not_to have_selector("a.rc-link")
+    off_link = off_page.find("a.rc-link")
+    expect(off_link.text).to include(phrase)
+    expect(off_link["href"]).to eq("/repositories/#{repository.id}?near_duplicate_cluster=#{off_rank}##{off_id}")
+    expect(queries_against("near_duplicate_censuses") { get repository_path(repository) }.size).to eq(1)
+  end
+
+  describe "the off-page leader drill (?near_duplicate_cluster=<rank>)" do
+    let(:census) { NearDuplicateCensus.find_by!(repository_id: repository.id) }
+    let(:page_cluster) { census.payload["clusters"].sole }
+    let(:off_rank) { 15 }
+    let(:leader) do
+      { "rank" => off_rank, "member_count" => 3, "example_count" => 5, "total_seconds" => 1.5, "timed_count" => 5,
+        "similarity_range" => [0.93, 0.89], "overlap_kind" => "multi_file", "layer_redundancy" => "cross_layer",
+        "declared_layers" => %w[request unit], "file_count" => 2,
+        "files_seen" => ["spec/models/a_spec.rb", "spec/requests/b_spec.rb"],
+        "descriptions" => ["Zeta exports the annual report", "Alpha exports the annual report"] }
+    end
+
+    before do
+      ingest(repository, pair_specs)
+      census.update!(payload: census.payload.merge(
+        "truncated" => true, "cluster_count" => 20,
+        "layer_redundancy_counts" => { "cross_layer" => 4, "same_layer" => 2, "undeclared" => 14 },
+        "layer_redundancy_leaders" => { "cross_layer" => [leader], "same_layer" => [], "undeclared" => [] }
+      ))
+    end
+
+    def drawers = panel.all("#near-duplicate-cluster-list tr[data-drawer-kind]", visible: :all)
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "drill an off-page leader", "behavior": "asking for the rank of a cross-layer leader past the stored page renders exactly one extra reduced drawer in the cluster table, with the leader's facts and description texts, the reduction stated and no member links", "layer": "request"}
+    it "renders one reduced drawer with the leader's facts, texts and a stated reduction, and no member links" do
+      get repository_path(repository)
+      expect(drawers.size).to eq(1)
+
+      get repository_path(repository, near_duplicate_cluster: off_rank)
+      expect(drawers.size).to eq(2)
+      drawer = drawers.last
+      expect(drawer["data-drawer-title"]).to eq("Zeta exports the annual report")
+      body = drawer.native.to_html
+      expect(body).to include("Zeta exports the annual report", "Alpha exports the annual report",
+                              "#15 of 20", "3 members", "spans 2 declared layers: request, unit",
+                              "reduced", "no member links")
+      expect(Capybara.string(body)).not_to have_selector("a", visible: :all)
+      expect(body).not_to include("github.com")
+      expect(drawer["id"]).to eq(panel.find("#near-duplicate-clusters-page a.rc-link")["href"].split("#").last)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "drill an off-page leader", "behavior": "an ask for an on-page rank or no ask renders no extra drawer row, and the page's links stay byte-identical to the no-ask page", "layer": "request"}
+    it "adds no row for an on-page rank or no ask" do
+      get repository_path(repository) # the first load after sign-in carries a one-time flash
+      get repository_path(repository)
+      baseline = response.body
+      get repository_path(repository, near_duplicate_cluster: "1")
+      expect(drawers.size).to eq(1)
+      expect(response.body).to eq(baseline)
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "drill an off-page leader", "behavior": "an unusable ask — non-numeric, zero, negative, past the count and no leader, or a leader stored without a rank — renders no drawer and no error", "layer": "request"}
+    it "renders nothing for unusable asks, without error" do
+      %w[abc 0 -1 1.5 19 99].each do |ask|
+        get repository_path(repository, near_duplicate_cluster: ask)
+        expect(response).to have_http_status(:ok)
+        expect(drawers.size).to eq(1)
+      end
+
+      get "#{repository_path(repository)}?near_duplicate_cluster[]=15"
+      expect(response).to have_http_status(:ok)
+      expect(drawers.size).to eq(1)
+
+      census.update!(payload: census.payload.merge(
+        "layer_redundancy_leaders" => { "cross_layer" => [leader.except("rank")], "same_layer" => [], "undeclared" => [] }
+      ))
+      get repository_path(repository, near_duplicate_cluster: off_rank)
+      expect(response).to have_http_status(:ok)
+      expect(drawers.size).to eq(1)
+      expect(panel).not_to have_selector("a.rc-link", text: "Zeta")
+    end
+
+    # @intent: {"entity": "NearDuplicateCensus", "action": "drill an off-page leader", "behavior": "the stored census row is read exactly once whether or not the ask opens a drawer", "layer": "request"}
+    it "reads the stored census exactly once in every state" do
+      ["", "?near_duplicate_cluster=#{off_rank}", "?near_duplicate_cluster=1", "?near_duplicate_cluster=abc"].each do |query|
+        expect(queries_against("near_duplicate_censuses") { get "#{repository_path(repository)}#{query}" }.size).to eq(1)
+      end
+    end
   end
 
   # @intent: {"entity": "NearDuplicateCensus", "action": "render overlap kind", "behavior": "each row says whether its group spans one spec file or several, from the stored key and, for a payload stored without it, derived from its members", "layer": "request"}

@@ -123,6 +123,12 @@ class RepositoryDashboard
   # allow-list that keeps a URL fragment from naming a panel nobody renders is argued in full there.
   include RequestedUnstableTestOriginParam
 
+  # `?near_duplicate_cluster=<rank>` read as the RAW ask for one cluster of the stored census
+  # (SPGD-1888). Shared with `RepositoryOverview`, which answers the same ask on the API; here it
+  # opens ONE reduced drawer for a cross-layer leader the stored page does not hold, so the
+  # caption phrase that names it is a link and not inert text.
+  include RequestedNearDuplicateClusterParam
+
   # `?limit=` read as an Integer ask for how many rows the two run-grain duration rollups below
   # should list — the first MAGNITUDE ask this page reads, and the only one whose value is bounded
   # by nothing in the data, which is why its guard carries a ceiling no sibling needs. Shared with
@@ -142,7 +148,7 @@ class RepositoryDashboard
     @repository @params @can_manage_keys @newest_test_run @trajectory_runs
     @requested_branch @requested_spec_file @requested_spec_directory @requested_commit_sha
     @requested_unstable_test @requested_unstable_test_origin @requested_limit
-    @requested_repeated_description @requested_layer
+    @requested_repeated_description @requested_layer @requested_near_duplicate_cluster
   ].freeze
 
   attr_reader :repository, :params, :can_manage_keys
@@ -649,6 +655,22 @@ class RepositoryDashboard
     # `weighed_run_id` / `computed_at` stamps, so the read happens whether or not the repository has
     # ever ingested (one unconditional +1 on the page's query budget).
     @near_duplicate_census = NearDuplicateCensus.stored_block_for(@repository)
+    # `?near_duplicate_cluster=<rank>` (SPGD-1888): the ONE reduced drawer the ask earns, answered
+    # from the stored block in hand by the same view the API drill-in uses, so it adds no query. Kept only when the answer is a stored LEADER row past the
+    # page (`member_listing` is the reduced one): an on-page rank already renders its own drawer
+    # row, and an unusable ask (non-numeric, zero, past the count and no leader's rank, a census
+    # stored before leader ranks) answers nothing and renders nothing — never an error.
+    @near_duplicate_cluster_request = nil
+    @near_duplicate_offpage_leader = nil
+    if (ask = requested_near_duplicate_cluster) && @near_duplicate_census
+      answer = NearDuplicateCensusView.new(@near_duplicate_census).cluster(ask)
+      if answer["member_listing"] == NearDuplicateCensusView::LEADER_LISTING && answer["cluster"].present?
+        @near_duplicate_offpage_leader = answer["cluster"]
+        # Carried by the page's links only while it OPENS a drawer (`drill_down_path`), so a page whose
+        # ask answered nothing — or an on-page rank — stays byte-identical to the no-ask page.
+        @near_duplicate_cluster_request = ask
+      end
+    end
     # The commit the census's members' definition-site links pin to: the WEIGHED run's, never
     # `@latest_test_run`'s (the census can be older than the run beside it, and a member's line
     # number describes the file as it was when that run read it). `weighed_run_id` is a bare bigint
