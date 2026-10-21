@@ -86,6 +86,9 @@ module RepositoriesHelper
     # the layer the reader chose —
     # while a default page's links stay byte-identical because no `layer:` is emitted without an ask.
     asks[:layer] = @layer_request if @layer_request
+    # `?near_duplicate_cluster=` rides the same conditional carry (SPGD-1888): it opens a drawer on
+    # the census panel, and following a link elsewhere on the page must not silently close it.
+    asks[:near_duplicate_cluster] = @near_duplicate_cluster_request if @near_duplicate_cluster_request
 
     repository_path(repository, **asks.merge(overrides), anchor: anchor)
   end

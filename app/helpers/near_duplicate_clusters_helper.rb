@@ -59,7 +59,7 @@ module NearDuplicateClustersHelper
   # nil when the key is absent (a census stored before the tally existed — the counts cannot be
   # derived from the stored page, so the caption renders exactly as it did), or when it is not the
   # three-Integer shape.
-  def near_duplicate_layer_redundancy_clause(census)
+  def near_duplicate_layer_redundancy_clause(census, repository: nil)
     return nil unless census.is_a?(Hash)
 
     counts = census["layer_redundancy_counts"]
@@ -73,7 +73,7 @@ module NearDuplicateClustersHelper
              "#{cross == 1 ? "spans" : "span"} more than one declared layer, " \
              "#{number_with_delimiter(same)} #{same == 1 ? "is" : "are"} confined to one layer, " \
              "#{number_with_delimiter(undeclared)} declared none."
-    examples = near_duplicate_cross_layer_examples(census)
+    examples = near_duplicate_cross_layer_examples(census, repository: repository)
     # `safe_join`, not interpolation: the examples clause may carry the in-page anchor (SPGD-1856),
     # and interpolating a SafeBuffer into a plain String strips its html_safe flag — the anchor
     # would render as escaped text. The joined pieces are server-built, so the result stays safe.
@@ -93,37 +93,62 @@ module NearDuplicateClustersHelper
   # Names the census's best cross-layer groups after the tally — "e.g. A ↔ B (a_spec.rb + b_spec.rb)" —
   # from the stored `layer_redundancy_leaders["cross_layer"]`, which is taken over EVERY cluster and so
   # can name a group past the stored page. A leader whose stored `rank` sits ON the page renders as an
-  # in-page anchor to its drawer row (SPGD-1856); an off-page, unranked or unreadable leader renders
-  # the same phrase as plain text — its read is the API ask, and the caption's "a page of the census"
-  # sentence keeps disclosing the page. Degrades as stored: nil (the caption is exactly what it was)
-  # for a census stored before the key, for an empty kind, and for any non-conforming shape — not an
-  # Array of at most three rows, or a row without a description list and a file list of strings.
-  def near_duplicate_cross_layer_examples(census)
+  # in-page anchor to its drawer row (SPGD-1856). One past the page renders as a link to the page's
+  # own rank-drill ask (`?near_duplicate_cluster=<rank>`, SPGD-1888), which opens ONE reduced drawer
+  # for it — when the caller threads the `repository` the link is built against; without one, and for
+  # an unranked or unreadable leader, the same phrase is plain text. Degrades as stored: nil (the
+  # caption is exactly what it was) for a census stored before the key, for an empty kind, and for
+  # any non-conforming shape — not an Array of at most three rows, or a row without a description
+  # list and a file list of strings.
+  def near_duplicate_cross_layer_examples(census, repository: nil)
     leaders = census["layer_redundancy_leaders"]
     return nil unless leaders.is_a?(Hash)
 
     rows = leaders["cross_layer"]
     return nil unless rows.is_a?(Array) && rows.any? && rows.size <= NEAR_DUPLICATE_LEADER_ROWS
 
-    phrases = rows.map { |row| near_duplicate_leader_phrase(row, near_duplicate_leader_anchor(census, row)) }
+    phrases = rows.map { |row| near_duplicate_leader_phrase(row, near_duplicate_leader_href(census, row, repository)) }
     return nil if phrases.any?(&:nil?)
 
-    # `safe_join`, not interpolation: a phrase may carry the in-page anchor (SPGD-1856), and Array#join
+    # `safe_join`, not interpolation: a phrase may carry a link (SPGD-1856), and Array#join
     # calls to_s on its elements — stripping a SafeBuffer's html_safe flag and leaving the anchor to
     # render escaped. The pieces are server-built, so the joined result stays safe.
     safe_join(["e.g. ", safe_join(phrases, "; "), "."])
   end
 
-  # The in-page anchor for a cross-layer leader the stored page holds: the drawer row id the table
-  # minted for the cluster at `rank - 1` — the SAME seed the partial passes
-  # (`cluster-#{index}-#{lead_text}`, index derived from the stored rank, never a second id scheme).
+  # Where a leader's phrase points: `#<drawer id>` for a leader the stored page holds, the page's
+  # rank-drill link (carrying the ask AND the drawer's id as the fragment) for one past it, `nil`
+  # — plain text — otherwise. Past the page means the rank exceeds the stored cluster list; a rank
+  # ON the page whose row does not match the leader (a hand-edited payload) stays plain text and
+  # is never re-aimed at the drill.
+  def near_duplicate_leader_href(census, row, repository)
+    anchor = near_duplicate_leader_anchor(census, row)
+    return nil unless anchor
+    return "##{anchor}" if row["rank"] <= Array(census["clusters"]).size
+    return nil unless repository
+
+    drill_down_path(repository, near_duplicate_cluster: row["rank"], anchor: anchor)
+  end
+
+  # The drawer row id a cross-layer leader's phrase points at: the id the table minted for the
+  # cluster at `rank - 1` — the SAME seed the partial passes (`cluster-#{index}-#{lead_text}`, index
+  # derived from the stored rank, never a second id scheme). For a rank PAST the stored page the
+  # reduced drawer the ask opens (SPGD-1888) mints the same seed from the leader's own smallest
+  # description, so the id is derivable from the stored leader row alone.
   # `nil` — plain text — when the row carries no `rank` (a census stored before ranks existed),
-  # when the rank sits past the page (the drawer was deliberately not stored), or when the page row
-  # the rank names does not carry the leader's own smallest member text, so a hand-edited payload
-  # cannot anchor a phrase at a drawer that is not its group.
+  # when the row has no list of description strings, or when a rank ON the page names a page row that
+  # does not carry the leader's own smallest member text, so a hand-edited payload cannot anchor a
+  # phrase at a drawer that is not its group.
   def near_duplicate_leader_anchor(census, row)
     rank = row.is_a?(Hash) ? row["rank"] : nil
-    return nil unless rank.is_a?(Integer)
+    return nil unless rank.is_a?(Integer) && rank.positive?
+
+    descriptions = row["descriptions"]
+    return nil unless descriptions.is_a?(Array) && descriptions.any? && descriptions.all?(String)
+
+    # The leader's descriptions are its member texts sorted, so the first one IS the cluster's
+    # smallest member text.
+    return drawer_row_id(NEAR_DUPLICATE_CLUSTER_DRAWER_KIND, "cluster-#{rank - 1}-#{descriptions.min}") if rank > Array(census["clusters"]).size
 
     cluster = Array(census["clusters"])[rank - 1]
     return nil unless cluster.is_a?(Hash)
@@ -132,18 +157,16 @@ module NearDuplicateClustersHelper
     lead = members.first
     return nil unless lead.is_a?(Hash) && lead["text"].present?
 
-    # The leader's descriptions are its member texts sorted, so the first one IS the cluster's
-    # smallest member text — the cheap identity check between the named leader and the page row
-    # the rank points at.
-    return nil unless Array(row["descriptions"]).first == members.filter_map { |m| m.is_a?(Hash) && m["text"] }.min
+    # The cheap identity check between the named leader and the page row the rank points at.
+    return nil unless descriptions.first == members.filter_map { |m| m.is_a?(Hash) && m["text"] }.min
 
     drawer_row_id(NEAR_DUPLICATE_CLUSTER_DRAWER_KIND, "cluster-#{rank - 1}-#{lead['text']}")
   end
 
   # The phrase itself: the first two stored descriptions joined around the group's files, wrapped in
-  # the in-page anchor when one was composed. The text is identical either way, so a reader (and a
-  # spec) reading the sentence sees the same words on both sides of the page boundary.
-  def near_duplicate_leader_phrase(row, anchor = nil)
+  # the link when one was composed. The text is identical either way, so a reader (and a spec)
+  # reading the sentence sees the same words on both sides of the page boundary.
+  def near_duplicate_leader_phrase(row, href = nil)
     return nil unless row.is_a?(Hash)
 
     descriptions, files = row.values_at("descriptions", "files_seen")
@@ -151,6 +174,6 @@ module NearDuplicateClustersHelper
 
     names = descriptions.first(2).map { |text| truncate(text, length: NEAR_DUPLICATE_LEADER_DESCRIPTION) }
     phrase = "#{names.join(" ↔ ")} (#{files.join(" + ")})"
-    anchor ? link_to(phrase, "##{anchor}", class: "rc-link") : phrase
+    href ? link_to(phrase, href, class: "rc-link") : phrase
   end
 end

@@ -110,7 +110,7 @@
           <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>
           — a page of the census, not all of it.<%# `safe_join`, not interpolation: the clause may carry
               the caption's in-page anchor (SPGD-1856), and interpolating a SafeBuffer into a plain
-              String strips its html_safe flag, leaving the anchor to render escaped. %><%= (layer_clause = near_duplicate_layer_redundancy_clause(census)) ? safe_join([" ", layer_clause]) : "" %>
+              String strips its html_safe flag, leaving the anchor to render escaped. %><%= (layer_clause = near_duplicate_layer_redundancy_clause(census, repository: @repository)) ? safe_join([" ", layer_clause]) : "" %>
         <% else %>
           All <%= number_with_delimiter(census["cluster_count"]) %>
           <%= "group".pluralize(census["cluster_count"].to_i) %> of tests that read alike, <%= order_words %>.
@@ -210,6 +210,62 @@
             </td>
             <td class="num" data-sort="<%= range_ok ? range[0] : "" %>"><%= range_ok ? format("%.2f", range[0]) : "—" %><% if range_ok && range[0] != range[1] %><span class="rc-sec"><%= format("%.2f", range[1]) %> worst</span><% end %></td>
             <td class="mute"><%= cluster["signal_source"] %><span class="rc-sec"><%= overlap_kind == "multi_file" ? "spans more than one spec file" : "one spec file" %></span></td>
+          <% end %>
+        <% end %>
+        <%# ONE reduced drawer for a cross-layer leader PAST the stored page, opened by
+            `?near_duplicate_cluster=<rank>` (SPGD-1888) — the target of the caption phrase's link.
+            Built from the stored leader ROW alone: member TEXTS and the row's scalars, with no file or
+            line (none is stored off-page), so there is no member partial here and no GitHub link to
+            mint. An on-page rank never lands here (its own row above is the drawer), and an unusable
+            ask leaves `@near_duplicate_offpage_leader` nil. The seed carries the rank at BOTH ends —
+            here and in `near_duplicate_leader_anchor` — so the caption's fragment finds this row. %>
+        <% if (leader = @near_duplicate_offpage_leader) %>
+          <% leader_rank = leader["rank"] %>
+          <% leader_texts = Array(leader["descriptions"]).select { |text| text.is_a?(String) } %>
+          <% leader_range = leader["similarity_range"] %>
+          <% leader_range_ok = leader_range.is_a?(Array) && leader_range.size == 2 && leader_range.all?(Numeric) %>
+          <% leader_layers = Array(leader["declared_layers"]) %>
+          <% leader_files = Array(leader["files_seen"]) %>
+          <% leader_layer_text = case leader["layer_redundancy"]
+                                 when "cross_layer" then "spans #{leader_layers.size} declared #{'layer'.pluralize(leader_layers.size)}: #{leader_layers.join(', ')}"
+                                 when "same_layer" then "one layer: #{leader_layers.join(', ')}"
+                                 else "no layer declared" end %>
+          <% leader_body = tag.div(class: "space-y-2", data: { near_duplicate_reduced: "" }) do
+               safe_join([
+                 tag.p("Group ##{leader_rank} of #{number_with_delimiter(census['cluster_count'])} sits past the stored page, " \
+                       "and the census stores only a reduced listing for it: the test texts below, with no " \
+                       "file or line, so no member links are shown.", class: "text-xs text-app-content-secondary"),
+                 tag.ul(class: "space-y-1.5 m-0 p-0 list-none") { safe_join(leader_texts.map { |text| tag.li(text) }) }
+               ])
+             end %>
+          <%= drawer_row("cluster-#{leader_rank - 1}-#{leader_texts.min}", kind: NearDuplicateClustersHelper::NEAR_DUPLICATE_CLUSTER_DRAWER_KIND,
+                title: leader_texts.first.to_s,
+                facts: [["Rank", "##{leader_rank} of #{number_with_delimiter(census['cluster_count'])}"],
+                        ["Tests", "#{number_with_delimiter(leader['member_count'])} #{'member'.pluralize(leader['member_count'].to_i)}"],
+                        ["Examples", number_with_delimiter(leader["example_count"])],
+                        ["Time", leader["total_seconds"].nil? ? "not timed" : SpecObservation.humanized_duration(leader["total_seconds"])],
+                        ["Spec files", leader["overlap_kind"] == "multi_file" ? "spans more than one spec file" : "one spec file"],
+                        ["Layers", leader_layer_text],
+                        ["Similarity", leader_range_ok ? (leader_range[0] == leader_range[1] ? "alike at #{format('%.2f', leader_range[0])}" : "alike at #{format('%.2f', leader_range[0])} at best, #{format('%.2f', leader_range[1])} at worst") : nil],
+                        ["Listing", "reduced — member texts only; file and line are not stored past the page"]],
+                body: leader_body) do %>
+            <td>
+              <%= row_open(leader_texts.first.to_s) %>
+              <span class="rc-sec mono"><%= leader_files.join(" + ") %></span>
+              <span class="rc-sec">reduced listing — past the stored page</span>
+            </td>
+            <td class="num" data-sort="<%= leader['member_count'] %>"><%= number_with_delimiter(leader["member_count"]) %></td>
+            <td class="num mute" data-sort="<%= leader['example_count'] %>"><%= number_with_delimiter(leader["example_count"]) %></td>
+            <td class="num" data-sort="<%= leader['total_seconds'] %>"><%= leader["total_seconds"].nil? ? "not timed" : SpecObservation.humanized_duration(leader["total_seconds"]) %></td>
+            <td data-sort="<%= leader_layers.size %>">
+              <% if leader_layers.any? %>
+                <span class="rc-chips">
+                  <% leader_layers.each do |layer| %><%= render UI::BadgeComponent.new(tone: leader["layer_redundancy"] == "cross_layer" ? :info : :neutral) { layer } %><% end %>
+                </span>
+              <% else %><span class="text-app-content-secondary">none declared</span><% end %>
+            </td>
+            <td class="num" data-sort="<%= leader_range_ok ? leader_range[0] : "" %>"><%= leader_range_ok ? format("%.2f", leader_range[0]) : "—" %><% if leader_range_ok && leader_range[0] != leader_range[1] %><span class="rc-sec"><%= format("%.2f", leader_range[1]) %> worst</span><% end %></td>
+            <td class="mute">—</td>
           <% end %>
         <% end %>
       <% end %>
