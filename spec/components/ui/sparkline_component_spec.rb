@@ -121,6 +121,34 @@ RSpec.describe UI::SparklineComponent, type: :component do
                           ["ccccccc", "1,047", "1 day ago"]])
     end
 
+    # @intent: { entity: "UI::SparklineComponent", action: "link label", behavior: "a point carrying an href renders its label cell as one rc-link anchor to the caller's path with the row text unchanged", layer: "integration" }
+    it "links the label cell when the point carries an href" do
+      points = [described_class::Point.new(label: "aaaaaaa", value: 1_000, detail: "3 days ago", href: "/repositories/1?commit_sha=aaaa#summary"),
+                build_point("bbbbbbb", 1_020, "2 days ago")]
+      render_series(points: points)
+
+      first, second = page.all("details table tbody tr", visible: :all)
+      anchors = first.all("td", visible: :all).first.all("a", visible: :all)
+      expect(anchors.size).to eq(1)
+      expect(anchors.first[:href]).to eq("/repositories/1?commit_sha=aaaa#summary")
+      expect(anchors.first[:class]).to include("rc-link")
+      expect(first.all("td", visible: :all).map { |c| c.text(:all) }).to eq(["aaaaaaa", "1,000", "3 days ago"])
+      # Absence is legible: a point without an href stays plain text.
+      expect(second.all("a", visible: :all)).to be_empty
+    end
+
+    # @intent: { entity: "UI::SparklineComponent", action: "keep svg inert", behavior: "the svg renders no anchors even when every point carries an href, keeping its role img contract", layer: "integration" }
+    it "never puts a link inside the svg" do
+      points = three_points.each_with_index.map do |point, i|
+        described_class::Point.new(label: point.label, value: point.value, detail: point.detail, href: "/run/#{i}")
+      end
+      render_series(points: points)
+
+      expect(page).to have_css("svg[role='img']")
+      expect(page.all("svg a", visible: :all)).to be_empty
+      expect(page.all("details table a", visible: :all).size).to eq(3)
+    end
+
     # @intent: { entity: "UI::SparklineComponent", action: "word columns", behavior: "the table headers are exactly the caller-supplied column vocabulary in order", layer: "integration" }
     it "uses the caller's vocabulary for the columns" do
       render_series

@@ -30,7 +30,12 @@
 class UI::SparklineComponent < ApplicationComponent
   # A point of the series. `label` identifies it (a short SHA), `value` is the figure plotted, and
   # `detail` is what else the text alternative and the hover title say about it (an age).
-  Point = Struct.new(:label, :value, :detail, keyword_init: true)
+  #
+  # `href` is OPTIONAL: when a caller passes a path, the table's label cell links to it (the
+  # text alternative is where the figures' runs become openable). It lives in the TABLE only — the
+  # `<svg>` stays `role="img"`, so its markers and `<title>`s are presentational by contract and
+  # cannot carry a link.
+  Point = Struct.new(:label, :value, :detail, :href, keyword_init: true)
 
   # Chart-space units, not pixels. The `<svg>` is rendered `w-full h-auto` with the default
   # `preserveAspectRatio`, so this fixes the aspect ratio and the browser does the scaling — no
