@@ -17,6 +17,8 @@
 # to a lost one is a fresh key plus a revoke — two rows and an audit trail, rather than one row
 # whose history quietly changes meaning. `UserApiKey` has no `regenerate!` to call.
 class UserApiKeysController < ApplicationController
+  include MintKeyNameParam
+
   before_action :require_authentication
 
   # The id of the panel `accounts/_revealed_user_token` renders — the fragment the redirect lands
@@ -80,6 +82,6 @@ class UserApiKeysController < ApplicationController
   # exists to tell several keys apart on the revoke button, and refusing the form over a blank field
   # would be a worse answer than naming it after where it will be pasted.
   def user_api_key_name
-    params.dig(:user_api_key, :name).presence || "Personal key"
+    mint_key_name(mint_form_root(:user_api_key)[:name], "Personal key")
   end
 end

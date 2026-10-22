@@ -122,6 +122,20 @@ RSpec.describe "API v1 — repository admin over a user key", type: :request do
       expect(response.parsed_body.dig("api_key", "name")).to eq(ApiKey::DEFAULT_NAME)
     end
 
+    # SPGD-1898: a Hash or Array `name` is truthy and used to be stored as its Ruby inspect
+    # string while the API answered 201; it now takes the blank-name answer, the default name.
+    # @intent: { entity: "api key", action: "default a non-String name", behavior: "minting with a JSON object or array as the name answers 201 and stores the model default name rather than the value's Ruby inspect string", layer: "request" }
+    it "defaults the name when it is a JSON object or array" do
+      [{ a: "b" }, ["b"]].each do |shape|
+        post mint_path, params: { name: shape }.to_json,
+                        headers: bearer(owner_key.raw_token).merge("Content-Type" => "application/json")
+
+        expect(response).to have_http_status(:created)
+        expect(response.parsed_body.dig("api_key", "name")).to eq(ApiKey::DEFAULT_NAME)
+        expect(repository.api_keys.order(:created_at).last.name).to eq(ApiKey::DEFAULT_NAME)
+      end
+    end
+
     # SPGD-1476: a NUL in the name is refused by the model's format validator, so the mint
     # answers this API's own 400 JSON and writes nothing instead of raising at INSERT (Postgres
     # cannot store a NUL). The double-quoted literal is load-bearing — a single-quoted

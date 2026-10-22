@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 class ApiKeysController < ApplicationController
+  include MintKeyNameParam
+
   before_action :require_authentication
 
   # Where both reveal paths redirect: the id of the panel `repositories/_revealed_token` renders.
@@ -95,6 +97,6 @@ class ApiKeysController < ApplicationController
   # mint that passes no name at all never reaches this constant: it takes the `api_keys.name`
   # column default instead (see `db/schema.rb`).
   def api_key_name
-    params.dig(:api_key, :name).presence || ApiKey::DEFAULT_NAME
+    mint_key_name(mint_form_root(:api_key)[:name], ApiKey::DEFAULT_NAME)
   end
 end
