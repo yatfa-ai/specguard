@@ -530,8 +530,137 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # is the revoked row rendering in the table below it, offering a second Revoke on a key that
       # is already retired.
       expect(connect_text).to include("Revoked key still presented")
-      expect(response.body).not_to include(key.token_hint)
+      # SPGD-1892: the hint is no longer absent from the BODY (a presented-revoked key is named in
+      # the panel's still-presented section), so the property is scoped to where it was always
+      # about — the LIVE table. With no live key there is no table at all.
+      expect(Capybara.string(response.body)).to have_no_css("#api-keys table")
+      expect(Capybara.string(response.body).find("#api-keys-revoked")).to have_text(key.token_hint)
       expect(response.body).to include("This repository has no API key yet")
+    end
+
+    # SPGD-1892 — the ingest-key twin of SPGD-1054's agent-keys section. Every fixture walks the
+    # real revoke-then-present path (`present_revoked_token`), so the stamp the section reads is
+    # the one the API failure path writes.
+    describe "the still-presented section of the API keys panel" do
+      include ActiveSupport::Testing::TimeHelpers
+
+      def revoked_section = Capybara.string(response.body).find("#api-keys-revoked")
+
+      def live_table = Capybara.string(response.body).find("#api-keys table")
+
+      # Counts cached repeats too (same reason as the page-budget helper further down), so a
+      # query-cache hit cannot hide an added read.
+      def count_all_queries
+        count = 0
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+          count += 1 unless payload[:name].in?(%w[SCHEMA TRANSACTION])
+        end
+        yield
+        count
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
+
+      def revoke_and_present(key)
+        token = key.raw_token
+        key.revoke!
+        present_revoked_token(token)
+        key.reload
+      end
+
+      # @intent: {"entity": "ApiKey", "action": "name the presented revoked key", "behavior": "a keys.manage viewer sees the presented revoked ingest key in the still-presented section with name, creator, hint, revoked age and last-presented age, while the live table omits it", "layer": "request"}
+      it "names a revoked key whose dead token was refused since" do
+        key = repository.api_keys.create!(name: "Leaked CI", created_by_user: @user)
+        revoke_and_present(key)
+        repository.api_keys.create!(name: "Healthy CI", created_by_user: @user)
+
+        get repository_path(repository)
+
+        expect(revoked_section).to have_text("Leaked CI")
+          .and have_text(@user.display_name)
+          .and have_text(key.token_hint)
+          .and have_text("revoked less than a minute ago")
+          .and have_text("last presented less than a minute ago")
+          .and have_text("recency, never a claim")
+        expect(live_table).to have_no_text("Leaked CI")
+        expect(live_table).to have_text("Healthy CI")
+      end
+
+      # @intent: {"entity": "ApiKey", "action": "not synthesize a presentation", "behavior": "a revoked ingest key never presented again renders no still-presented section", "layer": "request"}
+      it "renders no section for a key revoked and never presented again" do
+        repository.api_keys.create!(name: "Quietly retired").revoke!
+        repository.api_keys.create!(name: "Healthy CI")
+
+        get repository_path(repository)
+
+        expect(response.body).not_to include("api-keys-revoked")
+        expect(response.body).not_to match(/Revoked and still presented/i)
+      end
+
+      # @intent: {"entity": "ApiKey", "action": "omit section when all live", "behavior": "a repository whose keys are all live renders no still-presented section", "layer": "request"}
+      it "renders no section when every key is live" do
+        repository.api_keys.create!(name: "Healthy CI")
+
+        get repository_path(repository)
+
+        expect(live_table).to have_text("Healthy CI")
+        expect(response.body).not_to include("api-keys-revoked")
+      end
+
+      # @intent: {"entity": "ApiKey", "action": "gate still-presented section", "behavior": "a view-only member sees neither the API keys panel nor the still-presented section", "layer": "request"}
+      it "shows neither panel nor section to a viewer without keys.manage" do
+        key = repository.api_keys.create!(name: "Leaked CI")
+        revoke_and_present(key)
+        viewer = create_user(github_uid: "7312", github_handle: "plain-viewer-sgk")
+        create_membership(repository: repository, user: viewer)
+
+        sign_in_via_github(uid: "7312")
+        get repository_path(repository)
+
+        expect(response).to have_http_status(:ok)
+        expect(response.body).not_to include("api-keys-revoked")
+        expect(response.body).not_to include("Leaked CI")
+        expect(response.body).not_to include(key.token_hint)
+      end
+
+      # Three distinct time_ago buckets (SPGD-1088's discipline): a swap of either age's source
+      # column leaves a same-bucket fixture green, so each stamp gets its own bucket and each row
+      # is held to its own pair.
+      # @intent: {"entity": "ApiKey", "action": "date still-presented ages", "behavior": "two presented revoked keys with different revoked_at and last_refused_at buckets each read revoked from revoked_at and last presented from last_refused_at", "layer": "request"}
+      it "dates each row's ages from its own stamps" do
+        first = repository.api_keys.create!(name: "Six-day leak")
+        second = repository.api_keys.create!(name: "Two-month leak")
+        revoke_and_present(first)
+        revoke_and_present(second)
+        first.update_columns(created_at: 90.days.ago, revoked_at: 6.days.ago, last_refused_at: 2.hours.ago)
+        second.update_columns(created_at: 200.days.ago, revoked_at: 60.days.ago, last_refused_at: 3.days.ago)
+
+        get repository_path(repository)
+
+        expect(revoked_section.find("li", text: "Six-day leak"))
+          .to have_text("revoked 6 days ago")
+          .and have_text("last presented about 2 hours ago")
+        expect(revoked_section.find("li", text: "Two-month leak"))
+          .to have_text("revoked 2 months ago")
+          .and have_text("last presented 3 days ago")
+      end
+
+      # The section reads rows the dashboard already holds: the page costs exactly what it cost
+      # with no revoked key at all.
+      # @intent: {"entity": "ApiKey", "action": "add no queries", "behavior": "rendering the still-presented section issues the same number of queries as the same page with only live keys", "layer": "request"}
+      it "issues no more queries than the page without a presented revoked key" do
+        repository.api_keys.create!(name: "Healthy CI", created_by_user: @user)
+        get repository_path(repository) # warm caches
+        baseline = count_all_queries { get repository_path(repository) }
+
+        key = repository.api_keys.create!(name: "Leaked CI", created_by_user: @user)
+        revoke_and_present(key)
+        get repository_path(repository) # warm
+        with_section = count_all_queries { get repository_path(repository) }
+
+        expect(revoked_section).to have_text("Leaked CI")
+        expect(with_section).to eq(baseline)
+      end
     end
   end
 
