@@ -58,5 +58,36 @@
                 description: "CI and agents need a key to reach the SpecGuard API."
               ) %>
         <% end %>
+        <%# SPGD-1892 — the ingest-key twin of the agent panel's still-presented section. The rows are
+            `@presented_revoked_api_keys` and nothing else: the partition already holds them in
+            memory (no query, no ivar), and re-filtering `@revoked_api_keys` here would re-spell the
+            predicate the partition single-sources. Outside the has_api_keys branch on purpose — a
+            repository whose only keys are revoked still has a dead token in somebody's secret store. %>
+        <% if @presented_revoked_api_keys.any? %>
+          <div id="api-keys-revoked" class="mt-6 border-t border-app-panel-border pt-4">
+            <p id="api-keys-revoked-caption" class="mb-3 text-sm text-app-content-secondary">
+              <span class="font-medium text-app-content">Revoked and still presented.</span>
+              Each key below was revoked and its token has arrived at the API since, where it
+              was rejected. The presented age is the last time the platform saw the token — a
+              recency, never a claim that something is presenting it now. The token lives in
+              the client's secret store; the fix is updating it.
+            </p>
+            <ul class="space-y-2">
+              <% @presented_revoked_api_keys.each do |api_key| %>
+                <li class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-control border border-app-panel-border px-3 py-2 text-sm">
+                  <span class="font-medium text-app-content"><%= api_key.name %></span>
+                  <span class="text-app-content-secondary"><%= api_key.created_by_user&.display_name || "Unknown" %></span>
+                  <span class="font-mono text-xs text-app-content-secondary"><%= api_key.token_hint %></span>
+                  <span class="text-app-content-secondary tabular-nums">
+                    revoked <%= time_ago_in_words(api_key.revoked_at) %> ago
+                  </span>
+                  <span class="text-app-content-secondary tabular-nums">
+                    last presented <%= time_ago_in_words(api_key.last_refused_at) %> ago
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+          </div>
+        <% end %>
       <% end %>
     <% end %>
