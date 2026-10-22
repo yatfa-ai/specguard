@@ -645,6 +645,36 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).to include("Try these again")
     end
 
+    # SPGD-1894. `submitted_organization` is the raw POST param and becomes a query parameter on the
+    # retry href, so a shape that is not a plain String used to reach `bulk_repositories_path`:
+    # `organization[a]=b` (Parameters) raised "unable to convert unpermitted parameters to hash" and
+    # answered an HTML 500, `organization[]=acme` silently built `?organization[]=acme`, and a NUL
+    # landed verbatim as `%00`. Each is now read as no organization, which the summary already
+    # answers with no retry panel — the same answer a POST that carried no organization gets.
+    {
+      "hash" => { "a" => "b" },
+      "array" => %w[acme],
+      "NUL-carrying" => "ac\u0000me"
+    }.each do |shape, organization|
+      # @intent: {"entity": "Repository", "action": "omit retry for malformed organization", "behavior": "A batch with a retryable skip whose POSTed organization is hash, array or NUL-carrying still answers 200 with Registered 1 repository., offers no Try these again, and renders no organization[] or %00 in any href.", "layer": "request"}
+      it "renders the summary without a retry when the organization is #{shape}-shaped" do
+        add_github_installation(@user, installation_id: 6002, account_login: "globex")
+        stub_github_per_installation do |id|
+          FakeGithubApi.new(**(id == 6002 ? { unavailable: true } : { repos: [github_repo("acme/api")] }))
+        end
+
+        submit(%w[acme/api acme/web], organization: organization)
+
+        expect(response).to have_http_status(:ok)
+        expect(response.body).to include("Registered 1 repository.")
+        expect(response.body).not_to include("Try these again")
+
+        hrefs = Capybara.string(response.body).all("a[href]", minimum: 0).map { |a| a[:href] }
+        expect(hrefs).to all(satisfy { |href| !href.include?("organization[]") && !href.include?("organization%5B") })
+        expect(hrefs).to all(satisfy { |href| !href.include?("%00") })
+      end
+    end
+
     # Criterion 2. A batch that failed only for reasons a re-run cannot fix must not offer one:
     # `already_registered` needs nothing, and `not_in_installation` needs somebody to install the
     # App on GitHub first. Offering "try these again" here would be promising something the second
