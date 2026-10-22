@@ -65,6 +65,49 @@ RSpec.describe "GitHub sign-in", type: :request do
     expect(response.body).to include("invalid_credentials")
   end
 
+  describe "GET /auth/failure message handling" do
+    # @intent: {"entity": "Session", "action": "bound failure message length", "behavior": "GET /auth/failure with a 5000-character message redirects to the root path without CookieOverflow and the followed page shows unknown_error instead of the supplied value", "layer": "request"}
+    it "does not overflow the cookie flash on an oversized message" do
+      get "/auth/failure", params: { message: "a" * 5000 }
+
+      expect(response).to redirect_to(root_path)
+      follow_redirect!
+      expect(response.body).to include("GitHub sign-in failed (unknown_error).")
+      expect(response.body).not_to include("a" * 100)
+    end
+
+    # @intent: {"entity": "Session", "action": "refuse injected failure copy", "behavior": "GET /auth/failure with a message containing spaces and punctuation shows unknown_error and none of the supplied text", "layer": "request"}
+    it "does not echo free text as the app's own copy" do
+      get "/auth/failure", params: { message: "invalid) Your session expired, visit evil.example (x" }
+
+      follow_redirect!
+      expect(response.body).to include("GitHub sign-in failed (unknown_error).")
+      expect(response.body).not_to include("evil.example")
+    end
+
+    # @intent: {"entity": "Session", "action": "refuse non-string failure message", "behavior": "GET /auth/failure with message as an array or a hash redirects and the followed page shows unknown_error", "layer": "request"}
+    it "treats a non-String message as unknown_error" do
+      ["/auth/failure?message[]=x", "/auth/failure?message[a]=b"].each do |path|
+        get path
+
+        expect(response).to redirect_to(root_path)
+        follow_redirect!
+        expect(response.body).to include("GitHub sign-in failed (unknown_error).")
+      end
+    end
+
+    # @intent: {"entity": "Session", "action": "fall back to omniauth error type", "behavior": "GET /auth/failure without a message but with omniauth.error.type set shows that type, and a malformed message still falls back to it", "layer": "request"}
+    it "falls back to the omniauth error type" do
+      get "/auth/failure", env: { "omniauth.error.type" => "access_denied" }
+      follow_redirect!
+      expect(response.body).to include("GitHub sign-in failed (access_denied).")
+
+      get "/auth/failure", params: { message: "bad message!" }, env: { "omniauth.error.type" => "access_denied" }
+      follow_redirect!
+      expect(response.body).to include("GitHub sign-in failed (access_denied).")
+    end
+  end
+
   # Archiving is an offboarding control, and a control that only bites the next time somebody
   # chooses to sign in is one they simply outlast. Both halves are asserted: the door, and the
   # session already on the other side of it.
