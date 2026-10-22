@@ -279,6 +279,17 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).not_to include("do not administer")
     end
 
+    # The picker hands the server's per-batch bound to its Stimulus controller, so "Select all shown"
+    # and the count can be cap-aware client-side. Read from the constant, never a literal.
+    # @intent: {"entity": "Repository", "action": "expose batch bound to picker", "behavior": "The picker form carries data-bulk-picker-max-value equal to BulkRegistration::MAX_BATCH so the client can stop ticking at the limit.", "layer": "request"}
+    it "tells the picker form how many repositories one batch may carry" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      choose_organization("acme")
+
+      expect(response.body).to include(%(data-bulk-picker-max-value="#{BulkRegistration::MAX_BATCH}"))
+    end
+
     # Offering a tick box whose only possible outcome is "skipped" is offering a click that can
     # only fail.
     # @intent: {"entity": "Repository", "action": "disable taken rows", "behavior": "A repository this user already registered renders as an Already registered row that cannot be ticked rather than as a choice whose only possible outcome is a skip.", "layer": "request"}

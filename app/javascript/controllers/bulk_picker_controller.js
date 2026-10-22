@@ -23,6 +23,11 @@ import { Controller } from "@hotwired/stimulus"
 export default class extends Controller {
   static targets = ["query", "pick", "row", "count", "all"]
 
+  // The server's per-batch bound (BulkRegistration::MAX_BATCH), handed over by the view. Advisory
+  // only: `#create` still refuses an oversized batch, so this exists to say so BEFORE the submit
+  // rather than after a 422 that leaves every name ticked. 0 / absent means "no cap known".
+  static values = { max: Number }
+
   connect() {
     this.refine()
   }
@@ -43,11 +48,21 @@ export default class extends Controller {
   // would register things they had deliberately taken out of view.
   //
   // Already-registered rows carry `disabled`, so they are skipped here as they are everywhere else.
+  //
+  // When the list is longer than one batch can carry, ticking fills only the room that is left, in
+  // document order, rather than ticking a selection the server is certain to refuse. Unticking is
+  // never limited.
   chooseShown(event) {
     const wanted = event.target.checked
+    let room = this.capped() ? this.maxValue - this.chosenPicks().length : Infinity
 
     for (const pick of this.shownPicks()) {
-      pick.checked = wanted
+      if (!wanted) {
+        pick.checked = false
+      } else if (!pick.checked && room > 0) {
+        pick.checked = true
+        room -= 1
+      }
     }
 
     this.tally()
@@ -58,23 +73,48 @@ export default class extends Controller {
     // Counted over EVERY pick, not only the shown ones: a selection made before narrowing is still
     // part of the submission, and a count that dropped it would under-report what is about to
     // happen — on the one control a reader uses to check the batch before pressing the button.
-    const chosen = this.pickTargets.filter((pick) => pick.checked && !pick.disabled)
+    const chosen = this.chosenPicks()
+    const capped = this.capped()
+    const full = capped && chosen.length >= this.maxValue
 
     if (this.hasAllTarget) {
       // Reflects the rows it acts on, so it cannot read as "everything is selected" while a
       // narrowed-away row sits unticked, or as unticked while every shown row is ticked.
       const shownChosen = shown.filter((pick) => pick.checked)
-      this.allTarget.checked = shown.length > 0 && shownChosen.length === shown.length
-      this.allTarget.indeterminate = shownChosen.length > 0 && shownChosen.length < shown.length
+      const everyShownChosen = shown.length > 0 && shownChosen.length === shown.length
+      // With the batch filled to its limit the control has done all it can: it reads checked (so the
+      // next click unticks) instead of sitting indeterminate with a click that could only add nothing.
+      const filled = full && shownChosen.length > 0
+      this.allTarget.checked = everyShownChosen || filled
+      this.allTarget.indeterminate = !this.allTarget.checked && shownChosen.length > 0
     }
 
     if (this.hasCountTarget) {
-      const selected = `${chosen.length} selected`
-      this.countTarget.textContent =
-        shown.length === this.selectablePicks().length
-          ? selected
-          : `${selected} · ${shown.length} shown`
+      let text = `${chosen.length} selected`
+      const over = capped ? chosen.length - this.maxValue : 0
+
+      if (over > 0) {
+        text += ` — ${over} over the ${this.maxValue}-per-batch limit`
+      } else if (full) {
+        text += " (batch limit)"
+      }
+
+      if (shown.length !== this.selectablePicks().length) text += ` · ${shown.length} shown`
+
+      this.countTarget.textContent = text
+      this.countTarget.classList.toggle("text-app-warning", over > 0)
+      this.countTarget.classList.toggle("text-app-muted", over <= 0)
     }
+  }
+
+  chosenPicks() {
+    return this.pickTargets.filter((pick) => pick.checked && !pick.disabled)
+  }
+
+  // True only when the list is longer than one batch, so a list at or under the cap behaves exactly
+  // as it did before the cap was known to the page.
+  capped() {
+    return this.maxValue > 0 && this.selectablePicks().length > this.maxValue
   }
 
   shownPicks() {
