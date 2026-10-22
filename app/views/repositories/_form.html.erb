@@ -6,7 +6,8 @@
 
     locals: repository, submit_label, cancel_href %>
 <%= render UI::PanelComponent.new do %>
-  <% choices = github_listing && repository_choices(github_listing, repository) %>
+  <% choices = github_listing &&
+               repository_choices(github_listing, repository, registered: registered_repository_names) %>
   <% picker = !github_installation_needed? && choices.present? %>
 
   <%# A refused write must always be able to say why. When the picker renders, the field renders
@@ -135,6 +136,14 @@
           each of them contributes itself. %>
       <%= render UI::AlertComponent.new(tone: :warning, title: "This list may be incomplete", class: "mb-4") do %>
         <%= unreadable_accounts_sentence(github_unread_accounts, missing: "Repositories") %>
+      <% end %>
+    <% end %>
+    <% if all_repository_choices_taken?(choices) %>
+      <%# Every listed repository is one SpecGuard already holds, so the dropdown below would be a
+          wall of disabled rows with no sentence saying why. %>
+      <%= render UI::AlertComponent.new(tone: :info, title: "Nothing left to register", class: "mb-4") do %>
+        Every repository listed here is already registered in SpecGuard. Install the SpecGuard GitHub
+        App on more repositories to add them.
       <% end %>
     <% end %>
     <%= form_with model: repository do |form| %>

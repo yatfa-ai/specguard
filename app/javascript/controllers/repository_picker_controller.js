@@ -28,6 +28,7 @@ export default class extends Controller {
   refine() {
     const needle = this.hasQueryTarget ? this.queryTarget.value.trim().toLowerCase() : ""
     let shown = 0
+    let taken = 0
 
     for (const option of this.selectTarget.options) {
       // A placeholder option carries no value; it is not a repository and must not be hidden
@@ -35,22 +36,31 @@ export default class extends Controller {
       if (option.value === "") continue
 
       const matches = needle === "" || option.text.toLowerCase().includes(needle)
+      // A repository SpecGuard already holds is rendered disabled by the server (`data-taken`).
+      // Disabling is what this pass does to non-matches, so it must not be allowed to undo the
+      // server's decision for a match: a taken row stays disabled whatever the search says, and
+      // is counted apart from the rows that can actually be picked.
+      const isTaken = option.dataset.taken === "true"
       option.hidden = !matches
-      option.disabled = !matches
-      if (matches) shown += 1
+      option.disabled = !matches || isTaken
+      if (matches && isTaken) taken += 1
+      else if (matches) shown += 1
     }
 
-    // A hidden option can still be the selected one, which reads as the search having done
-    // nothing. Move the selection to the first match instead.
+    // A hidden or disabled option can still be the selected one, which reads as the search having
+    // done nothing (or, for a taken row, as a pick that can only end in a refusal). Move the
+    // selection to the first match that can actually be chosen.
     const selected = this.selectTarget.selectedOptions[0]
-    if (selected && selected.hidden) {
-      const firstMatch = Array.from(this.selectTarget.options).find((o) => o.value !== "" && !o.hidden)
+    if (selected && (selected.hidden || selected.disabled)) {
+      const firstMatch = Array.from(this.selectTarget.options).find(
+        (o) => o.value !== "" && !o.hidden && !o.disabled
+      )
       this.selectTarget.value = firstMatch ? firstMatch.value : ""
     }
 
     if (this.hasCountTarget) {
-      this.countTarget.textContent =
-        shown === 1 ? "1 repository matches" : `${shown} repositories match`
+      const base = shown === 1 ? "1 repository matches" : `${shown} repositories match`
+      this.countTarget.textContent = taken > 0 ? `${base}, ${taken} already registered` : base
     }
   }
 }

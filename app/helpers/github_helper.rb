@@ -292,13 +292,34 @@ module GithubHelper
   # still be representable by the control that shows the current value. It is a *display* concession
   # only — submitting it unchanged writes nothing, and submitting it as a change is verified like
   # any other value.
-  def repository_choices(listing, repository)
-    choices = listing.repos.map { |repo| [repository_choice_label(repo), repo.full_name] }
-
+  #
+  # `registered:` is the Set of downcased names SpecGuard already holds (`Repository
+  # .registered_names_among`). A repository in it is rendered DISABLED and annotated, because picking
+  # it can only end in a 422 "has already been taken" — `github_full_name` is unique across SpecGuard,
+  # whoever registered it and however its case differs. This is display only: the uniqueness
+  # validation is still the gate. `data-taken` is what `repository_picker_controller.js` reads to keep
+  # such a row disabled when a search matches it. A rename form's own current name is never marked
+  # taken — it is held by THIS record, and the control must be able to represent its current value.
+  def repository_choices(listing, repository, registered: Set.new)
     current = repository.persisted? ? repository.github_full_name_was : nil
+
+    choices = listing.repos.map do |repo|
+      taken = registered.include?(repo.full_name.downcase) && !current.to_s.casecmp?(repo.full_name)
+      option = [repository_choice_label(repo, taken: taken), repo.full_name]
+      option << { disabled: true, "data-taken" => "true" } if taken
+      option
+    end
+
     return choices if current.blank? || listing.repos.any? { |repo| repo.full_name == current }
 
     choices.unshift([current, current])
+  end
+
+  # Whether every offered choice is one SpecGuard already holds — the state in which the dropdown
+  # would otherwise be a silent wall of disabled rows. A `[label, value, attrs]` choice is taken when
+  # it carries `data-taken`; the prepended current name never does.
+  def all_repository_choices_taken?(choices)
+    choices.present? && choices.all? { |_label, _value, attrs| attrs.is_a?(Hash) && attrs["data-taken"] }
   end
 
   # Beneath the field, because each of these changes what an *absent* repository means, and a picker
@@ -678,10 +699,11 @@ module GithubHelper
   # `private` and `archived` change what registering the repository will *mean* — an archived one
   # will never push another CI run — so they are on the option itself rather than discoverable only
   # after registering.
-  def repository_choice_label(repo)
+  def repository_choice_label(repo, taken: false)
     notes = []
     notes << "private" if repo.private?
     notes << "archived" if repo.archived?
+    notes << "already registered" if taken
 
     notes.any? ? "#{repo.full_name} · #{notes.join(', ')}" : repo.full_name
   end

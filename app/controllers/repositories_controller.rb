@@ -61,6 +61,9 @@ class RepositoriesController < ApplicationController
   # view never sees a shape it has to defend against, only the ask the guards settled on.
   helper_method :requested_search, :requested_role, :requested_sort, :narrowing_matched_nothing?
 
+  # The eleventh, read only by the registration and rename forms' repository picker (SPGD-1902).
+  helper_method :registered_repository_names
+
   # Everything the viewer can open, through the one seam that defines that set — see
   # `Repository.accessible_by`, which carries the union rule and the reason it stays a relation
   # rather than becoming `owned + shared`.
@@ -593,6 +596,28 @@ class RepositoriesController < ApplicationController
     # installing the App rather than picking something else. `nil` when nothing was asked.
     @github_verdict = registration.verdict
     saved
+  end
+
+  # The names in this user's GitHub listing that SpecGuard already holds, downcased — what the
+  # single-repository picker greys out and badges "already registered". The same read the bulk picker
+  # and the API's `registered` flags use (`Repository.registered_names_among`), so the picker and the
+  # write cannot disagree about what "taken" means. Global, not user-scoped, because the uniqueness
+  # rule is global.
+  #
+  # Memoized and LAZY: asked only by the view branch that renders the picker, so it costs exactly one
+  # `LOWER(...) IN` query there and nothing on the branches that render no picker — an App that needs
+  # installing, a session that needs reconnecting, no listing, an empty one. Those are guarded
+  # explicitly rather than left to the empty-listing short-circuit, because a non-empty listing can
+  # coexist with a reconnect prompt and a query for a picker that is not drawn is a wasted one.
+  #
+  # Display only: `save_with_verified_ownership` and the uniqueness validation remain the gate.
+  def registered_repository_names
+    @registered_repository_names ||=
+      if github_installation_needed? || github_authorization_needed? || github_listing.nil?
+        Set.new
+      else
+        Repository.registered_names_among(github_listing.repos.map(&:full_name))
+      end
   end
 
   def live_verifier

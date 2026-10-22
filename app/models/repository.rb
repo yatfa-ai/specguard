@@ -112,6 +112,23 @@ class Repository < ApplicationRecord
     where(user_id: user.id).or(where(id: user.repository_memberships.select(:repository_id)))
   }
 
+  # WHICH of these names SpecGuard already holds, as a Set of downcased names. The one definition of
+  # "taken" that the pickers (single, bulk) and the API's `registered` flags all read, so that what a
+  # picker greys out and what the write refuses cannot disagree.
+  #
+  # Case-insensitive because the uniqueness rule on `github_full_name` is (a repository registered
+  # as `Acme/API` is what refuses `acme/api`), and GLOBAL rather than scoped to a user because the
+  # rule is global: a repository somebody else registered still refuses this person's write. Empty-
+  # safe — an empty input costs no query. A display concession, never a gate: the validation and
+  # the unique index remain the gate.
+  def self.registered_names_among(names)
+    downcased = Array(names).map { |name| name.to_s.downcase }.uniq
+    return Set.new if downcased.empty?
+
+    where("LOWER(repositories.github_full_name) IN (?)", downcased)
+      .pluck(:github_full_name).map(&:downcase).to_set
+  end
+
   # The uniqueness validation above is a read-then-write check: its SELECT runs before the INSERT,
   # so it cannot see a competing registration that has not committed yet. Two concurrent writes for
   # the same slug — a double-submitted registration form, a re-post on a slow connection, a second

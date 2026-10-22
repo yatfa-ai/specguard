@@ -496,10 +496,7 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # A Set rather than an Array so the `include?` in the map above is a hash lookup per entry rather
   # than a scan of the whole list.
   def registered_names_among(names)
-    return Set.new if names.empty?
-
-    Repository.where("LOWER(repositories.github_full_name) IN (?)", names.map(&:downcase))
-              .pluck(:github_full_name).map(&:downcase).to_set
+    Repository.registered_names_among(names)
   end
 
   # The evidence this request can offer, which is a recording rather than a live answer. `nil` is an
