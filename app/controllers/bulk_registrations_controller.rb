@@ -116,7 +116,20 @@ class BulkRegistrationsController < ApplicationController
   #
   # Blank when the POST carried no organization — a submission that did not come from the picker —
   # and the summary then offers no retry rather than a link back to a nameless account.
-  def submitted_organization = params[:organization].presence
+  #
+  # Read only as a NUL-free String, for the reason `RequestedBranchParam#requested_branch` states:
+  # `organization[a]=b` parses to `ActionController::Parameters`, which `bulk_repositories_path`
+  # cannot turn into a query string (an HTML 500 on an authenticated POST), `organization[]=acme`
+  # to an Array that silently becomes `?organization[]=acme`, and a NUL-carrying String lands
+  # verbatim as `%00` in the retry href. Each is answered as no organization, which the summary
+  # already handles by offering no retry. Memoized with `defined?` because nil is the common answer
+  # and the view asks several times.
+  def submitted_organization
+    return @submitted_organization if defined?(@submitted_organization)
+
+    raw = params[:organization]
+    @submitted_organization = raw.is_a?(String) && !raw.include?("\u0000") ? raw.presence : nil
+  end
 
   # Which of the organization's repositories are already registered here, so the picker can say so
   # rather than offer a tick box whose only possible outcome is "skipped".
