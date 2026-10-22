@@ -152,16 +152,7 @@ class BulkRegistrationsController < ApplicationController
 
   def registered_names
     @registered_names ||=
-      begin
-        names = Array(organization&.repos).map { |repo| repo.full_name.downcase }
-
-        if names.empty?
-          Set.new
-        else
-          Repository.where("LOWER(repositories.github_full_name) IN (?)", names)
-                    .pluck(:github_full_name).map(&:downcase).to_set
-        end
-      end
+      Repository.registered_names_among(Array(organization&.repos).map(&:full_name))
   end
 
   # The names a HANDLE redeems for, or none.
