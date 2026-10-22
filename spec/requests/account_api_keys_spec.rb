@@ -336,6 +336,31 @@ RSpec.describe "Account API keys", type: :request do
     end
   end
 
+  # SPGD-1898: the name and the form root are read shape-safely. A scalar `user_api_key=x` root
+  # used to raise a TypeError (HTML 500) and a Hash or Array `name` was stored as its Ruby inspect
+  # string; both now take the blank-name answer.
+  # @intent: {"entity": "UserApiKey", "action": "mint with a scalar user_api_key root", "behavior": "posting user_api_key as a bare scalar mints one key named Personal key and redirects instead of raising a 500", "layer": "request"}
+  it "mints a Personal key when the user_api_key root is a scalar" do
+    expect {
+      post account_api_keys_path, params: { user_api_key: "x" }
+    }.to change(UserApiKey, :count).by(1)
+
+    expect(response).to have_http_status(:found)
+    expect(UserApiKey.order(:created_at).last.name).to eq("Personal key")
+  end
+
+  # @intent: {"entity": "UserApiKey", "action": "mint with a non-String name", "behavior": "posting a Hash or an Array as the user_api_key name mints one key named Personal key rather than storing the value's Ruby inspect string", "layer": "request"}
+  it "mints a Personal key when the name is a Hash or an Array" do
+    [{ a: "b" }, ["b"]].each do |shape|
+      expect {
+        post account_api_keys_path, params: { user_api_key: { name: shape } }
+      }.to change(UserApiKey, :count).by(1)
+
+      expect(response).to have_http_status(:found)
+      expect(UserApiKey.order(:created_at).last.name).to eq("Personal key")
+    end
+  end
+
   # SPGD-1476: a NUL in the name is refused by the model's format validator, so the mint
   # redirects back with an alert and writes nothing instead of raising at INSERT (Postgres
   # cannot store a NUL). The double-quoted literal is load-bearing — the single-quoted

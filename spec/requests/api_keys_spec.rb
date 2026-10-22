@@ -56,6 +56,31 @@ RSpec.describe "Repository API keys (web)", type: :request do
       expect(response).to have_http_status(:not_found)
     end
 
+    # SPGD-1898: the name and the form root are read shape-safely. A scalar `api_key=x` root used
+    # to raise a TypeError (HTML 500) and a Hash or Array `name` was stored as its Ruby inspect
+    # string; both now take the blank-name answer, the default name.
+    # @intent: {"entity": "POST /repositories/:id/api_keys", "action": "mint with a scalar api_key root", "behavior": "posting api_key as a bare scalar mints one key with the default name and redirects to the repository page anchored at revealed-key instead of raising a 500", "layer": "request"}
+    it "mints a default-named key when the api_key root is a scalar" do
+      expect {
+        post repository_api_keys_path(repository), params: { api_key: "x" }
+      }.to change(ApiKey, :count).by(1)
+
+      expect(repository.api_keys.last.name).to eq(ApiKey::DEFAULT_NAME)
+      expect(response).to redirect_to(repository_path(repository, anchor: "revealed-key"))
+    end
+
+    # @intent: {"entity": "POST /repositories/:id/api_keys", "action": "mint with a non-String name", "behavior": "posting a Hash or an Array as the api_key name mints one key with the default name rather than storing the value's Ruby inspect string", "layer": "request"}
+    it "mints a default-named key when the name is a Hash or an Array" do
+      [{ a: "b" }, ["b"]].each do |shape|
+        expect {
+          post repository_api_keys_path(repository), params: { api_key: { name: shape } }
+        }.to change(ApiKey, :count).by(1)
+
+        expect(repository.api_keys.last.name).to eq(ApiKey::DEFAULT_NAME)
+        expect(response).to redirect_to(repository_path(repository, anchor: "revealed-key"))
+      end
+    end
+
     # SPGD-1476: a NUL in the name is refused by the model's format validator, so the mint
     # redirects back with an alert and writes nothing instead of raising at INSERT (Postgres
     # cannot store a NUL). The double-quoted literal is load-bearing — the single-quoted

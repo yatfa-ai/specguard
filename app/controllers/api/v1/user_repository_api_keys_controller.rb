@@ -38,6 +38,8 @@
 # reading "Unknown" — the known-degraded state a nil creator renders. No later endpoint serves
 # the token; nothing persists it but the digest.
 class Api::V1::UserRepositoryApiKeysController < Api::BaseController
+  include MintKeyNameParam
+
   # WHO MAY MINT, LIST, AND REVOKE: a person over their `sgu_` key, or an `sga_` agent credential
   # holding `keys.manage` on a repository in its own set — both answered by the same
   # `current_repository(:keys_manage)` gate each action already calls. A repository's own `sgk_`
@@ -126,7 +128,7 @@ class Api::V1::UserRepositoryApiKeysController < Api::BaseController
   # `UserRepositoriesController#create_params`'s stated rule — this is JSON an agent writes by
   # hand, not a Rails form.
   def key_name
-    params[:name].presence || ApiKey::DEFAULT_NAME
+    mint_key_name(params[:name], ApiKey::DEFAULT_NAME)
   end
 
   # Deliberately the same `api_key` block `UserRepositoriesController#registered_body` serves, so

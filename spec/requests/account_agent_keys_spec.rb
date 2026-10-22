@@ -86,6 +86,33 @@ RSpec.describe "Account agent keys", type: :request do
     expect(response.body).to include("cannot open")
   end
 
+  # SPGD-1898: the form root and the name are read shape-safely. A scalar `agent_api_key=x` root
+  # used to raise NoMethodError on `permit` (HTML 500); it is now an empty mint, which the model
+  # refuses with its own sentence. A Hash or Array `name` used to be stored as its inspect string.
+  # @intent: { entity: "AgentApiKey", action: "mint with a scalar agent_api_key root", behavior: "posting agent_api_key as a bare scalar redirects back to /account with the model's empty-mint refusal and writes no key instead of raising a 500", layer: "request" }
+  it "redirects with an alert and writes nothing when the agent_api_key root is a scalar" do
+    expect {
+      post account_agent_keys_path, params: { agent_api_key: "x" }
+    }.not_to change(AgentApiKey, :count)
+
+    expect(response).to redirect_to(account_path(anchor: "agent-keys"))
+    expect(flash[:alert]).to be_present
+  end
+
+  # @intent: { entity: "AgentApiKey", action: "mint with a non-String name", behavior: "posting a Hash or an Array as the agent key name with a valid grant mints one key named Agent key rather than storing the value's Ruby inspect string", layer: "request" }
+  it "mints an Agent key when the name is a Hash or an Array" do
+    repository = mint_grant
+
+    [{ a: "b" }, ["b"]].each do |shape|
+      expect {
+        post account_agent_keys_path,
+             params: { agent_api_key: { name: shape, repository_ids: [repository.id] } }
+      }.to change(AgentApiKey, :count).by(1)
+
+      expect(AgentApiKey.order(:created_at).last.name).to eq("Agent key")
+    end
+  end
+
   # SPGD-1476: a NUL in the name is refused by the model's format validator, so the mint takes the
   # same else branch as the grant refusals above — redirect with an alert — and writes nothing,
   # instead of raising at INSERT (Postgres cannot store a NUL). The double-quoted literal is

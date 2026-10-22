@@ -37,6 +37,8 @@
 # established — so a still-presenting token stays attributable instead of resolving to nothing.
 # The `destroy` action's name is Rails', not the act's.
 class AgentApiKeysController < ApplicationController
+  include MintKeyNameParam
+
   before_action :require_authentication
 
   # The id of the panel `accounts/_revealed_agent_token` renders — the same mechanism, and the
@@ -79,8 +81,8 @@ class AgentApiKeysController < ApplicationController
   # carrying a Rails exception, which is what a raised `ParameterMissing` would put on this
   # browser-facing form action.
   def agent_api_key_params
-    params.fetch(:agent_api_key, {}).permit(:name, repository_ids: [], permissions: []).tap do |permitted|
-      permitted[:name] = permitted[:name].presence || "Agent key"
+    mint_form_root(:agent_api_key).permit(:name, repository_ids: [], permissions: []).tap do |permitted|
+      permitted[:name] = mint_key_name(permitted[:name], "Agent key")
     end
   end
 end
