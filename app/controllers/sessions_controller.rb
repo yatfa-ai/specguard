@@ -51,12 +51,25 @@ class SessionsController < ApplicationController
     redirect_to root_path, notice: "Signed out."
   end
 
+  # An OmniAuth error type is a short snake_case token (`invalid_credentials`, `access_denied`).
+  # `/auth/failure` is a public GET, so `params[:message]` is attacker-controlled: left unbounded it
+  # overflows the 4KB cookie that carries the flash (a 500) and lets anyone put arbitrary text on the
+  # root page in the app's own voice. Only a token of that shape is ever echoed.
+  ERROR_TOKEN = /\A[A-Za-z0-9_]{1,64}\z/
+
   def failure
-    message = params[:message].presence || request.env["omniauth.error.type"].presence || "unknown_error"
+    message = error_token(params[:message]) || error_token(request.env["omniauth.error.type"]) || "unknown_error"
     redirect_to root_path, alert: "GitHub sign-in failed (#{message})."
   end
 
   private
+
+  # Strings only: `message[]=x` and `message[a]=b` arrive as Array / Parameters, and the env value
+  # may be a Symbol, so anything else is normalised or refused rather than interpolated via to_s.
+  def error_token(value)
+    value = value.to_s if value.is_a?(Symbol)
+    value if value.is_a?(String) && value.match?(ERROR_TOKEN)
+  end
 
   # `reset_session` before the redirect, not merely "don't set `session[:user_id]`". Whatever
   # session arrived at this callback is now unwanted either way: if it was the archived person's
