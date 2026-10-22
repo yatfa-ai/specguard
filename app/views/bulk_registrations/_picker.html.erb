@@ -106,7 +106,9 @@
         Note the refusal paths are NOT why this is here: `render_refusal` returns 422 and Turbo
         renders 4xx happily. It is only the success path Turbo drops. %>
     <%= form_with url: bulk_repositories_path, method: :post,
-                  data: { controller: "bulk-picker", turbo: false } do %>
+                  data: { controller: "bulk-picker",
+                          bulk_picker_max_value: BulkRegistration::MAX_BATCH,
+                          turbo: false } do %>
       <%# Carried so a 422 re-render (nothing selected, too many selected) comes back to the same
           organization rather than dropping the reader at the chooser with their selection gone. %>
       <%= hidden_field_tag :organization, organization.login %>
@@ -183,7 +185,8 @@
       <% if registerable.length > BulkRegistration::MAX_BATCH %>
         <%= render UI::AlertComponent.new(tone: :warning, class: "mt-3") do %>
           At most <%= BulkRegistration::MAX_BATCH %> repositories can be registered in one batch.
-          Register the rest in a second pass.
+          "Select all shown" fills the first <%= BulkRegistration::MAX_BATCH %>; register the rest in a
+          second pass.
         <% end %>
       <% end %>
 

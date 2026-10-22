@@ -88,6 +88,59 @@ RSpec.describe "Bulk organization registration", type: :system do
     expect(Repository.pluck(:github_full_name)).to eq(%w[acme/api])
   end
 
+  # SPGD-1900: an organization with more registerable repositories than one batch may carry. The
+  # server refuses the oversized batch after submit; the picker says so BEFORE, and "Select all
+  # shown" stops at the limit instead of ticking a selection that is certain to be refused.
+  context "when the organization has more repositories than one batch can carry" do
+    let(:max) { BulkRegistration::MAX_BATCH }
+
+    before do
+      stub_github(repos: Array.new(max + 5) { |i| github_repo(format("acme/repo-%03d", i)) })
+      visit bulk_repositories_path(organization: "acme")
+    end
+
+    def ticked = all("input[name='github_full_names[]']:checked", visible: :all).length
+
+    # @intent: { entity: "BulkOrganizationRegistration", action: "select all shown on a list longer than one batch", behavior: "exactly MAX_BATCH rows are ticked, the count reads batch limit, and submitting registers MAX_BATCH repositories", layer: "system" }
+    it "ticks only up to the batch limit and registers that many" do
+      check "Select all shown"
+
+      expect(page).to have_content("#{max} selected (batch limit)")
+      expect(ticked).to eq(max)
+      expect(find_field("Select all shown")).to be_checked
+
+      click_button "Register selected repositories"
+
+      expect(page).to have_content("Registered #{max} repositories.")
+      expect(Repository.count).to eq(max)
+    end
+
+    # @intent: { entity: "BulkOrganizationRegistration", action: "untick select all shown at the batch limit", behavior: "a second click on the filled control clears every tick and the batch-limit wording goes away", layer: "system" }
+    it "lets the filled select-all control untick again" do
+      check "Select all shown"
+      expect(page).to have_content("(batch limit)")
+
+      uncheck "Select all shown"
+
+      expect(page).to have_content("0 selected")
+      expect(page).to have_no_content("batch limit")
+      expect(ticked).to eq(0)
+    end
+
+    # @intent: { entity: "BulkOrganizationRegistration", action: "hand-tick past the batch limit", behavior: "the count names how many are over the limit and the notice disappears once the extra tick is removed", layer: "system" }
+    it "says how far over the limit a hand-ticked selection is, and clears when unticked" do
+      check "Select all shown"
+      check "acme/repo-#{format('%03d', max)}"
+
+      expect(page).to have_content("#{max + 1} selected — 1 over the #{max}-per-batch limit")
+
+      uncheck "acme/repo-#{format('%03d', max)}"
+
+      expect(page).to have_content("#{max} selected (batch limit)")
+      expect(page).to have_no_content("over the")
+    end
+  end
+
   # SPGD-818, criterion 1, driven the way the person in the ticket actually hits it: a solo
   # developer whose repositories are ALL in their own namespace, starting from the chooser rather
   # than from a hand-built `?organization=` URL.
