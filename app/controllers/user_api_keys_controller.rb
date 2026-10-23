@@ -67,8 +67,8 @@ class UserApiKeysController < ApplicationController
   # revoked token attributable: the dead token arriving at the API stamps `last_refused_at` on the
   # row it names (`Api::BaseController`'s failure path), so /account can say a key you revoked is
   # still being presented rather than leaving the 401 an agent sees indistinguishable from "this
-  # was never a key". The button is rendered only on live keys, so a replayed delete re-stamps
-  # unobservably — the same idempotence `ApiKey#revoke!` states. Notice and redirect are unchanged:
+  # was never a key". The button is rendered only on live keys, but a stale tab can still replay the
+  # delete: first revocation wins and the replay is a no-op — the same rule `ApiKey#revoke!` states. Notice and redirect are unchanged:
   # the person asked for the key to stop working, and it has.
   def destroy
     current_user.user_api_keys.find(params[:id]).revoke!

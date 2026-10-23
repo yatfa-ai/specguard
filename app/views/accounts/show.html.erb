@@ -62,7 +62,7 @@
                 <%# `:neutral` — the quietest real tone, for the reason the agent-keys badge
                     spells out: this row is a record rather than a live hazard. And NO Revoke
                     button in this state — there is nothing left to revoke, and `revoke!` is
-                    idempotent anyway (a replayed delete re-stamps, unobservably — the rule
+                    idempotent anyway (first revocation wins; a replayed delete is a no-op — the rule
                     `ApiKey#revoke!` states). %>
                 <%= render UI::BadgeComponent.new(
                       tone: :neutral,

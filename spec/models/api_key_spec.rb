@@ -3,6 +3,8 @@
 require "rails_helper"
 
 RSpec.describe ApiKey do
+  include ActiveSupport::Testing::TimeHelpers
+
   let(:repository) { create_repository }
 
   # @intent: { entity: "ApiKey", action: "refuse a NUL in the name", behavior: "a key built with a NUL character in its name is invalid with an error on :name, so a mint is refused by validation instead of raising at INSERT (Postgres cannot store a NUL)", layer: "unit" }
@@ -308,6 +310,22 @@ RSpec.describe ApiKey do
 
       expect(api_key.reload.last_refused_at).to be_present
       expect(api_key).to be_revoked_and_still_presented
+    end
+
+    # First revocation wins: a replayed revoke (the API and web destroy actions look the row up
+    # without `live`) must not move `revoked_at` past `last_refused_at`.
+    # @intent: { entity: "ApiKey", action: "keep the first revocation stamp", behavior: "a replayed revoke! after a refused presentation is a no-op: revoked_at is unchanged and stays at or before last_refused_at", layer: "unit" }
+    it "keeps the first revocation stamp when revoke! is replayed after a refusal" do
+      api_key = repository.api_keys.create!
+      first_day = Time.utc(2026, 10, 1, 9, 0, 0)
+
+      travel_to(first_day) { api_key.revoke! }
+      stamped_at = api_key.reload.revoked_at
+      travel_to(first_day + 1.day) { api_key.touch_last_refused! }
+      travel_to(first_day + 2.days) { expect(api_key.revoke!).to eq(api_key) }
+
+      expect(api_key.reload.revoked_at).to eq(stamped_at)
+      expect(api_key.revoked_at).to be <= api_key.last_refused_at
     end
 
     # @intent: { entity: "ApiKey", action: "keep predicates apart", behavior: "a live key never reads revoked-and-presented however often it is refused-stamped, and a revoked never-presented key never reads rotated-and-unused", layer: "unit" }

@@ -3,6 +3,8 @@
 require "rails_helper"
 
 RSpec.describe UserApiKey do
+  include ActiveSupport::Testing::TimeHelpers
+
   let(:user) { create_user }
 
   # @intent: { entity: "UserApiKey", action: "persist only a digest", behavior: "the raw sgu_ token is available in memory while the column store holds its SHA-256 digest and no raw-token column exists at all", layer: "unit" }
@@ -175,6 +177,21 @@ RSpec.describe UserApiKey do
 
       expect(user_api_key.reload.last_refused_at).to be_present
       expect(user_api_key).to be_revoked_and_still_presented
+    end
+
+    # First revocation wins: a replayed revoke must not move `revoked_at` past `last_refused_at`.
+    # @intent: { entity: "UserApiKey", action: "keep the first revocation stamp", behavior: "a replayed revoke! after a refused presentation is a no-op: revoked_at is unchanged and stays at or before last_refused_at", layer: "unit" }
+    it "keeps the first revocation stamp when revoke! is replayed after a refusal" do
+      user_api_key = create_user_api_key(user: user)
+      first_day = Time.utc(2026, 10, 1, 9, 0, 0)
+
+      travel_to(first_day) { user_api_key.revoke! }
+      stamped_at = user_api_key.reload.revoked_at
+      travel_to(first_day + 1.day) { user_api_key.touch_last_refused! }
+      travel_to(first_day + 2.days) { expect(user_api_key.revoke!).to eq(user_api_key) }
+
+      expect(user_api_key.reload.revoked_at).to eq(stamped_at)
+      expect(user_api_key.revoked_at).to be <= user_api_key.last_refused_at
     end
 
     # The two grounds on which a token is refused are INDEPENDENTLY sufficient, and this pairs with

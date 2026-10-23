@@ -141,13 +141,16 @@ class UserApiKey < ApplicationRecord
   #
   # `update_column` rather than `save!`, exactly as `touch_last_used!` and `ApiKey#revoke!` both
   # do: revocation is a stamp on the row's existing state, not a validation event, and it must not
-  # be able to fail on a validation this gesture does not carry. Idempotent — a replayed DELETE
-  # re-stamps, which is unobservable, because the Revoke button is rendered only on live keys.
+  # be able to fail on a validation this gesture does not carry. Idempotent — FIRST REVOCATION
+  # WINS: a replayed revoke is a no-op and never re-stamps `revoked_at`. A replay is reachable
+  # (`UserApiKeysController#destroy` finds the row without the `live` scope), and a re-stamp would
+  # make `revoked_at` newer than `last_refused_at`, contradicting the "refusal stamp always
+  # postdates revocation" reading and losing the offboarding date.
   #
   # `revoked_at` is never cleared by anything: there is no un-revoke, and a token that was retired
   # once can never authenticate again (`authenticate` filters to `live`).
   def revoke!
-    update_column(:revoked_at, Time.current)
+    update_column(:revoked_at, Time.current) unless revoked?
     self
   end
 
