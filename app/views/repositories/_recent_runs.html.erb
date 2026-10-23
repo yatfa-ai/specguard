@@ -57,6 +57,29 @@
             <% end %>
           <% end %>
         <% end %>
+        <%# The panel is a WINDOW over an append-only history, and says so only when it is one: the
+            caption and the widen link appear when the repository holds more runs than are listed.
+            `@test_runs_total` is the same count the facts block reads. %>
+        <% shown = @recent_test_runs.size %>
+        <% if @test_runs_total > shown %>
+          <p class="text-xs mt-2" id="recent-runs-window">
+            Showing the newest <%= number_with_delimiter(shown) %> of <%= number_with_delimiter(@test_runs_total) %> runs.
+          </p>
+          <% if shown < RequestedRunsParam::MAX_RUNS %>
+            <p class="text-xs mt-2">
+              <%= link_to "Show up to #{number_with_delimiter(RequestedRunsParam::MAX_RUNS)} runs",
+                          drill_down_path(@repository, runs: RequestedRunsParam::MAX_RUNS, anchor: "recent-runs"),
+                          class: "rc-link" %>
+            </p>
+          <% end %>
+        <% end %>
+        <% if @runs_request %>
+          <p class="text-xs mt-2">
+            <%= link_to "Back to the newest #{RequestedRunsParam::DEFAULT_RUNS}",
+                        drill_down_path(@repository, runs: nil, anchor: "recent-runs"),
+                        class: "rc-link" %>
+          </p>
+        <% end %>
       <% else %>
         <%= render UI::EmptyStateComponent.new(
               title: "No runs yet",

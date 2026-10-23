@@ -137,6 +137,10 @@ class RepositoryDashboard
   # reasoning in full.
   include RequestedLimitParam
 
+  # `?runs=` read as an Integer ask for how many rows the "Recent runs" panel lists (SPGD-1911).
+  # Its own parameter, not an overload of `?limit=` above, which also widens the duration rollups.
+  include RequestedRunsParam
+
   # Never published back to the action by {#publish}: the constructor's inputs — `@repository`,
   # which the action set itself, `@params`, and the `keys_manage` decision — the memoized
   # `requested_*` reads the included `Requested*Param` concerns keep on this object, and the two
@@ -149,6 +153,7 @@ class RepositoryDashboard
     @requested_branch @requested_spec_file @requested_spec_directory @requested_commit_sha
     @requested_unstable_test @requested_unstable_test_origin @requested_limit
     @requested_repeated_description @requested_layer @requested_near_duplicate_cluster
+    @requested_runs
   ].freeze
 
   attr_reader :repository, :params, :can_manage_keys
@@ -448,7 +453,16 @@ class RepositoryDashboard
     # (spec/requests/repositories_spec.rb) is the API-keys one and its fixture holds no runs at all.
     # `spec/requests/repository_runs_spec.rb` is what pins that the count does not move when the
     # rows become sharded.
-    @recent_test_runs = preload_shard_counts(@repository.recent_test_runs.to_a)
+    #
+    # The window is `?runs=` (SPGD-1911) or `RequestedRunsParam::DEFAULT_RUNS`. `@runs_request` is the
+    # raw ask, carried by every `drill_down_path` link like `@limit_request`; `@test_runs_total` is
+    # the repository's whole run count, counted ONCE here and read by both the facts block and this
+    # panel's "newest N of M" caption, so disclosing the window costs the page no extra query.
+    @runs_request = requested_runs
+    @test_runs_total = @repository.test_runs.count
+    @recent_test_runs = preload_shard_counts(
+      @repository.recent_test_runs(limit: @runs_request || RequestedRunsParam::DEFAULT_RUNS).to_a
+    )
     # Which branch the "Suite growth" panel below is drawn on, and what else the reader may pick.
     #
     # This page has no branch of record: `latest_test_run` is scoped to the repository and names
