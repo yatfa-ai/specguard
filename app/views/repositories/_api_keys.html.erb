@@ -46,7 +46,11 @@
                                                                  "replacement is shown only once." } } %>
                     <%= button_to "Revoke", repository_api_key_path(@repository, api_key), method: :delete,
                                   class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                                  form: { data: { turbo_confirm: "Revoke #{api_key.name}?" } } %>
+                                  form: { data: { turbo_confirm: api_key_revoke_confirmation(
+                                                   api_key,
+                                                   live_count: @api_keys.size,
+                                                   stranded: @rotated_unused_api_keys.include?(api_key)
+                                                 ) } } %>
                   </div>
                 </td>
               </tr>
