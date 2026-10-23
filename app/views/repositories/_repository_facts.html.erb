@@ -11,7 +11,7 @@
     above a non-zero "Carrying an @intent", it read as a second, contradictory description of the
     same suite. %>
 <%= render UI::DefListComponent.new(rows: [["Owner", @repository.user.display_name],
-                                           ["Test runs", number_with_delimiter(@repository.test_runs.count)],
+                                           ["Test runs", number_with_delimiter(@test_runs_total)],
                                            ["Searchable intents", number_with_delimiter(@repository.spec_intents.count)],
                                            *(viewer_access ? [["Your access", viewer_access.join(", ")]] : [])]) %>
 <p class="text-xs text-app-content-secondary">
