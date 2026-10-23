@@ -538,6 +538,60 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(response.body).to include("This repository has no API key yet")
     end
 
+    # SPGD-1906 — the consequence disclosure on the sgk_ Revoke confirm. The dialog is the
+    # `data-turbo-confirm` of the row's Revoke form; it is read off the rendered page, so the
+    # view's wiring (live count, stranded flag) is pinned, not only the helper's sentences.
+    describe "the Revoke confirm of the API keys panel" do
+      def revoke_confirm_for(key_name)
+        form = Capybara.string(response.body).all("#api-keys form[data-turbo-confirm]").find do |node|
+          node["data-turbo-confirm"].start_with?("Revoke #{key_name}?")
+        end
+        form["data-turbo-confirm"]
+      end
+
+      # @intent: {"entity": "ApiKey", "action": "disclose the last live key", "behavior": "the Revoke confirm of the repository's only live key names the key, says the cut is immediate, says it is the only live ingest key, and reads never used for an unused key", "layer": "request"}
+      it "says it is the only live ingest key when one remains" do
+        repository.api_keys.create!(name: "CI main")
+
+        get repository_path(repository)
+
+        confirm = revoke_confirm_for("CI main")
+        expect(confirm).to include("Revoke CI main?", "stops working immediately", "only live ingest key")
+        expect(confirm).to include("never been used")
+      end
+
+      # @intent: {"entity": "ApiKey", "action": "omit the last-key warning", "behavior": "with two live keys the Revoke confirm still names the key but does not claim it is the only live key, and a used key prints its last-used age", "layer": "request"}
+      it "does not claim the key is the only one when a second is live" do
+        used = repository.api_keys.create!(name: "CI main")
+        used.touch_last_used!
+        repository.api_keys.create!(name: "CI nightly")
+
+        get repository_path(repository)
+
+        confirm = revoke_confirm_for("CI main")
+        expect(confirm).to include("Revoke CI main?")
+        expect(confirm).not_to include("only live")
+        expect(confirm).to include("Last used less than a minute ago")
+        expect(revoke_confirm_for("CI nightly")).to include("never been used")
+      end
+
+      # @intent: {"entity": "ApiKey", "action": "withhold an inherited last-used age", "behavior": "the Revoke confirm of a rotated-and-unused key says it has not been used since rotation and prints no last-used age inherited from the retired token", "layer": "request"}
+      it "prints no inherited last-used age for a rotated-and-unused key" do
+        key = repository.api_keys.create!(name: "CI main")
+        key.touch_last_used!
+        key.regenerate!
+        repository.api_keys.create!(name: "CI nightly")
+
+        get repository_path(repository)
+
+        expect(key.reload).to be_rotated_and_unused
+        confirm = revoke_confirm_for("CI main")
+        expect(confirm).to include("not been used since it was rotated")
+        expect(confirm).not_to include("Last used")
+        expect(confirm).not_to include("never been used")
+      end
+    end
+
     # SPGD-1892 — the ingest-key twin of SPGD-1054's agent-keys section. Every fixture walks the
     # real revoke-then-present path (`present_revoked_token`), so the stamp the section reads is
     # the one the API failure path writes.

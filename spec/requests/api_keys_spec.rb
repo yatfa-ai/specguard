@@ -164,9 +164,22 @@ RSpec.describe "Repository API keys (web)", type: :request do
       }.not_to change(ApiKey, :count)
 
       expect(response).to redirect_to(repository_path(repository))
-      expect(flash[:notice]).to eq("API key revoked.")
+      # SPGD-1906: the notice names the key (it was the constant "API key revoked." before) — and
+      # this key was the repository's only live one, so it also points at a replacement.
+      expect(flash[:notice]).to eq("Revoked CI. Its token no longer authenticates. No live API key " \
+                                   "remains for this repository — mint a replacement with New API " \
+                                   "key so CI can ingest again.")
       expect(ci_key.reload.revoked_at).to be_present
       expect(ApiKey.authenticate(revoked_token)).to be_nil
+    end
+
+    # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "name the revoked key", "behavior": "revoking one of two live keys names it in the notice and adds no replacement pointer, because a live key remains", "layer": "request"}
+    it "names the key without a mint pointer when another live key remains" do
+      repository.api_keys.create!(name: "Nightly")
+
+      delete repository_api_key_path(repository, ci_key)
+
+      expect(flash[:notice]).to eq("Revoked CI. Its token no longer authenticates.")
     end
 
     # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "revoke with keys.manage", "behavior": "a member holding view and keys.manage retires the key the same way — the count is unchanged and revoked_at is stamped", "layer": "request"}

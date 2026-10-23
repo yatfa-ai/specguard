@@ -66,9 +66,14 @@ class ApiKeysController < ApplicationController
     # Keeping it is what makes a revoked token reportable — the failure path in
     # `Api::BaseController#authenticate_api_key!` needs a row to attribute the refused presentation
     # to, and a hard delete had left a 401ing pipeline reading "Not connected yet".
-    repository.api_keys.find(params[:id]).revoke!
+    api_key = repository.api_keys.find(params[:id])
+    api_key.revoke!
 
-    redirect_to repository_path(repository), notice: "API key revoked."
+    # The one query this action adds (SPGD-1906), on the write path only: whether any live ingest
+    # key is left after the cut, so the notice can point at a replacement when none is. Read AFTER
+    # `revoke!` — the revoked row no longer counts as live.
+    redirect_to repository_path(repository),
+                notice: helpers.api_key_revoke_notice(api_key, remaining_live: repository.api_keys.live.exists?)
   end
 
   private

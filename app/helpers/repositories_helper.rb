@@ -170,6 +170,46 @@ module RepositoriesHelper
     "Deleted run #{test_run.commit_sha.first(7)} (#{branch}) and its shards and observations."
   end
 
+  # The two halves of the SAME disclosure for the repository's own ingest-key (`sgk_`) revoke
+  # (SPGD-1906): what the presser is told BEFORE the cut, and what they are told after — the
+  # sibling of the member and agent-key pairs, and for the same reason they live together.
+  #
+  # Display copy only. The view hands in what the page already holds — `live_count` is
+  # `@api_keys.size` and `stranded` is `@rotated_unused_api_keys.include?(api_key)`, both read off
+  # the single partition `RepositoryDashboard` builds — so the confirm costs no query on render.
+  # The last-used clause follows the table cell's own rule: a rotated-and-unused key's
+  # `last_used_at` was stamped by a token that no longer exists, so it is never printed as an age.
+  #
+  # "Only live" is stated about the INGEST KEYS of this repository, never about ingest paths: an
+  # `sga_` agent key holding `runs.ingest` can still ingest, so the sentence names what stops (CI
+  # authenticating with THIS key) and not that nothing can.
+  def api_key_revoke_confirmation(api_key, live_count:, stranded:)
+    parts = ["Revoke #{api_key.name}? Its token stops working immediately."]
+    if live_count == 1
+      parts << "It is this repository's only live ingest key — CI authenticating with it stops " \
+               "ingesting until a new key is minted. To rotate without a gap, use Regenerate, " \
+               "which issues the replacement token for this key."
+    end
+    parts << api_key_last_used_clause(api_key, stranded: stranded)
+    parts.compact.join(" ")
+  end
+
+  def api_key_revoke_notice(api_key, remaining_live:)
+    notice = "Revoked #{api_key.name}. Its token no longer authenticates."
+    return notice if remaining_live
+
+    "#{notice} No live API key remains for this repository — mint a replacement with New API key " \
+      "so CI can ingest again."
+  end
+
+  # nil for a rotated-and-unused key: the clause is dropped rather than rewritten, because the only
+  # honest age for it is the table cell's "not used since rotation", which is not a last use.
+  def api_key_last_used_clause(api_key, stranded:)
+    return "It has not been used since it was rotated." if stranded
+
+    api_key.last_used_at ? "Last used #{time_ago_in_words(api_key.last_used_at)} ago." : "It has never been used."
+  end
+
   # The two halves of the SAME disclosure for the agent-key revoke (SPGD-989): what the presser
   # is told BEFORE the cut, and what they are told after. They live together, and reach one
   # shared coverage sentence, for the reason `remove_confirmation` / `remove_notice` above state
