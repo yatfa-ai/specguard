@@ -11,6 +11,8 @@
 # require — and had zero callers. This is the route, the action and the control that finally
 # issue one.
 class RunsController < ApplicationController
+  include RequestedRunsParam
+
   before_action :require_authentication
 
   def destroy
@@ -41,6 +43,11 @@ class RunsController < ApplicationController
     # trigger cannot see, and on a quiet repository it would otherwise last indefinitely.
     NearDuplicateCensus.request_refresh!(repository.id)
 
-    redirect_to repository_path(repository), notice: notice
+    # Back to the window the operator was looking at (SPGD-1916): the Delete form in a widened
+    # "Recent runs" panel carries the asked `runs`, and dropping it would collapse the panel to
+    # its default after every delete. The ask goes through the same guard and clamp the page
+    # itself reads, and the target is built from the path helper, never from request input.
+    # No ask leaves the path exactly as it was.
+    redirect_to repository_path(repository, **{ runs: requested_runs }.compact), notice: notice
   end
 end

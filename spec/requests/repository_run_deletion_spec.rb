@@ -269,6 +269,81 @@ RSpec.describe "Deleting a test run", type: :request do
     end
   end
 
+  # SPGD-1916: the "Recent runs" panel can be widened with `?runs=`, and the Delete in a widened
+  # panel carries that ask through the redirect so removing a row does not collapse the window.
+  describe "the asked runs window" do
+    let(:max_runs) { RequestedRunsParam::MAX_RUNS }
+
+    def seed_runs(count)
+      count.times { |i| repository.test_runs.create!(commit_sha: format("win%04d", i), branch: "main", created_at: i.minutes.ago) }
+    end
+
+    # @intent: {"entity": "RunsController", "action": "carry the asked window", "behavior": "deleting with runs=25 redirects to the repository page with runs=25 and the followed page still lists more than the default window with the newest N of M caption reflecting one fewer run", "layer": "request"}
+    it "redirects back to the asked window and the followed page keeps it" do
+      seed_runs(30)
+      victim = repository.test_runs.order(:created_at).first
+
+      delete repository_run_path(repository, victim), params: { runs: "25" }
+
+      expect(response).to redirect_to(repository_path(repository, runs: 25))
+      follow_redirect!
+      page = Capybara.string(response.body)
+      expect(page.find("#recent-runs table").all("tbody tr").size).to eq(25)
+      expect(page.find("#recent-runs-window")).to have_text("Showing the newest 25 of 29 runs.")
+    end
+
+    # @intent: {"entity": "RecentRunsPanel", "action": "carry the window in the delete form", "behavior": "a widened panel's Delete forms each carry a hidden runs field with the asked value, and the default panel's forms carry none", "layer": "request"}
+    it "renders the ask in the Delete form only when the panel was widened" do
+      seed_runs(12)
+
+      get repository_path(repository)
+      expect(Capybara.string(response.body)).to have_no_css("#recent-runs form input[name='runs']")
+
+      get repository_path(repository, runs: 12)
+      inputs = Capybara.string(response.body).all("#recent-runs form input[name='runs']", visible: :all)
+      expect(inputs.size).to eq(12)
+      expect(inputs.map { |i| i[:value] }.uniq).to eq(["12"])
+    end
+
+    # @intent: {"entity": "RunsController", "action": "clamp the asked window", "behavior": "deleting with runs=9999 redirects with the ceiling value rather than the raw ask", "layer": "request"}
+    it "clamps an oversized ask to the ceiling" do
+      run = create_test_run(repository: repository)
+
+      delete repository_run_path(repository, run), params: { runs: "9999" }
+
+      expect(response).to redirect_to(repository_path(repository, runs: max_runs))
+    end
+
+    [
+      ["an array", "runs[]=x"],
+      ["a negative integer", "runs=-3"],
+      ["a blank string", "runs="],
+      ["zero", "runs=0"]
+    ].each do |shape, query|
+      # @intent: {"entity": "RunsController", "action": "ignore a hostile runs ask", "behavior": "a runs parameter that is not a positive integer string redirects to the bare repository path exactly as a delete with no ask", "layer": "request"}
+      it "redirects to the bare repository path when runs arrives as #{shape}" do
+        run = create_test_run(repository: repository)
+
+        delete "#{repository_run_path(repository, run)}?#{query}"
+
+        expect(response).to redirect_to(repository_path(repository))
+        expect(response.location).not_to include("runs")
+      end
+    end
+
+    # @intent: {"entity": "RunsController", "action": "scope the run id with a window ask", "behavior": "naming another repository's run alongside a runs ask still answers 404 and deletes nothing", "layer": "request"}
+    it "still 404s a cross-repository run id when a window is asked" do
+      other_repository = create_repository(user: @user, github_full_name: "acme/other")
+      foreign_run = create_test_run(repository: other_repository)
+
+      expect do
+        delete repository_run_path(repository, foreign_run), params: { runs: "25" }
+      end.not_to change(TestRun, :count)
+
+      expect(response).to have_http_status(:not_found)
+    end
+  end
+
   describe "the control" do
     # @intent: {"entity": "TestRun", "action": "render delete control", "behavior": "a viewer with repo_delete sees a Delete button whose dialog names removing the run's shards and per-example observations and that it cannot be undone", "layer": "request"}
     it "renders a Delete button with a dialog naming the consequence, for a viewer with repo_delete" do
