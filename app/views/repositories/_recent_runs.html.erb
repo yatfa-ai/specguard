@@ -49,8 +49,11 @@
               <td class="num mute" data-sort="<%= test_run.created_at.to_i %>"><%= time_ago_in_words(test_run.created_at) %> ago</td>
               <% if repository_policy.can?(:repo_delete) %>
                 <td class="end" data-no-drawer>
+                  <%# The delete carries the asked window (SPGD-1916) so removing a row from a widened
+                      panel lands back on that same window; with no ask the form is byte-identical. %>
                   <%= button_to "Delete", repository_run_path(@repository, test_run), method: :delete,
                                 class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                                params: (@runs_request ? { runs: @runs_request } : {}),
                                 form: { data: { turbo_confirm: delete_run_confirmation(test_run) } } %>
                 </td>
               <% end %>
