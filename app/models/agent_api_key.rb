@@ -190,10 +190,13 @@ class AgentApiKey < ApplicationRecord
   # `ApiKey#revoke!` established and its comment argues for (a hard delete made a revoked token's
   # 401 unreportable; keeping the row keeps the artifact the failure path needs). `update_column`
   # rather than `save!` for the same reason: a stamp on existing state, not a validation event.
-  # Idempotent — a replayed revoke re-stamps, which is unobservable, because the button is offered
-  # only on live keys.
+  # Idempotent — FIRST REVOCATION WINS: a replayed revoke is a no-op and never re-stamps
+  # `revoked_at`. A replay IS reachable (the `/account` destroy looks the row up without the
+  # `live` scope), and a re-stamp would make `revoked_at` newer than `last_refused_at`,
+  # contradicting `revoked_and_still_presented?`'s "refusal stamp always postdates revocation"
+  # and losing the offboarding date.
   def revoke!
-    update_column(:revoked_at, Time.current)
+    update_column(:revoked_at, Time.current) unless revoked?
     self
   end
 
