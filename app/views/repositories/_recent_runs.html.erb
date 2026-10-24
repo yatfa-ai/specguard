@@ -4,9 +4,9 @@
         <%= render UI::NoteComponent.new(summary: "How to read this", id: "recent-runs-basis") do %>
           <% if @runs_branch_request %>
             <%# Narrowed (`?runs_branch=`, SPGD-1922): the rows are one branch's series, and the
-                all-branches wording above would now be false in both halves — these rows are not
+                all-branches wording would now be false in both halves — these rows are not
                 interleaved, and the difference between two of their test counts is closer to a
-                change than it is here, but still not one unless the shard counts match. %>
+                change than it is across branches, but still not one unless the shard counts match. %>
             The newest runs CI reported from the <%= @runs_branch_request %> branch, newest first.
             This is one branch's series and not the repository's history: the runs every other
             branch holds are deliberately not pooled into it. It is still not a growth measure
@@ -91,39 +91,29 @@
         <%# The panel is a WINDOW over an append-only history, and says so only when it is one: the
             caption and the widen link appear when more of the window's own population exists than
             are listed. `@test_runs_total` is the same count the facts block reads; under a
-            `?runs_branch=` narrowing the population is that branch's (`@runs_branch_total`), and
-            the caption says which branch the window is over — the repository-wide total would name
-            runs this panel deliberately does not list. `shown` is the row count either way. %>
+            `?runs_branch=` narrowing (SPGD-1922) the population is that branch's
+            (`@runs_branch_total`) and the caption says which branch the window is over — the
+            repository-wide total would name runs this panel deliberately does not list. `shown`
+            is the row count either way, and the un-narrowed caption line renders exactly the
+            text it always did. %>
         <% shown = @recent_test_runs.size %>
+        <% window_total = @runs_branch_request ? @runs_branch_total : @test_runs_total %>
         <% if @runs_branch_request %>
           <p class="text-xs mt-2" id="recent-runs-branch">
             Runs on <%= @runs_branch_request %> only.
             <%= link_to "All branches", drill_down_path(@repository, runs_branch: nil, anchor: "recent-runs"), class: "rc-link" %>
           </p>
-          <% if @runs_branch_total > shown %>
-            <p class="text-xs mt-2" id="recent-runs-window">
-              Showing the newest <%= number_with_delimiter(shown) %> of <%= number_with_delimiter(@runs_branch_total) %> runs on <%= @runs_branch_request %>.
+        <% end %>
+        <% if window_total > shown %>
+          <p class="text-xs mt-2" id="recent-runs-window">
+            Showing the newest <%= number_with_delimiter(shown) %> of <%= number_with_delimiter(window_total) %> runs<%= " on #{@runs_branch_request}" if @runs_branch_request %>.
+          </p>
+          <% if shown < RequestedRunsParam::MAX_RUNS %>
+            <p class="text-xs mt-2">
+              <%= link_to "Show up to #{number_with_delimiter(RequestedRunsParam::MAX_RUNS)} runs",
+                          drill_down_path(@repository, runs: RequestedRunsParam::MAX_RUNS, anchor: "recent-runs"),
+                          class: "rc-link" %>
             </p>
-            <% if shown < RequestedRunsParam::MAX_RUNS %>
-              <p class="text-xs mt-2">
-                <%= link_to "Show up to #{number_with_delimiter(RequestedRunsParam::MAX_RUNS)} runs",
-                            drill_down_path(@repository, runs: RequestedRunsParam::MAX_RUNS, anchor: "recent-runs"),
-                            class: "rc-link" %>
-              </p>
-            <% end %>
-          <% end %>
-        <% else %>
-          <% if @test_runs_total > shown %>
-            <p class="text-xs mt-2" id="recent-runs-window">
-              Showing the newest <%= number_with_delimiter(shown) %> of <%= number_with_delimiter(@test_runs_total) %> runs.
-            </p>
-            <% if shown < RequestedRunsParam::MAX_RUNS %>
-              <p class="text-xs mt-2">
-                <%= link_to "Show up to #{number_with_delimiter(RequestedRunsParam::MAX_RUNS)} runs",
-                            drill_down_path(@repository, runs: RequestedRunsParam::MAX_RUNS, anchor: "recent-runs"),
-                            class: "rc-link" %>
-              </p>
-            <% end %>
           <% end %>
         <% end %>
         <% if @runs_request %>
