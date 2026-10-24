@@ -141,6 +141,12 @@ class RepositoryDashboard
   # Its own parameter, not an overload of `?limit=` above, which also widens the duration rollups.
   include RequestedRunsParam
 
+  # `?runs_branch=` read as a branch name the "Recent runs" panel narrows to (SPGD-1922). Its own
+  # parameter, not an overload of `?branch=` above, which selects the Suite-growth trajectory's
+  # series and is carried by every existing link; the two asks compose rather than compete. See
+  # `RequestedRunsBranchParam` for the guard and the naming argument in full.
+  include RequestedRunsBranchParam
+
   # Never published back to the action by {#publish}: the constructor's inputs — `@repository`,
   # which the action set itself, `@params`, and the `keys_manage` decision — the memoized
   # `requested_*` reads the included `Requested*Param` concerns keep on this object, and the two
@@ -153,7 +159,7 @@ class RepositoryDashboard
     @requested_branch @requested_spec_file @requested_spec_directory @requested_commit_sha
     @requested_unstable_test @requested_unstable_test_origin @requested_limit
     @requested_repeated_description @requested_layer @requested_near_duplicate_cluster
-    @requested_runs
+    @requested_runs @requested_runs_branch
   ].freeze
 
   attr_reader :repository, :params, :can_manage_keys
@@ -460,8 +466,16 @@ class RepositoryDashboard
     # panel's "newest N of M" caption, so disclosing the window costs the page no extra query.
     @runs_request = requested_runs
     @test_runs_total = @repository.test_runs.count
+    # The branch the panel is narrowed to (`?runs_branch=`, SPGD-1922), and — only when one is
+    # asked — how many runs that branch holds. `Repository#recent_test_runs` already treats a
+    # blank branch as no filter (the guard and the NULL-never-matches argument it documents), so
+    # the un-narrowed call below is the same query it always issued and the default page buys no
+    # second count: the branch total is priced by the reader who asked for the narrowing alone.
+    @runs_branch_request = requested_runs_branch
+    @runs_branch_total = @repository.test_runs.where(branch: @runs_branch_request).count if @runs_branch_request
     @recent_test_runs = preload_shard_counts(
-      @repository.recent_test_runs(limit: @runs_request || RequestedRunsParam::DEFAULT_RUNS).to_a
+      @repository.recent_test_runs(limit: @runs_request || RequestedRunsParam::DEFAULT_RUNS,
+                                   branch: @runs_branch_request).to_a
     )
     # Which branch the "Suite growth" panel below is drawn on, and what else the reader may pick.
     #

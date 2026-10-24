@@ -2,9 +2,22 @@
     <%= render UI::PanelComponent.new(title: "Recent runs", id: "recent-runs") do %>
       <% if @recent_test_runs.any? %>
         <%= render UI::NoteComponent.new(summary: "How to read this", id: "recent-runs-basis") do %>
-          One history across every branch CI reports from, interleaved, newest first — so two
-          consecutive rows are routinely two different branches. They are not a series, and the
-          difference between two of these test counts is not a change in the suite. Suite growth is
+          <% if @runs_branch_request %>
+            <%# Narrowed (`?runs_branch=`, SPGD-1922): the rows are one branch's series, and the
+                all-branches wording above would now be false in both halves — these rows are not
+                interleaved, and the difference between two of their test counts is closer to a
+                change than it is here, but still not one unless the shard counts match. %>
+            The newest runs CI reported from the <%= @runs_branch_request %> branch, newest first.
+            This is one branch's series and not the repository's history: the runs every other
+            branch holds are deliberately not pooled into it. It is still not a growth measure
+            unless the runs' shard counts match — a run whose shards never all arrived reads at a
+            fraction of its own suite.
+          <% else %>
+            One history across every branch CI reports from, interleaved, newest first — so two
+            consecutive rows are routinely two different branches. They are not a series, and the
+            difference between two of these test counts is not a change in the suite.
+          <% end %>
+          Suite growth is
           measured in What changed, and only against the previous run on the same branch.
           Every commit below opens this page on its own run.
           <%= recent_runs_anchor_note(@run_anchor_run, @recent_test_runs) %>
@@ -28,7 +41,20 @@
                 <%= row_open(test_run.commit_sha.first(7), mono: true, current: current) %>
                 <% if current %><span class="rc-sec" data-current-run>the run being read</span><% end %>
               </td>
-              <td class="mute"><%= test_run.branch.presence || tag.span("not reported", class: "text-app-content-secondary") %></td>
+              <td class="mute">
+                <%# The panel's own narrowing affordance (SPGD-1922): a branch named on this page
+                    links to this panel narrowed to it. A run that reported no branch gets NO link,
+                    because NULL is "the reporter did not say" and not a branch anyone can ask for —
+                    pooling every anonymous run into one selectable series is exactly the fictional
+                    history `Repository#recent_test_runs` refuses to serve. The branch cells are the
+                    one deliberate byte change a default page carries: the text is the same either
+                    way, so the existing assertions on the cell keep reading it. %>
+                <% if test_run.branch.present? %>
+                  <%= link_to test_run.branch, drill_down_path(@repository, runs_branch: test_run.branch, anchor: "recent-runs"), class: "rc-link" %>
+                <% else %>
+                  <%= tag.span("not reported", class: "text-app-content-secondary") %>
+                <% end %>
+              </td>
               <td class="num" data-sort="<%= test_run.total_specs_count.to_i %>">
                 <%# Every row states how it was assembled, and a row that arrived in parts says what its
                     figure therefore covers: a run's count is the sum of the shard reports recorded so
@@ -49,11 +75,13 @@
               <td class="num mute" data-sort="<%= test_run.created_at.to_i %>"><%= time_ago_in_words(test_run.created_at) %> ago</td>
               <% if repository_policy.can?(:repo_delete) %>
                 <td class="end" data-no-drawer>
-                  <%# The delete carries the asked window (SPGD-1916) so removing a row from a widened
-                      panel lands back on that same window; with no ask the form is byte-identical. %>
+                  <%# The delete carries every ask the panel was rendered under (SPGD-1916 for the
+                      window, SPGD-1922 for the branch narrowing) so removing a row lands back on
+                      that same narrowed window rather than collapsing it. `.compact` keeps the
+                      no-ask form byte-identical: no hidden input for a parameter nobody asked. %>
                   <%= button_to "Delete", repository_run_path(@repository, test_run), method: :delete,
                                 class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                                params: (@runs_request ? { runs: @runs_request } : {}),
+                                params: { runs: @runs_request, runs_branch: @runs_branch_request }.compact,
                                 form: { data: { turbo_confirm: delete_run_confirmation(test_run) } } %>
                 </td>
               <% end %>
@@ -61,19 +89,41 @@
           <% end %>
         <% end %>
         <%# The panel is a WINDOW over an append-only history, and says so only when it is one: the
-            caption and the widen link appear when the repository holds more runs than are listed.
-            `@test_runs_total` is the same count the facts block reads. %>
+            caption and the widen link appear when more of the window's own population exists than
+            are listed. `@test_runs_total` is the same count the facts block reads; under a
+            `?runs_branch=` narrowing the population is that branch's (`@runs_branch_total`), and
+            the caption says which branch the window is over — the repository-wide total would name
+            runs this panel deliberately does not list. `shown` is the row count either way. %>
         <% shown = @recent_test_runs.size %>
-        <% if @test_runs_total > shown %>
-          <p class="text-xs mt-2" id="recent-runs-window">
-            Showing the newest <%= number_with_delimiter(shown) %> of <%= number_with_delimiter(@test_runs_total) %> runs.
+        <% if @runs_branch_request %>
+          <p class="text-xs mt-2" id="recent-runs-branch">
+            Runs on <%= @runs_branch_request %> only.
+            <%= link_to "All branches", drill_down_path(@repository, runs_branch: nil, anchor: "recent-runs"), class: "rc-link" %>
           </p>
-          <% if shown < RequestedRunsParam::MAX_RUNS %>
-            <p class="text-xs mt-2">
-              <%= link_to "Show up to #{number_with_delimiter(RequestedRunsParam::MAX_RUNS)} runs",
-                          drill_down_path(@repository, runs: RequestedRunsParam::MAX_RUNS, anchor: "recent-runs"),
-                          class: "rc-link" %>
+          <% if @runs_branch_total > shown %>
+            <p class="text-xs mt-2" id="recent-runs-window">
+              Showing the newest <%= number_with_delimiter(shown) %> of <%= number_with_delimiter(@runs_branch_total) %> runs on <%= @runs_branch_request %>.
             </p>
+            <% if shown < RequestedRunsParam::MAX_RUNS %>
+              <p class="text-xs mt-2">
+                <%= link_to "Show up to #{number_with_delimiter(RequestedRunsParam::MAX_RUNS)} runs",
+                            drill_down_path(@repository, runs: RequestedRunsParam::MAX_RUNS, anchor: "recent-runs"),
+                            class: "rc-link" %>
+              </p>
+            <% end %>
+          <% end %>
+        <% else %>
+          <% if @test_runs_total > shown %>
+            <p class="text-xs mt-2" id="recent-runs-window">
+              Showing the newest <%= number_with_delimiter(shown) %> of <%= number_with_delimiter(@test_runs_total) %> runs.
+            </p>
+            <% if shown < RequestedRunsParam::MAX_RUNS %>
+              <p class="text-xs mt-2">
+                <%= link_to "Show up to #{number_with_delimiter(RequestedRunsParam::MAX_RUNS)} runs",
+                            drill_down_path(@repository, runs: RequestedRunsParam::MAX_RUNS, anchor: "recent-runs"),
+                            class: "rc-link" %>
+              </p>
+            <% end %>
           <% end %>
         <% end %>
         <% if @runs_request %>
@@ -84,9 +134,25 @@
           </p>
         <% end %>
       <% else %>
-        <%= render UI::EmptyStateComponent.new(
-              title: "No runs yet",
-              description: "Runs appear here once CI posts to /ingest. Nothing has been reported for this repository."
-            ) %>
+        <% if @runs_branch_request %>
+          <%# SPGD-1922: a branch with no runs — a typo, a deleted branch, or one that simply never
+              reported — narrows to nothing, and nothing is the honest answer: substituting another
+              branch's rows would hand back a window for the wrong branch with nothing in the
+              result to say so. The empty state names the branch that was asked and offers the way
+              out; it never falls back to the other branches' runs. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No runs on #{@runs_branch_request}",
+                description: "Nothing has been reported for this branch. Runs appear here once CI posts to /ingest."
+              ) do |empty| %>
+            <% empty.with_action do %>
+              <%= link_to "All branches", drill_down_path(@repository, runs_branch: nil, anchor: "recent-runs"), class: "rc-link" %>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No runs yet",
+                description: "Runs appear here once CI posts to /ingest. Nothing has been reported for this repository."
+              ) %>
+        <% end %>
       <% end %>
     <% end %>

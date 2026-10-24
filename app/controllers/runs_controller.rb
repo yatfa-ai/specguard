@@ -12,6 +12,7 @@
 # issue one.
 class RunsController < ApplicationController
   include RequestedRunsParam
+  include RequestedRunsBranchParam
 
   before_action :require_authentication
 
@@ -48,6 +49,12 @@ class RunsController < ApplicationController
     # its default after every delete. The ask goes through the same guard and clamp the page
     # itself reads, and the target is built from the path helper, never from request input.
     # No ask leaves the path exactly as it was.
-    redirect_to repository_path(repository, **{ runs: requested_runs }.compact), notice: notice
+    #
+    # SPGD-1922: the branch narrowing rides the same round trip, through the same shape of guard
+    # (`RequestedRunsBranchParam`) — deleting a row from a panel narrowed to one branch lands back
+    # on that same narrowed panel, and a malformed `runs_branch` on the delete is ignored exactly
+    # as it is on the page. `.compact` keeps a no-ask redirect free of both parameters' bytes.
+    redirect_to repository_path(repository, **{ runs: requested_runs, runs_branch: requested_runs_branch }.compact),
+                notice: notice
   end
 end

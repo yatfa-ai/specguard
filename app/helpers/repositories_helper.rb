@@ -83,6 +83,13 @@ module RepositoriesHelper
     # `?runs=` rides the same conditional carry (SPGD-1911): following a link elsewhere must not
     # collapse a widened Recent runs panel, and a default page's links stay byte-identical.
     asks[:runs] = @runs_request if @runs_request
+    # `?runs_branch=` rides the same conditional carry (SPGD-1922): the Recent runs panel's branch
+    # narrowing survives a click elsewhere on the page, and a default page's links — and a
+    # not-narrowed page's links — carry no `runs_branch` bytes. An EXPLICIT override (the Branch
+    # cells pass the row's own branch) beats the carried ask through the ordinary merge below,
+    # which is what lets one row's cell point at its own branch on a page already narrowed to
+    # another one.
+    asks[:runs_branch] = @runs_branch_request if @runs_branch_request
     asks[:window] = @window_request if @window_request
     # `?layer=` rides the same conditional carry for the same reason (which panels it narrows is
     # listed in the `RequestedLayerParam` header): opening a file or an area must not silently drop
