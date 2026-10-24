@@ -197,6 +197,138 @@ RSpec.describe "Account agent keys", type: :request do
     expect(response.body).to include("Doomed")
   end
 
+  # SPGD-1925 — THE BLAST RADIUS, NAMED ON /account. The key's own minter gets the same
+  # disclosure the repository-side panel gives its `keys.manage` holders: the Repositories cell
+  # renders count first and the names the minter can open beside it, the Revoke confirm names
+  # the set before the cut, and the flash names it after. /account is self-scoped —
+  # `AccountsController` indexes the name map off `@grantable_repositories` — so a stored id
+  # with no name (deleted since mint, or access since lost) is disclosed as a COUNT and never
+  # named: a repository the viewer cannot open must stay indistinguishable from one that does
+  # not exist.
+  describe "the covered-set disclosure" do
+    def row_for(name)
+      Capybara.string(response.body).find("tr", text: name)
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "name the covered set on /account", behavior: "a two-repository key's Repositories cell renders the count and both covered repository names", layer: "request" }
+    it "names the covered repositories of a two-repository key" do
+      alpha = create_repository(user: person, github_full_name: "acme/alpha")
+      beta = create_repository(user: person, github_full_name: "acme/beta")
+      create_agent_api_key(user: person, repositories: [alpha, beta], name: "Fleet")
+
+      get account_path
+
+      row = row_for("Fleet")
+      expect(row).to have_text("2")
+      expect(row).to have_text("acme/alpha, acme/beta")
+    end
+
+    # The deleted limb: nothing cascades into the stored array, so a set of two can carry one
+    # name, and the cell discloses the difference instead of letting "2" sit beside one name.
+    # @intent: { entity: "AgentApiKey", action: "disclose a since-deleted repository", behavior: "a key whose stored repository was deleted renders the surviving name and the unnamed-count line, never the deleted name", layer: "request" }
+    it "discloses a repository deleted since mint as a count" do
+      alpha = create_repository(user: person, github_full_name: "acme/alpha")
+      doomed = create_repository(user: person, github_full_name: "acme/doomed")
+      create_agent_api_key(user: person, repositories: [alpha, doomed], name: "Fleet")
+      doomed.destroy!
+
+      get account_path
+
+      row = row_for("Fleet")
+      expect(row).to have_text("acme/alpha")
+      expect(row).not_to have_text("acme/doomed")
+      expect(row).to have_text("1 repository deleted or no longer open to you")
+    end
+
+    # The lost-access limb, the one /account's wider `missing_phrase:` exists for: a ticked
+    # repository the minter can no longer open keeps its id on the key (the mint form's own
+    # sentence names exactly this state), the page never names it, and the row says so as a
+    # count. Asserted against the WHOLE body, not just the row — the lost repository drops out
+    # of the mint grid beside the table too, so a partial match could hide a leak.
+    # @intent: { entity: "AgentApiKey", action: "withhold a lost-access name", behavior: "after the minter loses access to a covered repository its name is rendered nowhere on /account and the row discloses the unnamed count", layer: "request" }
+    it "never names a covered repository the minter can no longer open" do
+      alpha = create_repository(user: person, github_full_name: "acme/alpha")
+      shared = create_repository(user: create_user(github_uid: "91009", github_handle: "leaver-owner"),
+                                 github_full_name: "acme/revoked-share")
+      create_membership(repository: shared, user: person, permissions: ["view"])
+      create_agent_api_key(user: person, repositories: [alpha, shared], name: "Fleet")
+      RepositoryMembership.find_by!(repository: shared, user: person).destroy!
+
+      get account_path
+
+      row = row_for("Fleet")
+      expect(row).to have_text("acme/alpha")
+      expect(response.body).not_to include("acme/revoked-share")
+      expect(row).to have_text("1 repository deleted or no longer open to you")
+    end
+
+    # THE CONFIRM: the presser is told the count and the names of the set the cut spans BEFORE
+    # it happens — the one-act honesty the repository-side dialog established.
+    # @intent: { entity: "AgentApiKey", action: "disclose the blast radius in the revoke confirm", behavior: "the Revoke button's turbo_confirm names the covered count, the covered names, and that revoking cuts the token on every repository in that set", layer: "request" }
+    it "names the covered set in the revoke confirm" do
+      alpha = create_repository(user: person, github_full_name: "acme/alpha")
+      beta = create_repository(user: person, github_full_name: "acme/beta")
+      create_agent_api_key(user: person, repositories: [alpha, beta], name: "Fleet")
+
+      get account_path
+
+      expect(response.body).to include("Revoke Fleet? It covers 2 repositories: acme/alpha, acme/beta. " \
+                                       "Revoking it here cuts the token on every repository in that set")
+    end
+
+    # THE AFTER-CUT HALF: the flash names the key and the set it covered, in the same sentence
+    # shape the repository-side revoker serves its `keys.manage` holders.
+    # @intent: { entity: "AgentApiKey", action: "name the covered set after revoke", behavior: "the post-revoke flash names the revoked key and the repositories its stored set covered", layer: "request" }
+    it "names the key and its covered set in the notice after revoke" do
+      alpha = create_repository(user: person, github_full_name: "acme/alpha")
+      beta = create_repository(user: person, github_full_name: "acme/beta")
+      key = create_agent_api_key(user: person, repositories: [alpha, beta], name: "Fleet")
+
+      delete account_agent_key_path(key)
+
+      expect(response).to redirect_to(account_path)
+      expect(flash[:notice]).to eq("Revoked Fleet. It covered 2 repositories: acme/alpha, acme/beta — " \
+                                   "its token no longer authenticates anywhere.")
+    end
+
+    # The unnamed limb on the notice, self-scoped like the page: the destroy action reads its
+    # names off the minter's OWN reachable set, so a lost-access repository is disclosed as a
+    # count and its name reaches no flash either.
+    # @intent: { entity: "AgentApiKey", action: "withhold a lost-access name after revoke", behavior: "revoking a key covering a repository the minter can no longer open answers a flash disclosing the unnamed count without ever naming that repository", layer: "request" }
+    it "discloses an unnamed repository in the revoke notice without naming it" do
+      alpha = create_repository(user: person, github_full_name: "acme/alpha")
+      shared = create_repository(user: create_user(github_uid: "91010", github_handle: "leaver-owner-2"),
+                                 github_full_name: "acme/revoked-share-2")
+      create_membership(repository: shared, user: person, permissions: ["view"])
+      key = create_agent_api_key(user: person, repositories: [alpha, shared], name: "Fleet")
+      RepositoryMembership.find_by!(repository: shared, user: person).destroy!
+
+      delete account_agent_key_path(key)
+
+      expect(flash[:notice])
+        .to include("2 repositories: acme/alpha (1 repository since deleted or no longer open to you)")
+      expect(flash[:notice]).not_to include("acme/revoked-share-2")
+    end
+
+    # THE REPLAY PATH: a second DELETE resolves the row through the association (no `live`
+    # scope), composes the same honest sentence from the same self-scoped read, and `revoke!`
+    # re-stamps nothing — the FIRST stamp stays the offboarding date.
+    # @intent: { entity: "AgentApiKey", action: "answer a replayed revoke", behavior: "a second DELETE on an already-revoked key redirects with the same covered-set notice and keeps the first revocation stamp", layer: "request" }
+    it "answers a replayed revoke with the same covered-set notice and no re-stamp" do
+      alpha = create_repository(user: person, github_full_name: "acme/alpha")
+      key = create_agent_api_key(user: person, repositories: [alpha], name: "Fleet")
+      delete account_agent_key_path(key)
+      first_stamp = key.reload.revoked_at
+
+      delete account_agent_key_path(key)
+
+      expect(response).to redirect_to(account_path)
+      expect(flash[:notice]).to eq("Revoked Fleet. It covered 1 repository: acme/alpha — " \
+                                   "its token no longer authenticates anywhere.")
+      expect(key.reload.revoked_at).to eq(first_stamp)
+    end
+  end
+
   # SPGD-991 — the whole story this column exists for, read across both surfaces: the owner
   # revokes here, the leaked token keeps knocking at the agent API (401, stamped), and the row
   # on THIS page dates the last observed presentation. `last_refused_at` is the LAST time the

@@ -65,10 +65,30 @@ class AgentApiKeysController < ApplicationController
 
   # Retires ONE key. Every other key this person holds keeps working: resolution is a lookup of
   # one digest on a unique index, so the rows know nothing about each other.
+  #
+  # The notice carries the same disclosure the confirm on `/account` carried before the cut
+  # (SPGD-1925) — the key's full stored set, count and names — and it is composed BEFORE
+  # `revoke!` so the act and its disclosure read as one sequence: names read, sentence composed,
+  # token cut. The names are read off the viewer's OWN reachable set
+  # (`Repository.accessible_by`), one bounded SELECT: /account is self-scoped, so a stored id
+  # whose repository was deleted since mint, or whose access this person has since lost, stays
+  # unnamed and is disclosed as a count instead (`missing_phrase:` on
+  # `RepositoriesHelper#agent_key_coverage_sentence`) — a repository the minter cannot open is
+  # never named, in the flash any less than on the page. The replay path — a second DELETE on
+  # an already-revoked key — takes the same road: the lookup still resolves through the
+  # association and `revoke!` is idempotent, so the replayed request answers with the same
+  # honest sentence rather than a 500 or a bare "revoked".
   def destroy
-    current_user.agent_api_keys.find(params[:id]).revoke!
+    agent_api_key = current_user.agent_api_keys.find(params[:id])
+    names = Repository.accessible_by(current_user)
+                      .where(id: agent_api_key.repository_ids)
+                      .pluck(:github_full_name)
+                      .sort
+    notice = helpers.agent_key_revoke_notice(agent_api_key, names,
+                                             missing_phrase: "since deleted or no longer open to you")
+    agent_api_key.revoke!
 
-    redirect_to account_path, notice: "Agent key revoked."
+    redirect_to account_path, notice: notice
   end
 
   private

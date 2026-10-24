@@ -230,39 +230,46 @@ module RepositoriesHelper
   # `RepositoriesController#show` preloaded (one SELECT for the whole table, never one per row),
   # the destroy action from its own single read — and sorted, so the copy is stable across
   # renders and matches between the two halves.
-  # The names behind one key's stored set, read off the map `RepositoriesController#show`
-  # preloaded for the whole table — never a query per row, and the same map the destroy action
-  # resolves for its own notice. Sorted, so the confirm copy is stable across renders and the
-  # two halves of the disclosure cannot disagree about order.
   def agent_key_repository_names(agent_api_key)
     repository_map = @agent_key_repositories || {}
     agent_api_key.repository_ids.filter_map { |id| repository_map[id]&.github_full_name }.sort
   end
 
-  def agent_key_revoke_confirmation(agent_api_key, repository_names)
-    "Revoke #{agent_api_key.name}? It covers #{agent_key_coverage_sentence(agent_api_key, repository_names)}. " \
+  def agent_key_revoke_confirmation(agent_api_key, repository_names, missing_phrase: "since deleted")
+    "Revoke #{agent_api_key.name}? It covers #{agent_key_coverage_sentence(agent_api_key, repository_names,
+                                                                          missing_phrase: missing_phrase)}. " \
       "Revoking it here cuts the token on every repository in that set — anything still using it stops working immediately."
   end
 
-  def agent_key_revoke_notice(agent_api_key, repository_names)
-    "Revoked #{agent_api_key.name}. It covered #{agent_key_coverage_sentence(agent_api_key, repository_names)} — " \
+  def agent_key_revoke_notice(agent_api_key, repository_names, missing_phrase: "since deleted")
+    "Revoked #{agent_api_key.name}. It covered #{agent_key_coverage_sentence(agent_api_key, repository_names,
+                                                                            missing_phrase: missing_phrase)} — " \
       "its token no longer authenticates anywhere."
   end
 
   # The one place the coverage phrase is decided for both sentences above — the same
   # one-place rule `MembershipsHelper#minted_keys_agreement` states for its own pair. Count
-  # first (the blast radius, read off the STORED array), names second, deletions disclosed in
-  # the middle where the eye already is.
+  # first (the blast radius, read off the STORED array), names second, the missing names
+  # disclosed in the middle where the eye already is.
+  #
+  # `missing_phrase:` names WHY a stored id has no name in the list handed in. On the
+  # repository surfaces the only cause is deletion — nothing cascades into the stored array —
+  # so the default keeps the wording those surfaces have always served, byte-identical. On
+  # `/account` (SPGD-1925) the minter's own name map is `Repository.accessible_by(current_user)`,
+  # so a missing name can equally mean access the minter has since lost — and /account is
+  # self-scoped, so the sentence must not try to distinguish, only disclose: it passes the
+  # wider phrase instead. The count is read off the STORED set either way, so the disclosure
+  # never depends on which cause it was.
   #
   # Public in this module the way every other method here is: the file carries no private
   # section, and an inline shared fragment is not worth becoming the first one.
-  def agent_key_coverage_sentence(agent_api_key, repository_names)
+  def agent_key_coverage_sentence(agent_api_key, repository_names, missing_phrase: "since deleted")
     stored_count = agent_api_key.repository_ids.size
-    deleted_count = stored_count - repository_names.size
+    missing_count = stored_count - repository_names.size
     names = repository_names.any? ? ": #{repository_names.join(', ')}" : ""
-    deleted = deleted_count.positive? ? " (#{pluralize(deleted_count, 'repository')} since deleted)" : ""
+    missing = missing_count.positive? ? " (#{pluralize(missing_count, 'repository')} #{missing_phrase})" : ""
 
-    "#{pluralize(stored_count, 'repository')}#{names}#{deleted}"
+    "#{pluralize(stored_count, 'repository')}#{names}#{missing}"
   end
 
   # Why the "Suite growth" panel is not drawing a line, when there are runs on the branch but fewer
