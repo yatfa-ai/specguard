@@ -5,6 +5,8 @@ require "rails_helper"
 # SPGD-952 — the agent credential's own rules, before any HTTP exists: what a grant may contain,
 # who may mint it, and when a token stops resolving.
 RSpec.describe AgentApiKey do
+  include ActiveSupport::Testing::TimeHelpers
+
   # The ordinary mint: a person, one repository they own, a key over it. Most examples need all
   # three bound to the same person — the model's reachability validation is the reason a key and
   # its repository cannot be built from two independent default users.
@@ -170,17 +172,35 @@ RSpec.describe AgentApiKey do
   end
 
   describe "#revoke!" do
-    # Re-stamping on a replayed revoke is unobservable (the button is offered only on live keys),
-    # so the assertion is that the state stays REVOKED — never that the stamp survives unchanged.
-    it "stamps revoked_at, keeps the row, and stays revoked when revoked again" do
+    # First revocation wins: a replayed revoke reaches the row (the /account destroy looks the
+    # key up without `live`) and must not re-stamp — the FIRST stamp is the offboarding date.
+    it "stamps revoked_at on the first revoke and never re-stamps on a replay" do
       key, _repository = owned_key
 
       key.revoke!
+      stamped_at = key.reload.revoked_at
       key.revoke!
 
-      expect(key.reload.revoked_at).to be_present
+      expect(stamped_at).to be_present
+      expect(key.reload.revoked_at).to eq(stamped_at)
       expect(key).to be_revoked
       expect(AgentApiKey.exists?(key.id)).to be(true)
+    end
+
+    # First revocation wins: a replayed revoke (the /account destroy looks the row up without
+    # `live`) must not move `revoked_at` past `last_refused_at`.
+    # @intent: { entity: "AgentApiKey", action: "keep the first revocation stamp", behavior: "a replayed revoke! after a refused presentation is a no-op: revoked_at is unchanged and stays at or before last_refused_at", layer: "unit" }
+    it "keeps the first revocation stamp when revoke! is replayed after a refusal" do
+      key, _repository = owned_key
+      first_day = Time.utc(2026, 10, 1, 9, 0, 0)
+
+      travel_to(first_day) { key.revoke! }
+      stamped_at = key.reload.revoked_at
+      travel_to(first_day + 1.day) { key.touch_last_refused! }
+      travel_to(first_day + 2.days) { expect(key.revoke!).to eq(key) }
+
+      expect(key.reload.revoked_at).to eq(stamped_at)
+      expect(key.revoked_at).to be <= key.last_refused_at
     end
   end
 
