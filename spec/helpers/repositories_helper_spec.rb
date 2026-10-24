@@ -125,6 +125,46 @@ RSpec.describe RepositoriesHelper, type: :helper do
 
       expect(confirmation).to include("3 repositories: acme/a (2 repositories since deleted)")
     end
+
+    # SPGD-1925 — /account's limb: its name map is the minter's own accessible set, so a
+    # missing name can mean lost access as well as deletion, and the sentence must not promise
+    # a cause it cannot see. The count and names are untouched; only the parenthetical's
+    # wording rides the argument.
+    # @intent: { entity: "RepositoriesHelper", action: "compose the agent-key revoke confirm", behavior: "passing missing_phrase swaps the unnamed-count parenthetical's wording while the count and the names stay", layer: "unit" }
+    it "phrases the unnamed count with the caller's missing_phrase" do
+      confirmation = helper.agent_key_revoke_confirmation(key_over(3), ["acme/a"],
+                                                          missing_phrase: "since deleted or no longer open to you")
+
+      expect(confirmation)
+        .to include("3 repositories: acme/a (2 repositories since deleted or no longer open to you)")
+    end
+  end
+
+  # SPGD-1925 — the after-cut half takes the same argument: the default stays the
+  # repository-side wording byte-identical, and /account's wider phrase rides through the
+  # shared coverage sentence, so the two halves of one revoke cannot disagree about a set.
+  describe "#agent_key_revoke_notice" do
+    def key_over(count)
+      AgentApiKey.new(name: "Fleet", repository_ids: Array.new(count, 0), permissions: [])
+    end
+
+    # @intent: { entity: "RepositoriesHelper", action: "compose the agent-key revoke notice", behavior: "the notice names the key and the covered set and phrases the unnamed count with the caller's missing_phrase", layer: "unit" }
+    it "phrases the unnamed count with the caller's missing_phrase" do
+      notice = helper.agent_key_revoke_notice(key_over(2), %w[acme/a],
+                                              missing_phrase: "since deleted or no longer open to you")
+
+      expect(notice).to eq("Revoked Fleet. It covered 2 repositories: acme/a " \
+        "(1 repository since deleted or no longer open to you) — its token no longer " \
+        "authenticates anywhere.")
+    end
+
+    # @intent: { entity: "RepositoriesHelper", action: "compose the agent-key revoke notice", behavior: "omitting missing_phrase keeps the notice's deleted-repositories wording byte-identical for the repository-side callers", layer: "unit" }
+    it "keeps the default deleted wording byte-identical" do
+      notice = helper.agent_key_revoke_notice(key_over(3), %w[acme/a acme/b])
+
+      expect(notice).to eq("Revoked Fleet. It covered 3 repositories: acme/a, acme/b " \
+        "(1 repository since deleted) — its token no longer authenticates anywhere.")
+    end
   end
 
   # SPGD-1651 — the Layer cell the three per-example tables share. Explicit-receiver calls, so a

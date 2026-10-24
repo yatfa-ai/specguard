@@ -32,6 +32,16 @@ class AccountsController < ApplicationController
     # grant validation would refuse it anyway; the form shows only what can honestly be ticked.
     @grantable_repositories = Repository.accessible_by(current_user).order(:github_full_name)
 
+    # THE NAME MAP BEHIND THE AGENT-KEY TABLE'S COVERAGE DISCLOSURE (SPGD-1925) — indexed off the
+    # set above, so it adds no query: `index_by` materializes the relation the mint grid was going
+    # to iterate anyway, and the table below reads names out of the map in memory. A stored
+    # `repository_ids` id missing from the map is a repository DELETED since mint or one this
+    # person can no longer open — nothing cascades into the stored array, and /account is
+    # self-scoped, so the cell and the revoke confirm disclose the difference as a count and
+    # never name what the viewer cannot open (see `RepositoriesHelper#agent_key_coverage_sentence`,
+    # which /account phrases with the wider `missing_phrase:`).
+    @agent_key_repositories = @grantable_repositories.index_by(&:id)
+
     # WHAT THE MINT FORM MAY OFFER — the union of `RepositoryPolicy#grantable_permissions`
     # across the repositories above (see `grantable_permissions_for` below for the one-read
     # spelling and the rules it restates). The permission grid renders from this and never from
