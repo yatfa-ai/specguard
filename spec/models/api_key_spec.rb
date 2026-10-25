@@ -198,6 +198,26 @@ RSpec.describe ApiKey do
       # "not used since rotation" cell belonging to the wrong event.
       expect(api_key.reload.rotated_at).to be > earlier
     end
+
+    # SPGD-1930: a revoked key cannot be rotated, and the refusal must not disturb the row. Both
+    # halves of the corruption a rotation would cause are pinned: a replacement minted here could
+    # never authenticate (`authenticate` filters to `live`), and overwriting `token_digest` would
+    # erase the handle `Api::BaseController#attribute_refused_revocation` resolves a
+    # still-presented revoked token by — the "Revoked and still presented" evidence would
+    # silently become an unattributable 401.
+    # @intent: { entity: "ApiKey", action: "refuse rotating a revoked key", behavior: "regenerate! on a revoked key raises ApiKey::Revoked and leaves token_digest, rotated_at and revoked_at exactly as they were", layer: "unit" }
+    it "refuses a revoked key without touching its digest, rotation date or retirement stamp" do
+      api_key = repository.api_keys.create!
+      api_key.revoke!
+      digest_before = described_class.find(api_key.id).token_digest
+
+      expect { api_key.regenerate! }.to raise_error(described_class::Revoked)
+
+      reloaded = described_class.find(api_key.id)
+      expect(reloaded.token_digest).to eq(digest_before)
+      expect(reloaded.rotated_at).to be_nil
+      expect(reloaded.revoked_at).to be_present
+    end
   end
 
   describe "#rotated_and_unused?" do
