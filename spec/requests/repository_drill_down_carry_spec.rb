@@ -123,24 +123,24 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   # passes; the earlier run is backdated so `previous_test_run_on_branch` finds it.
   def drill_down_run
     repository = create_repository(user: @user)
-    ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 3.5, line_number: 1,
-                                     name: description_ask),
-                        example_spec(file_path: "spec/models/refund_spec.rb", duration: 2.0, line_number: 2,
-                                     name: description_ask),
-                        example_spec(file_path: "spec/models/refund_spec.rb", duration: 2.0, line_number: 3,
-                                     name: description_ask),
-                        example_spec(file_path: "spec/models/user_spec.rb", duration: 1.0, line_number: 4,
-                                     name: other_description),
-                        example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 5,
-                                     name: other_description),
-                        example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 6,
-                                     name: other_description),
-                        example_spec(file_path: "spec/models/ledger_spec.rb", duration: 0.5, line_number: 7,
-                                     name: unstable_ask, outcome: "failed"),
-                        example_spec(file_path: "spec/models/ledger_spec.rb", duration: 0.5, line_number: 8,
-                                     name: other_unstable, outcome: "failed")],
-           commit_sha: earlier_run_ask)
-    repository.test_runs.last.update!(created_at: 2.hours.ago)
+    earlier = ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 3.5, line_number: 1,
+                                               name: description_ask),
+                                  example_spec(file_path: "spec/models/refund_spec.rb", duration: 2.0, line_number: 2,
+                                               name: description_ask),
+                                  example_spec(file_path: "spec/models/refund_spec.rb", duration: 2.0, line_number: 3,
+                                               name: description_ask),
+                                  example_spec(file_path: "spec/models/user_spec.rb", duration: 1.0, line_number: 4,
+                                               name: other_description),
+                                  example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 5,
+                                               name: other_description),
+                                  example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 6,
+                                               name: other_description),
+                                  example_spec(file_path: "spec/models/ledger_spec.rb", duration: 0.5, line_number: 7,
+                                               name: unstable_ask, outcome: "failed"),
+                                  example_spec(file_path: "spec/models/ledger_spec.rb", duration: 0.5, line_number: 8,
+                                               name: other_unstable, outcome: "failed")],
+                       commit_sha: earlier_run_ask)
+    earlier.update!(created_at: 2.hours.ago)
     ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 3.5, line_number: 11,
                                      name: description_ask),
                         example_spec(file_path: "spec/models/refund_spec.rb", duration: 2.0, line_number: 12,
@@ -153,7 +153,19 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
                                      name: unstable_ask, outcome: "passed"),
                         example_spec(file_path: "spec/models/ledger_spec.rb", duration: 0.5, line_number: 16,
                                      name: other_unstable, outcome: "passed")])
+    # The id ask's value (SPGD-1928), taken from the LATEST run for the same reason the sha ask
+    # above is the latest run's sha: anchoring must change nothing any other gesture can see, so
+    # every panel renders the rows it renders on a default page — anchoring on the EARLIER run
+    # instead would leave the growth panels without a baseline and double the slowest-examples
+    # rows, and the matrix would be asserting about a page no other gesture was written against.
+    # The sha-set gesture below targets the EARLIER run, so no link here sets the run ask's own
+    # value either.
+    @run_id_ask = repository.test_runs.order(:created_at).last.id
     repository
+  end
+
+  def run_id_ask
+    @run_id_ask or raise "run_id_ask read before drill_down_run built the fixture"
   end
 
   # Through the resolver as well as the producer, which is the two halves the ingest endpoint runs
@@ -281,17 +293,28 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # an open area — and it is the gesture with the most to lose from a hand-written href, since a
     # run anchor that dropped the open drill-downs would land the reader back at the top of a page
     # they had already navigated three rungs into.
+    #
+    # Its `drops:` is the supersession rule the run ask introduced (SPGD-1928): `run` beats
+    # `commit_sha` on the read side, so a link that names an explicit sha must DROP the carried run
+    # rather than pin it — an override of one re-anchoring ask is a re-anchor, and a re-anchor
+    # supersedes both. `drops` names keys absent for that reason, which is a different fact from
+    # `clears`: this gesture has no run-ask way back of its own (the id ask is entered from a
+    # duplicate-sha row, which this deliberately duplicate-free fixture cannot render — that entry
+    # gesture is pinned where the duplicate exists, in
+    # spec/requests/repository_run_anchor_spec.rb).
     { name: "anchor a run from Recent runs",
       panel: "#recent-runs", row: "0ldde11", link: "Read this run",
-      sets: { commit_sha: "0ldde11vercafe00" } },
+      sets: { commit_sha: "0ldde11vercafe00" }, drops: [:run] },
     # The way back OUT of the ask the row above enters, and it is here for the same reason its
     # counterpart is: un-anchoring is not a request to close an open area, file or description, nor
     # to drop `?branch=`. It renders on this fixture because `run_ask` is deliberately the LATEST
     # run's sha, so the ask resolves, `@run_anchor_run` is present and the gesture is on the page
-    # every other row is asserted against.
+    # every other row is asserted against. It clears the run ask alongside the sha ask for the
+    # same supersession reason: "the newest run" means neither anchor, and the run carry is keyed
+    # to drop whenever this link's `commit_sha:` override rides.
     { name: "Show the newest run",
       panel: ".rc-run", link: "Show the newest run",
-      clears: :commit_sha }
+      clears: [:commit_sha, :run] }
   ]
 
   # The gesture's own link, by EXACT text rather than `match: :prefer_exact`. That strategy resolves
@@ -429,7 +452,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # as it did before any of this existed. The helper defaults every ask to its request ivar, so a
     # bug that turned "no ask" into `key=` — an EMPTY ask, which the param concerns read as no ask
     # but which changes every href on the page — would show up here and nowhere else.
-    # @intent: {"entity": "GET /repositories/:id", "action": "omit unmade ask params", "behavior": "on a page requested with no asks, the spec-directory rollup link carries only spec_directory=spec/models and no branch, commit_sha, spec_file, repeated_description or unstable_test parameter", "layer": "request"}
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit unmade ask params", "behavior": "on a page requested with no asks, the spec-directory rollup link carries only spec_directory=spec/models and no branch, commit_sha, spec_file, repeated_description, unstable_test or run parameter", "layer": "request"}
     it "writes no parameter for an ask that was not made" do
       get repository_path(drill_down_run)
 
@@ -440,7 +463,71 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       expect(mentions?(href, :spec_file)).to be(false)
       expect(mentions?(href, :repeated_description)).to be(false)
       expect(mentions?(href, :unstable_test)).to be(false)
+      expect(mentions?(href, :run)).to be(false)
       expect(href).to include("spec_directory=#{CGI.escape('spec/models')}")
+    end
+  end
+
+  # THE RUN ASK'S OWN MATRIX PASS (SPGD-1928). `?run=` is deliberately not in the ask set above:
+  # it never composes with `commit_sha` in any URL this page builds. The only link that emits it —
+  # the duplicate-sha row's "Read this run" — is an override link, and the carry supersedes the sha
+  # ask when the run ask rides (and drops the run carry when a link names an explicit sha). So the
+  # ask set this page can actually be holding is either sha or run, and the run-open page gets the
+  # same treatment the seven-ask page got: the same gesture table, re-run with `run` in the sha
+  # ask's place, every cell decided by the gesture's own definition.
+  #
+  # The difference the two passes pin apart: the sha pass asserts `commit_sha` CARRIED by every
+  # gesture that does not own it; this pass asserts `commit_sha` ABSENT from every gesture that
+  # does not name it — "the sha carry must not ride together with a run ask" is the rule, because
+  # a link emitting both would name two rows where the target honours one.
+  describe "the run ask open in the sha ask's place" do
+    # Every ask EXCEPT `commit_sha`, plus `run` — the ask set a page reached from a duplicate-sha
+    # row's id link is actually holding. The other six asks ride through the id link unchanged,
+    # which is what makes this fixture the honest one for the carry cells.
+    def open_run_ask_page
+      repository = drill_down_run
+      get repository_path(repository, branch: branch_ask, run: run_id_ask, spec_file: file_ask,
+                          spec_directory: area_ask, repeated_description: description_ask,
+                          unstable_test: unstable_ask, unstable_test_from: unstable_origin_ask)
+    end
+
+    gestures.each do |gesture|
+      # @intent: {"entity": "GET /repositories/:id", "action": "carry run ask in sha's place", "behavior": "with the run ask open in place of the sha ask, each drill-down gesture carries the run id and every other ask it does not own, sets exactly the ones its gesture names, drops its superseded keys, and never re-introduces a commit_sha parameter", "layer": "request"}
+      it "#{gesture[:name]} carries the run ask and never re-introduces the sha ask" do
+        open_run_ask_page
+        href = href_for(gesture)
+        asks = { branch: branch_ask, run: run_id_ask, spec_file: file_ask,
+                 spec_directory: area_ask, repeated_description: description_ask,
+                 unstable_test: unstable_ask, unstable_test_from: unstable_origin_ask }
+        cleared = Array(gesture[:clears])
+        # `drops` are the keys this gesture SUPERSEDES as a side effect of its own set — the
+        # re-anchor rule — and they read the same as `clears` at the href: absent.
+        dropped = Array(gesture[:drops])
+
+        asks.each do |key, requested|
+          if cleared.include?(key) || dropped.include?(key)
+            expect(mentions?(href, key)).to be(false),
+                                            "expected #{gesture[:name]} to drop #{key}, got #{href}"
+          elsif gesture[:sets]&.key?(key)
+            expect(carries?(href, key, gesture[:sets][key])).to be(true),
+                                                                "expected #{gesture[:name]} to SET " \
+                                                                "#{key}=#{gesture[:sets][key]}, got #{href}"
+          else
+            expect(carries?(href, key, requested)).to be(true),
+                                                      "expected #{gesture[:name]} to CARRY " \
+                                                      "#{key}=#{requested}, got #{href}"
+          end
+        end
+
+        # THE supersession cell, asserted against every gesture rather than trusted to the loop
+        # above: with a run ask open, no link re-introduces a sha anchor — unless the gesture's
+        # own job is to set one.
+        unless gesture[:sets]&.key?(:commit_sha)
+          expect(mentions?(href, :commit_sha)).to be(false),
+                                                  "expected #{gesture[:name]} not to carry commit_sha " \
+                                                  "beside a run ask, got #{href}"
+        end
+      end
     end
   end
 end

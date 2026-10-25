@@ -147,6 +147,13 @@ class RepositoryDashboard
   # `RequestedRunsBranchParam` for the guard and the naming argument in full.
   include RequestedRunsBranchParam
 
+  # `?run=` read as a TestRun id, naming one run of a commit the repository holds more than one run
+  # of (SPGD-1928). A second RE-ANCHORING ask beside `?commit_sha=` above, and it takes precedence
+  # over that one at the resolution below: a sha can only ever name the NEWEST of several same-sha
+  # rows (`latest_test_run_for_commit`), so the row the reader actually asked for has to be named
+  # by id. `RequestedRunIdParam` carries the guard and the naming argument in full.
+  include RequestedRunIdParam
+
   # Never published back to the action by {#publish}: the constructor's inputs — `@repository`,
   # which the action set itself, `@params`, and the `keys_manage` decision — the memoized
   # `requested_*` reads the included `Requested*Param` concerns keep on this object, and the two
@@ -159,7 +166,7 @@ class RepositoryDashboard
     @requested_branch @requested_spec_file @requested_spec_directory @requested_commit_sha
     @requested_unstable_test @requested_unstable_test_origin @requested_limit
     @requested_repeated_description @requested_layer @requested_near_duplicate_cluster
-    @requested_runs @requested_runs_branch
+    @requested_runs @requested_runs_branch @requested_run_id
   ].freeze
 
   attr_reader :repository, :params, :can_manage_keys
@@ -344,7 +351,7 @@ class RepositoryDashboard
     # another branch's, with no error and no signal that you were answered about someone else's
     # commit. On the web there was no ask AND no signal.
     #
-    # THREE named carriers rather than one, because three different questions are asked of them
+    # FOUR named carriers rather than one, because four different questions are asked of them
     # below and
     # collapsing any two of them is a bug this page would ship green.
     #
@@ -357,22 +364,44 @@ class RepositoryDashboard
     # being edited in plain sight (see `@rejected_ingests`, which is where the API hit this and
     # wrote the rule out).
     #
-    # `@run_anchor_request` — the RAW ask, kept whatever it names, on the idiom
+    # `@run_anchor_request` — the RAW sha ask, kept whatever it names, on the idiom
     # `@trajectory_branch_request` below already sets for the same shape of ask on this page: a
     # panel can only SAY the fallback happened if the ask survives it, and a stale bookmark, a
     # pruned run and a commit whose CI never reported are all ordinary ways to arrive here.
     #
+    # `@run_request` — the RAW run-id ask (`?run=`, SPGD-1928), kept on the same idiom. It takes
+    # PRECEDENCE over the sha ask at the resolution below and nowhere else, and it is deliberately
+    # a separate ivar from `@run_anchor_request` rather than a second value stuffed into it: the
+    # helper's `commit_sha:` carry reads `@run_anchor_request` verbatim, and a link carrying a sha
+    # beside a run id would name the sha of a page that describes the id's row — two asks on one
+    # link where the read side honours one. When the run ask wins, `drill_down_path` drops the sha
+    # carry instead (repositories_helper.rb), so a link never carries both.
+    #
     # `@run_anchor_run` — the run the ask RESOLVED to, or nil. The disclosure is computed off this
     # rather than by comparing two shas, for the reason `serialized_run_anchor` gives: the choice
-    # and the statement about the choice must not be able to come apart.
+    # and the statement about the choice must not be able to come apart. Resolved from `?run=`
+    # first, then `?commit_sha=`: an id names its row exactly, where a sha can only ever name the
+    # NEWEST of several same-sha rows — which is precisely the row `?run=` exists to get past. The
+    # run-id resolution reaches `find_by` through `@repository.test_runs`, so a foreign
+    # repository's id finds no row and falls back like any other miss; it can never serve another
+    # repository's run. At most ONE indexed primary-key read either way, and only when an ask was
+    # made — the default page issues neither.
     #
-    # NO 404 and no validation branch, at any of the three. An unknown, blank or malformed sha is
-    # not a malformed request — it falls back to the newest run and the page says so.
+    # NO 404 and no validation branch, at any of the three. An unknown, blank or malformed sha, a
+    # deleted run and a run id this repository has never held are all not malformed requests —
+    # they fall back to the newest run and the page says so, naming the ask (the run ask as
+    # `run #<id>`).
     # Evaluated HERE, at the position the local it replaced held, so the anchor's two reads keep
     # issuing in the order they have always issued in. The method's memo lives below.
     newest_test_run
     @run_anchor_request = requested_commit_sha
-    @run_anchor_run = @run_anchor_request && @repository.latest_test_run_for_commit(@run_anchor_request)
+    @run_request = requested_run_id
+    @run_anchor_run =
+      if @run_request
+        @repository.test_runs.find_by(id: @run_request)
+      elsif @run_anchor_request
+        @repository.latest_test_run_for_commit(@run_anchor_request)
+      end
     @branch_run = @repository.latest_test_run_on_branch(requested_branch) if requested_branch.present?
     @latest_test_run = @run_anchor_run || @branch_run || newest_test_run
     # The `?limit=` ask in its raw form, read once for both duration rollups below and carried by

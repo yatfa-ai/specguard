@@ -595,6 +595,248 @@ RSpec.describe "Repository run anchor", type: :request do
     end
   end
 
+  # ⭐ THE ASK THAT EXISTS BECAUSE A SHA CANNOT NAME ONE OF TWO ROWS (SPGD-1928). `test_runs` has
+  # no uniqueness on `commit_sha`, so a CI re-run of one commit is a second row, and every existing
+  # handle on this page — `?commit_sha=`, the "Read this run" links, the Overview's basis line —
+  # resolves a sha to the NEWEST of them. The older row of a re-run pair was unreadable from the
+  # UI: its link was byte-identical to its sibling's, and following it opened the sibling with
+  # nothing on the page saying so. `?run=<id>` names the row itself, which is the only handle that
+  # distinguishes two rows printing the same seven characters; the row whose sha already appeared
+  # higher in the newest-first window links by id, and every other row keeps the sha link it has
+  # always had.
+  describe "a run named by id" do
+    # Two runs of ONE sha plus a newer run on another — the re-run pair is the whole point, and
+    # their suites are disjoint so an assertion about the older run cannot be satisfied by a page
+    # that quietly answered with its sibling. Backdated explicitly rather than relying on insertion
+    # order, for the same reason `two_run_history` is.
+    def re_run_history
+      first_run = ingest_run(commit_sha: "0nesha00cafe0001", at: 3.hours.ago,
+                             specs: [spec_in("spec/models/order_spec.rb", 1)])
+      re_run = ingest_run(commit_sha: "0nesha00cafe0001", at: 2.hours.ago,
+                          specs: [spec_in("spec/models/refund_spec.rb", 2)])
+      newest = ingest_run(commit_sha: "newest00cafe0002", at: 1.hour.ago,
+                          specs: [spec_in("spec/requests/checkout_spec.rb", 4)])
+
+      [first_run, re_run, newest]
+    end
+
+    def follow(href)
+      uri = URI.parse(href)
+      get [uri.path, uri.query].compact.join("?")
+    end
+
+    # The "Read this run" link of the row at `position`, read off the rendered href rather than
+    # constructed here — the carry spec's rule: a link built by omission is exactly the defect
+    # class, and an expectation written from the same belief would agree with it.
+    def read_this_run_href(position)
+      panel("recent-runs").all("tbody tr")[position]
+                          .find("a", exact_text: "Read this run", visible: :all)[:href]
+    end
+
+    # THE defect this ticket closes, asserted end to end: the OLDER row's link used to be
+    # byte-identical to its sibling's, so following it opened the NEWEST same-sha run — row 1 —
+    # with nothing on the page saying so. The link is addressed by id now, and following it lands
+    # on the row it was clicked on.
+    # @intent: {"entity": "TestRun", "action": "open older re-run by id", "behavior": "following the oldest row's Read this run href — the row whose sha already appeared higher — renders a page whose marked Recent-runs row is that OLDER row at its position, not its newer same-sha sibling", "layer": "request"}
+    it "opens the older row of a re-run pair that a sha link could never reach" do
+      first_run, _re_run, = re_run_history
+
+      get repository_path(repository)
+      follow(read_this_run_href(2))
+
+      expect(response).to have_http_status(:ok)
+      # Both rows print the same seven characters, so position is the only thing that separates
+      # the row the ask resolved to from the row that merely shares its sha.
+      expect(marked_row_positions).to eq([2])
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{first_run.commit_sha.first(7)}")
+    end
+
+    # The Overview's half of the same disclosure. The identity has to go beyond the sha — that is
+    # the defect — so the run ask is worded by the resolved ROW: the id, the shared seven
+    # characters, and the ingestion age the rows below display.
+    # @intent: {"entity": "TestRun", "action": "identify resolved run beyond sha", "behavior": "a run-asked page's anchor notice names run #<id>, the 7-char sha and an ingested age, and the Recent runs caption repeats the run id", "layer": "request"}
+    it "identifies the anchored row by id, sha and ingestion age" do
+      first_run, = re_run_history
+
+      get repository_path(repository, run: first_run.id)
+
+      expect(anchor_notice).to include("run ##{first_run.id}")
+      expect(anchor_notice).to include(first_run.commit_sha.first(7))
+      expect(anchor_notice).to include("ingested")
+      expect(recent_runs_caption).to include("run ##{first_run.id}")
+      expect(recent_runs_caption).to include("the mark is not on it")
+    end
+
+    # The precedence rule: both asks present, the id wins. The sha ask resolves to the NEWEST
+    # same-sha row, so a page that honoured the sha instead would mark position 1.
+    # @intent: {"entity": "TestRun", "action": "prefer run ask over sha ask", "behavior": "with both run and commit_sha naming the same commit's two rows, the page anchors on the run id's row and the notice names the run", "layer": "request"}
+    it "resolves a run ask ahead of a commit_sha ask when both are present" do
+      first_run, re_run, = re_run_history
+
+      get repository_path(repository, run: first_run.id, commit_sha: re_run.commit_sha)
+
+      expect(marked_row_positions).to eq([2])
+      expect(anchor_notice).to include("run ##{first_run.id}")
+      expect(anchor_notice).not_to include("run ##{re_run.id}")
+    end
+
+    # The link split, read off the rendered hrefs: the row whose sha already appeared higher is
+    # addressed by id — a sha link could never open it — and every other row keeps the sha link it
+    # has always had, so a repository with no re-runs renders the exact hrefs it rendered before.
+    # On the default page the top row IS the run being read, so it carries no "Read this run" at
+    # all; the split is read off the two rows below it.
+    # @intent: {"entity": "TestRun", "action": "address duplicate-sha row by id", "behavior": "on the default page the newest run has no Read-this-run link, the newest of the shared sha keeps a commit_sha href, and the older same-sha row links by run id", "layer": "request"}
+    it "links the non-newest same-sha row by id and every other row by sha" do
+      re_run_history
+
+      get repository_path(repository)
+
+      rows = panel("recent-runs").all("tbody tr")
+      # The newest run is the one being read on a default page — no way in, the same as before
+      # this ask existed.
+      expect(rows[0].all("a", exact_text: "Read this run", visible: :all)).to be_empty
+      # The re-run (row 1) is the NEWEST of its sha, so the sha link resolves to exactly it.
+      expect(rows[1].find("a", exact_text: "Read this run", visible: :all)[:href])
+        .to include("commit_sha=0nesha00cafe0001")
+      expect(rows[1].find("a", exact_text: "Read this run", visible: :all)[:href])
+        .not_to include("run=")
+      # The row the sha link can never reach gets the id link.
+      expect(rows[2].find("a", exact_text: "Read this run", visible: :all)[:href])
+        .to include("run=")
+    end
+
+    # The carry precedence: `run` beats `commit_sha` on the read side, so a link that names an
+    # explicit sha must DROP the carried id rather than pin it, and "Show the newest run" —
+    # `commit_sha: nil` — must clear the anchor entirely. Asserted off the rendered hrefs, per the
+    # carry spec's rule.
+    # @intent: {"entity": "TestRun", "action": "drop carried run on sha override", "behavior": "on a run-anchored page the other rows' Read this run hrefs and the Show the newest run href carry no run key", "layer": "request"}
+    it "drops the carried run ask from links that name their own sha" do
+      first_run, = re_run_history
+
+      get repository_path(repository, run: first_run.id)
+
+      rows = panel("recent-runs").all("tbody tr")
+      expect(rows[0].find("a", exact_text: "Read this run", visible: :all)[:href])
+        .not_to include("run=")
+      expect(rows[0].find("a", exact_text: "Read this run", visible: :all)[:href])
+        .to include("commit_sha=newest00cafe0002")
+      un_anchor = page.find(".rc-run").all("a", text: "Show the newest run").first
+      expect(un_anchor[:href]).not_to include("run=")
+      expect(un_anchor[:href]).not_to include("commit_sha=")
+    end
+
+    # A well-formed id that matches nothing: a stale bookmark and a deleted run are ordinary ways
+    # to arrive. Not a malformed request — a fallback, disclosed, naming the ask in its own
+    # vocabulary.
+    # @intent: {"entity": "TestRun", "action": "fall back on unknown run id", "behavior": "a run id this repository never held answers 200 anchored on the newest run with a notice saying there is no run for run #<id>", "layer": "request"}
+    it "falls back to the newest run and names the ask when the id matches nothing" do
+      _first, _re_run, newest = re_run_history
+
+      get repository_path(repository, run: 424_242)
+
+      expect(response).to have_http_status(:ok)
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{newest.commit_sha.first(7)}")
+      expect(anchor_notice).to include("no run for run #424242")
+    end
+
+    # A foreign repository's id is the same miss and not a leak: the resolution is scoped through
+    # this repository, so the other repository's run can never be served — the ask falls back to
+    # THIS repository's newest run.
+    # @intent: {"entity": "TestRun", "action": "refuse foreign run id", "behavior": "another repository's run id answers 200 with this repository's newest run and a fallback notice naming the ask, never the foreign run", "layer": "request"}
+    it "treats another repository's run id as a miss, not a cross-repository read" do
+      _first, _re_run, newest = re_run_history
+      other = create_repository(user: @user, github_full_name: "acme/other-repo")
+      Ingest::RunRecorder.record(
+        other,
+        { commit_sha: "0ther00cafe0001", branch: "main", total_specs_count: 1,
+          annotated_specs_count: 0, duration_seconds: 60.0 },
+        specs: [unannotated_spec(file_path: "spec/models/other_spec.rb", line_number: 1, duration: 1.0)
+                  .deep_stringify_keys]
+      )
+
+      get repository_path(repository, run: other.test_runs.first.id)
+
+      expect(response).to have_http_status(:ok)
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{newest.commit_sha.first(7)}")
+      expect(anchor_notice).to include("no run for run ##{other.test_runs.first.id}")
+    end
+
+    # The state the sha ask pins behind its bound, worded by the resolved row for the id ask: the
+    # run IS anchored — no row is marked because the panel's window cannot show it — and the
+    # caption says which run holds the page by id rather than by the shared sha. Eleven runs, the
+    # eldest the anchored one, backdated explicitly for the same reason every ordering here is.
+    def history_with_the_anchor_outside_the_window
+      eldest = ingest_run(commit_sha: "0ldest00cafe0001", at: 11.hours.ago,
+                          specs: [spec_in("spec/models/order_spec.rb", 1)])
+      10.times do |i|
+        ingest_run(commit_sha: format("newer%02dcafe00001", i), at: (10 - i).hours.ago,
+                   specs: [spec_in("spec/requests/checkout_spec.rb", 4)])
+      end
+
+      eldest
+    end
+
+    # @intent: {"entity": "TestRun", "action": "anchor run beyond bound", "behavior": "a run id past the Recent-runs window renders the caption naming run #<id> as not among the listed rows with none marked", "layer": "request"}
+    it "says the anchored run is off-list by id when it is behind the panel's bound" do
+      eldest = history_with_the_anchor_outside_the_window
+
+      get repository_path(repository, run: eldest.id)
+
+      expect(marked_row_positions).to be_empty
+      expect(recent_runs_caption).to include("run ##{eldest.id}")
+      expect(recent_runs_caption).to include("not among the most recent runs listed here")
+      expect(recent_runs_caption).not_to include("the marked row here")
+    end
+
+    # The priced read: exactly ONE extra indexed primary-key query, and only when asked — the
+    # default page costs what it always cost. Counted warm, on the second render of each, because
+    # a first request carries schema and cache work nothing on this page chose to do.
+    # @intent: {"entity": "TestRun", "action": "price the run-id read", "behavior": "a run-asked render issues exactly one more test_runs query than a default render of the same fixture", "layer": "request"}
+    it "costs exactly one more test_runs query than the default page" do
+      first_run, = re_run_history
+
+      get repository_path(repository)
+      default_reads = queries_against('"test_runs"') { get repository_path(repository) }
+
+      get repository_path(repository, run: first_run.id)
+      asked_reads = queries_against('"test_runs"') { get repository_path(repository, run: first_run.id) }
+
+      expect(asked_reads.size).to eq(default_reads.size + 1)
+    end
+
+    # The shapes a `?run=` query string can legally parse into that are not a run id are listed
+    # ONCE, in `spec/support/shared_examples/malformed_run_id_param.rb`, against the guard they all
+    # land on (`RequestedRunIdParam#requested_run_id`). What is local here is how THIS surface says
+    # it dropped the ask: the newest-run page, with NO anchor notice — the fallback notice names a
+    # MISSED ask, and a page that fell back without an ask must not claim one was made.
+    describe "a run-id parameter that is not a run id" do
+      def expect_run_param_treated_as_no_ask(query)
+        _first, _re_run, newest = re_run_history
+
+        get repository_path(repository, **query)
+
+        expect(response).to have_http_status(:ok)
+        expect(page.find(".rc-run").text.squish).to include("Reading run #{newest.commit_sha.first(7)}")
+        expect(anchor_notice).to be_nil
+      end
+
+      it_behaves_like "a surface that treats a malformed run-id parameter as no ask"
+
+      # The positive-path example the shared examples' own doc comment requires to sit beside
+      # them: a guard that swallowed EVERY value would answer 200 on every malformed shape too,
+      # and nothing above separates "the guard rejects non-ids" from "the parameter does nothing".
+      # @intent: {"entity": "TestRun", "action": "honour integer run id", "behavior": "a run parameter that is a plain id re-anchors the Overview onto that run's row", "layer": "request"}
+      it "honours a run parameter that IS an id" do
+        first_run, = re_run_history
+
+        get repository_path(repository, run: first_run.id)
+
+        expect(page.find(".rc-run").text.squish).to include("Reading run #{first_run.commit_sha.first(7)}")
+        expect(anchor_notice).to include("run ##{first_run.id}")
+      end
+    end
+  end
+
   # Success criterion 8. The two surfaces answer the same question about the same sha and must not
   # be able to disagree about which run they picked — the web resolves through
   # `Repository#latest_test_run_for_commit` and the JSON endpoint through the same method behind its
