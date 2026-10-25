@@ -181,4 +181,127 @@ RSpec.describe "Account closure", type: :request do
     expect(panel).to include("stops authenticating")
     expect(panel).to include("Nothing is destroyed")
   end
+
+  # SPGD-1934 — the disclosure is quantified from the person's own rows: a person closing an
+  # account that still carries live automation is told exactly what stops, in BOTH places the
+  # consequence is read (the panel bullet and the confirm dialog), because the two must not
+  # drift. The agent-key count is the live half only, and its coverage is the DISTINCT
+  # repositories the stored sets span — the same count-first rule
+  # `RepositoriesHelper#agent_key_coverage_sentence` counts one key by, folded across keys.
+  # @intent: { entity: "User", action: "quantify the closure disclosure", behavior: "GET /account with one live personal key and two live agent keys whose stored sets span three repositories renders the Close-account panel and its turbo_confirm naming 1 live sgu_ token and 2 live agent keys covering 3 repositories, and splits the what-remains sentence into CI keys keep working and personal/agent tokens dead", layer: "request" }
+  it "names the live key counts and agent-key coverage in the panel and the confirm" do
+    create_user_api_key(user: person, name: "Laptop")
+    alpha = create_repository(user: person, github_full_name: "acme/alpha")
+    beta = create_repository(user: person, github_full_name: "acme/beta")
+    gamma = create_repository(user: person, github_full_name: "acme/gamma")
+    create_agent_api_key(user: person, repositories: [alpha, beta], name: "Fleet")
+    create_agent_api_key(user: person, repositories: [beta, gamma], name: "Scout")
+
+    get account_path
+
+    panel = closure_panel
+    expect(panel).to include("your 1 live <code class=\"font-mono text-xs\">sgu_</code> token — " \
+                             "and so does every agent key you minted: 2 live agent keys, covering " \
+                             "3 repositories, stop working immediately")
+    expect(panel).to include("keep authenticating — closure does not touch them")
+    expect(panel).to include("their tokens dead")
+
+    expect(panel).to include("Every sgu_ API key you hold stops working immediately — 1 live token — " \
+                             "and so does every agent key you minted: 2 live agent keys, covering " \
+                             "3 repositories, stop working immediately, including keys on machines " \
+                             "you no longer have.")
+    expect(panel).to include("Repository CI keys keep working; your personal and agent keys " \
+                             "remain as rows with dead tokens.")
+  end
+
+  # The personal half alone: a person holding live `sgu_` tokens but no agent keys gets the
+  # count on that half and no agent-key sentence — there is no agent cut to name, and saying
+  # nothing about agent keys is the honest zero for them.
+  # @intent: { entity: "UserApiKey", action: "quantify only the personal half", behavior: "GET /account with one live personal key and no agent keys renders the closure panel naming 1 live sgu_ token with no agent-key sentence, and the confirm naming 1 live token", layer: "request" }
+  it "quantifies the personal keys alone when no agent keys are live" do
+    create_user_api_key(user: person, name: "Laptop")
+
+    get account_path
+
+    panel = closure_panel
+    expect(panel).to include("your 1 live <code class=\"font-mono text-xs\">sgu_</code> token, " \
+                             "including keys still running on machines you no longer have.")
+    expect(panel).not_to include("agent key you minted")
+    expect(panel).to include("Every sgu_ API key you hold stops working immediately — 1 live token, " \
+                             "including keys on machines you no longer have.")
+  end
+
+  # A revoked `sga_` row already authenticates nothing, so it is not counted as something the
+  # closure cuts — the count names the live cut only. The row itself is still retained, so the
+  # what-remains truths still apply to it.
+  # @intent: { entity: "AgentApiKey", action: "exclude revoked keys from the closure count", behavior: "GET /account with only a revoked agent key renders no live agent-key count in the closure panel while the what-remains truths still describe the retained row", layer: "request" }
+  it "does not count a revoked agent key among the keys the closure cuts" do
+    alpha = create_repository(user: person, github_full_name: "acme/alpha")
+    key = create_agent_api_key(user: person, repositories: [alpha], name: "Fleet")
+    key.revoke!
+
+    get account_path
+
+    panel = closure_panel
+    expect(panel).not_to include("live agent key")
+    expect(panel).to include("every <code class=\"font-mono text-xs\">sgu_</code> token")
+    expect(panel).to include("their tokens dead")
+  end
+
+  # The zero-state contract: an owner holding neither credential kind keeps the standing
+  # generic sentences verbatim, in panel and confirm — no zero counts, no agent-key sentence,
+  # nothing invented to quantify.
+  # @intent: { entity: "User", action: "keep the unquantified copy for a keyless owner", behavior: "GET /account for an owner holding no personal or agent keys renders the closure panel and its turbo_confirm with the standing generic sentences and no live counts or agent-key sentence", layer: "request" }
+  it "keeps the unquantified copy for an owner holding no keys" do
+    get account_path
+
+    panel = closure_panel
+    expect(panel).to include("every <code class=\"font-mono text-xs\">sgu_</code> token, " \
+                             "including keys still running on machines you no longer have.")
+    expect(panel).not_to include("live agent key")
+    expect(panel).not_to include("live sgu_")
+    expect(panel).not_to include("covering")
+    expect(panel).to include("the keys you minted and the memberships you granted all remain, " \
+                             "with your name still on them")
+
+    expect(panel).to include("Every sgu_ API key you hold stops working immediately, including " \
+                             "keys on machines you no longer have. Nothing is deleted — your " \
+                             "repositories, runs, intents, keys and memberships remain, with " \
+                             "your name on them. This cannot be undone from within SpecGuard.")
+    expect(panel).not_to include("agent key")
+  end
+
+  # SPGD-1934's post-close half: the notice names the cut live agent keys — the fact the
+  # person is most likely to meet next, a CI job answering 401 under a key whose owner no
+  # longer resolves — and counts the live half only, a revoked row with it.
+  # @intent: { entity: "User", action: "name cut agent keys after closure", behavior: "POST /account/close with two live agent keys and one revoked redirects to root with the default closure notice plus a sentence naming 2 live agent keys stopped authenticating and never naming the revoked row's count", layer: "request" }
+  it "names the live agent keys that stopped in the post-close notice" do
+    alpha = create_repository(user: person, github_full_name: "acme/alpha")
+    beta = create_repository(user: person, github_full_name: "acme/beta")
+    gamma = create_repository(user: person, github_full_name: "acme/gamma")
+    create_agent_api_key(user: person, repositories: [alpha, beta], name: "Fleet")
+    create_agent_api_key(user: person, repositories: [gamma], name: "Scout")
+    revoked = create_agent_api_key(user: person, repositories: [beta], name: "Retired")
+    revoked.revoke!
+
+    close_account
+
+    expect(response.body).to include("Nothing of yours was deleted. Your 2 live agent keys " \
+                                     "stopped authenticating when the account closed.")
+    expect(response.body).not_to include("3 live agent keys")
+  end
+
+  # And the default: with no live agent keys the notice is the sentence it has always been —
+  # including for a person whose keys are all personal, which the notice deliberately does not
+  # quantify (the panel already told them; the root page names only the agent cut).
+  # @intent: { entity: "User", action: "keep the default closure notice", behavior: "POST /account/close for an owner holding a live personal key but no agent keys answers the unchanged default closure notice with no agent-key sentence", layer: "request" }
+  it "leaves the post-close notice unchanged when no agent keys are live" do
+    create_user_api_key(user: person, name: "Laptop")
+
+    close_account
+
+    expect(response.body).to include("Your account is closed. You have been signed out, and " \
+                                     "SpecGuard can no longer sign you in. Nothing of yours was deleted.")
+    expect(response.body).not_to include("stopped authenticating when the account closed")
+  end
 end

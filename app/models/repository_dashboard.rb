@@ -257,22 +257,23 @@ class RepositoryDashboard
       # off the whole-table partition above).
       #
       # THE CONSTRUCTION IS THE API'S, verbatim, for the reason that controller's comment
-      # states in full: a revoked-only load (`revoked.covering`) keeps `ApiKeyPartition.for`
-      # safe on agent rows — its constructor reads `rotated_and_unused?` off the live side
-      # (`api_key_partition.rb`), and `AgentApiKey` has no such predicate because agent keys
-      # have no rotation — while an empty live side never asks for it. The presented side reads
-      # through the partition, the one place the collection split is spelled
-      # (`spec/models/api_key_partition_spec.rb` holds that repo-wide property), so this page
-      # and the API cannot disagree about a key. Filtering these rows by hand here would be a
-      # second spelling of the split.
+      # states in full: a revoked-only load (`revoked.covering`) keeps this panel to the ONE
+      # agent SELECT its budget pins and hands the partition only the side it renders — the
+      # presented side reads through the partition, the one place the collection split is
+      # spelled (`spec/models/api_key_partition_spec.rb` holds that repo-wide property), so
+      # this page and the API cannot disagree about a key. Filtering these rows by hand here
+      # would be a second spelling of the split. (The partition itself is safe on agent rows
+      # either way since SPGD-1934 — its stranded side is a rotation question, asked only of
+      # rows carrying it, and `AgentApiKey` has no rotation — so the revoked-only shape here
+      # is a budget choice, not a crash guard.)
       #
       # ONE further SELECT against `agent_api_keys`, beside the listing's — the page's pinned
       # agent-SELECT count and the owner's absolute budget both move by it, deliberately and
-      # with their why commented at the pins. The alternative that keeps both pins green —
-      # widening the listing to the whole table and partitioning it like the `sgk_` side —
-      # needs an honest `rotated_and_unused?` on `AgentApiKey`, a model-contract widening this
-      # platform has twice deferred (SPGD-1023's review lane chose revoked-only scoping at the
-      # same fork); the pins travel with that widening, and the section code is identical.
+      # with their why commented at the pins. Widening the listing to the whole table and
+      # partitioning it like the `sgk_` side would keep the SELECT count too, but it would
+      # change what the listing renders and what the panel asks the partition for, and the
+      # platform has twice chosen revoked-only scoping at this fork (SPGD-1023's review lane
+      # among them); the section code stays as chosen.
       #
       # A key revoked and never presented again produces no row — nothing is synthesized, on
       # the honest-bound rule the indicator's state 1 and the API endpoint share — so the

@@ -3,7 +3,9 @@
 require "rails_helper"
 
 # `ApiKeyPartition` — the single-sourced live / revoked / stranded / presented-revoked split over a
-# loaded set of `ApiKey` rows.
+# loaded set of credential rows: `ApiKey` itself, and — since SPGD-1934 — the `sgu_`/`sga_`
+# siblings, whose retirement vocabulary the seam reads and whose rotation-less rows strand
+# nothing.
 #
 # The three surfaces it serves (repositories#show, the API's credential-health block and the
 # repositories grid) pin their own ends at the request layer — the response bodies, the page
@@ -237,6 +239,65 @@ RSpec.describe ApiKeyPartition do
       empty = described_class.for([])
       expect(empty.last_api_request_at).to be_nil
       expect(empty.last_live_api_request_at).to be_nil
+    end
+  end
+
+  # The seam's totality over the credential family, pinned at unit grain: `.for` answers about
+  # `UserApiKey` (`sgu_`) and `AgentApiKey` (`sga_`) rows the same way it answers about `ApiKey`
+  # rows, on the vocabulary every credential carries — the retirement split, the presented side
+  # and the two timestamps. What the sibling rows CANNOT answer is the stranded question (they
+  # carry no rotation), and the honest answer they get is an empty stranded side and a nil
+  # rotation time — never a crash. SPGD-1934's closure disclosure is the reader that made this
+  # contract load-bearing: it reads `live_rows` off mixed sibling loads on /account.
+  describe "the sibling credentials" do
+    # @intent: { entity: "ApiKeyPartition", action: "split personal-key rows", behavior: "one partition over mixed loaded UserApiKey rows puts live and revoked rows on their own sides with an empty stranded side, and the two timestamps read off the live rows only", layer: "unit" }
+    it "splits loaded personal-key rows live from revoked, stranding none of them" do
+      owner = create_user(github_uid: "3001", github_handle: "personal-holder")
+      live = create_user_api_key(user: owner, name: "Laptop")
+      live.touch_last_used!
+      live.update_columns(last_used_at: 1.hour.ago)
+      revoked = create_user_api_key(user: owner, name: "Retired")
+      revoked.revoke!
+      revoked.touch_last_used!
+      revoked.update_columns(last_used_at: 5.minutes.ago)
+
+      partition = described_class.for(owner.user_api_keys.to_a)
+
+      expect(partition.live_rows).to contain_exactly(live.reload)
+      expect(partition.revoked_rows).to contain_exactly(revoked.reload)
+      expect(partition.stranded_rows).to be_empty
+      expect(partition.last_api_request_at).to eq(live.reload.last_used_at)
+      expect(partition.last_live_api_request_at).to eq(live.reload.last_used_at)
+      expect(partition.stranded_rotation_time).to be_nil
+    end
+
+    # The SPGD-1934 shape, at the grain the request spec cannot isolate: a mixed loaded set of
+    # agent rows — the live side the closure disclosure counts and the revoked side it does not —
+    # answers the retirement split through the same seam, and the presented side reads off the
+    # MIXED load too, so the two agent-row readers that hand in a revoked-only load hold a
+    # construction choice rather than a crash guard.
+    # @intent: { entity: "ApiKeyPartition", action: "split agent-key rows", behavior: "one partition over mixed loaded AgentApiKey rows puts live, revoked and presented-revoked rows on their own sides with an empty stranded side, so the closure count and the presented-revoked readers both answer off any load", layer: "unit" }
+    it "splits loaded agent-key rows the same way, presented side included" do
+      owner = create_user(github_uid: "3002", github_handle: "agent-holder")
+      live = create_agent_api_key(user: owner,
+                                  repositories: [create_repository(user: owner, github_full_name: "acme/fleet-repo")],
+                                  name: "Fleet")
+      live.touch_last_used!
+      live.update_columns(last_used_at: 1.hour.ago)
+      presented = create_agent_api_key(user: owner,
+                                       repositories: [create_repository(user: owner, github_full_name: "acme/loud-repo")],
+                                       name: "Loud")
+      presented.revoke!
+      presented.touch_last_refused!
+
+      partition = described_class.for(owner.agent_api_keys.to_a)
+
+      expect(partition.live_rows).to contain_exactly(live.reload)
+      expect(partition.presented_revoked_rows).to contain_exactly(presented.reload)
+      expect(partition.stranded_rows).to be_empty
+      expect(partition.last_api_request_at).to eq(live.reload.last_used_at)
+      expect(partition.last_live_api_request_at).to eq(live.reload.last_used_at)
+      expect(partition.stranded_rotation_time).to be_nil
     end
   end
 

@@ -108,12 +108,15 @@ class Api::V1::UserRepositoryAgentKeysController < Api::BaseController
   # The read mirrors `RepositoryOverview#serialized_credential_health`'s construction for the
   # `sgk_` sibling, including the seam the split is read through: the retained rows a `WHERE`
   # would have filtered out are loaded ONCE — `revoked.covering(repository).eager_load(:user)`,
-  # every row REVOKED, so the partition's stranded half (a rotation question AgentApiKey has no
-  # concept of) is never reached — and the presented side comes from `ApiKeyPartition`, the one
+  # every row REVOKED, so the partition sees exactly the side this action renders — and the
+  # presented side comes from `ApiKeyPartition`, the one
   # place the collection split is spelled (`spec/models/api_key_partition_spec.rb` holds that
   # repo-wide property). Filtering these rows by hand here would be a second spelling of the
   # split, free to drift from the one /account reads, and this block exists to stop the API and
-  # /account disagreeing about a key.
+  # /account disagreeing about a key. (The partition is safe on agent rows on any load since
+  # SPGD-1934 — its stranded side is a rotation question AgentApiKey has no concept of, and is
+  # asked only of rows carrying it — so the every-row-revoked shape is the honest scope of this
+  # read, not a crash guard.)
   #
   # THE NEGATIVE IS SERVED, NOT OMITTED — the sibling block's standing rule: an empty result
   # renders `{"agent_keys": []}` with 200, so "no revoked key is still being presented" is an

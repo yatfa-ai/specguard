@@ -44,10 +44,22 @@
 # `grouped_by_repository` hand each repository's rows to a per-repository partition. Both are
 # correct hands; neither is assumed.
 #
+# That reach extends past `ApiKey` itself: the sibling credential classes (`UserApiKey`, the
+# `sgu_` personal token, and `AgentApiKey`, the `sga_` agent key) carry the same retirement
+# vocabulary — `revoked?`, `revoked_and_still_presented?`, `last_used_at` — but no rotation,
+# which is a question only the `sgk_` credential has. The stranded side is therefore asked of a
+# row only where the row carries the predicate: a rotation-less credential cannot be stranded,
+# so its live side comes back unstranded and {#stranded_rotation_time} is nil. What made
+# `.for` total over the family is SPGD-1934's closure disclosure, which reads {#live_rows} off a
+# mixed loaded set of `sgu_`/`sga_` rows on /account — the one split it needs, at the one site
+# the split is allowed to live. (`grouped_by_repository` stays `ApiKey`-shaped: it groups on
+# `repository_id`, a column only the `sgk_` credential carries.)
+#
 # == The answers
 #
 # * {#live_rows} and {#revoked_rows} — the retirement split, by `revoked?` per row.
-# * {#stranded_rows} — the live side ∧ `rotated_and_unused?`. READ OFF THE LIVE SIDE, and that
+# * {#stranded_rows} — the live side ∧ `rotated_and_unused?`, asked of a row only where the
+#   row carries that predicate. READ OFF THE LIVE SIDE, and that
 #   placement is the rule "revocation outranks rotation": a key rotated and THEN revoked is both,
 #   the revocation is the newer and stronger fact, and it must surface as revoked — never as
 #   stranded. Pinned by `spec/requests/api/v1/repository_credential_health_spec.rb` ("reports a
@@ -94,7 +106,18 @@ class ApiKeyPartition
     @rows = rows.to_a
     @live_rows = @rows.reject(&:revoked?)
     @revoked_rows = @rows.select(&:revoked?)
-    @stranded_rows = @live_rows.select(&:rotated_and_unused?)
+    # The stranded side is a ROTATION question, and rotation belongs to the `sgk_` credential
+    # alone: `UserApiKey` and `AgentApiKey` carry the retirement vocabulary but no
+    # `rotated_and_unused?`, and a credential that cannot be rotated cannot be stranded — so
+    # their live side is asked the predicate nowhere and comes back unstranded. Asked unguarded
+    # (`select(&:rotated_and_unused?)` over the live side), a sibling load raised NoMethodError
+    # instead of answering, which is why the two agent-row readers (the dashboard's
+    # presented-revoked panel and the API's `presented_revoked` action) have always handed in a
+    # revoked-only load; the guard makes `.for` total over the credential family instead of
+    # leaving that caller-shape rule to be remembered (SPGD-1934 reads `live_rows` off sibling
+    # rows, where no such shape exists). `grouped_by_repository` above stays an `ApiKey`-shaped
+    # reader — its grouping key is `repository_id`, a column only the `sgk_` credential carries.
+    @stranded_rows = @live_rows.select { |row| row.respond_to?(:rotated_and_unused?) && row.rotated_and_unused? }
     @presented_revoked_rows = @revoked_rows.select(&:revoked_and_still_presented?)
     @last_api_request_at = @live_rows.filter_map(&:last_used_at).max
     @last_live_api_request_at = (@live_rows - @stranded_rows).filter_map(&:last_used_at).max

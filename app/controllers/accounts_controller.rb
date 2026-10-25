@@ -10,6 +10,9 @@
 # make each of those a second top-level page.
 class AccountsController < ApplicationController
   include GithubUserSession
+  # `pluralize` for the post-close agent-key notice (SPGD-1934) — the one view helper this
+  # controller borrows, named here rather than hand-rolling a plural at the call site.
+  include ActionView::Helpers::TextHelper
 
   before_action :require_authentication
 
@@ -18,13 +21,20 @@ class AccountsController < ApplicationController
     # panel above the table is about that same row. Tie-broken by id so two keys minted in the same
     # instant — which a person clicking twice can produce — still order deterministically, the same
     # rule `Repository#latest_test_run` follows.
-    @user_api_keys = current_user.user_api_keys.order(created_at: :desc, id: :desc)
+    #
+    # `.load` on both key relations (SPGD-1934): the closure panel at the foot of this page
+    # quantifies its disclosure by reading the live side of these rows off `ApiKeyPartition` in
+    # Ruby, and materializing them here —
+    # once, where the tables were going to read them anyway — keeps that composition free even
+    # when a table takes its empty-state branch and would otherwise never enumerate the
+    # relation at all.
+    @user_api_keys = current_user.user_api_keys.order(created_at: :desc, id: :desc).load
 
     # THE AGENT CREDENTIALS (SPGD-952) — the same ordering rule as the personal keys above, and on
     # the same page because the same person mints both. The panel below the personal-keys panel is
     # where a reader learns what these are: a set of repositories and a set of permissions, fixed
     # at mint time out of this person's rights, carried by a token that speaks for nobody.
-    @agent_api_keys = current_user.agent_api_keys.order(created_at: :desc, id: :desc)
+    @agent_api_keys = current_user.agent_api_keys.order(created_at: :desc, id: :desc).load
 
     # WHAT THIS PERSON MAY GRANT an agent key access to — the same read-side boundary every
     # surface asking "which repositories may this person see" asks, ordered the way the mint
@@ -147,13 +157,26 @@ class AccountsController < ApplicationController
   # session, then send the person to the signed-out root with a message that says what happened.
   # The root page is also where a stray sign-in attempt would land them, so the notice and that
   # refusal alert describe the same state in the same words.
+  #
+  # SPGD-1934 — the notice also names the one consequence the panel quantified, when it is
+  # non-zero: how many LIVE agent keys stopped authenticating with the closure. That is the
+  # fact the person is most likely to meet next — a CI job answering 401 under an `sga_` key
+  # whose owner no longer resolves — and the signed-out root page is where they land to see
+  # it. The count is read off `AgentApiKey.live` before the `update!` (the same live half
+  # `authenticate` resolves through; the archived-owner merge is moot one line later) and is
+  # appended only when positive, so the notice for a person holding no live agent keys is
+  # byte-identical to the sentence it has always been.
   def close
+    live_agent_keys = current_user.agent_api_keys.live.count
     current_user.update!(archived_at: Time.current)
     reset_session
 
-    redirect_to root_path,
-                notice: "Your account is closed. You have been signed out, and SpecGuard can no " \
-                        "longer sign you in. Nothing of yours was deleted."
+    notice = +"Your account is closed. You have been signed out, and SpecGuard can no " \
+              "longer sign you in. Nothing of yours was deleted."
+    notice << " Your #{pluralize(live_agent_keys, 'live agent key')} stopped " \
+              "authenticating when the account closed." if live_agent_keys.positive?
+
+    redirect_to root_path, notice: notice
   end
 
   private
