@@ -507,6 +507,19 @@
       is the one control here that cannot be undone, so it is the one a reader meets after they
       have seen everything they might still do instead.
 
+      SPGD-1934 — the sentences below are composed, not static: `AccountsHelper` quantifies
+      the disclosure from the relations the key tables above enumerated (no query of its
+      own), because a person closing an account that still carries live automation is the
+      one reader who most needs to know exactly what stops. Their `sgu_` tokens die with
+      them AND every `sga_` agent key they minted dies with the archived owner at
+      `AgentApiKey.authenticate`'s `User.active` merge, and an agent key is
+      multi-repository automation that gives no warning. The counts name LIVE keys only — a
+      revoked row already authenticates nothing, so it is not counted as a cut — and an
+      owner holding neither live kind keeps the death sentences verbatim. The
+      what-remains split is keyed on holding rows of either kind rather than on liveness,
+      because a retained revoked row is exactly what "rows carrying your name, their
+      tokens dead" describes.
+
       The copy in this panel is the enforcement read literally off the code, not asserted:
       sign-in refusal is SessionsController#refuse_archived, the instant key refusal is the
       User.active merge in UserApiKey.authenticate, and "nothing is destroyed" is the
@@ -514,6 +527,15 @@
       refusal story told here rather than papered over: there is no restore surface in the
       product, and SessionsController's own alert now says the same thing — the two must not
       drift, which is why both name the operator rather than an in-product undo. %>
+  <%# The quantified disclosure's inputs, read off the relations the tables above enumerated —
+      the live side of each kind comes back through `ApiKeyPartition.for(...).live_rows`, the
+      seam that owns that split, over loaded records, so the panel adds no query. `holds_keys`
+      is the gate on the remain-truths below: an owner holding no personal or agent ROWS keeps
+      the single sentence that was already the whole truth for them. %>
+  <% live_user_keys = closure_live_user_keys(@user_api_keys) %>
+  <% live_agent_keys = closure_live_agent_keys(@agent_api_keys) %>
+  <% holds_keys = @user_api_keys.any? || @agent_api_keys.any? %>
+
   <%= render UI::PanelComponent.new(title: "Close account", id: "account-closure",
                                     class: "mt-6") do %>
     <p class="mb-3 text-sm text-app-content-secondary">
@@ -530,30 +552,30 @@
         session you are in right now ends with this click.
       </li>
       <li>
-        <strong>Every personal API key you hold stops authenticating</strong> — every
-        <code class="font-mono text-xs">sgu_</code> token, including keys still running on
-        machines you no longer have. Nothing that uses them warns you first.
+        <strong>Every personal API key you hold stops authenticating</strong> —
+        <%= closure_key_death_html(live_user_keys, live_agent_keys) %>
+        Nothing that uses them warns you first.
       </li>
       <li>
-        <strong>Nothing is destroyed.</strong> Your repositories, test runs, spec intents, the
-        keys you minted and the memberships you granted all remain, with your name still on
-        them. Closure is a departure, not a deletion.
+        <strong>Nothing is destroyed.</strong>
+        <%= closure_keys_remain_html(holds_keys) %>
+        Closure is a departure, not a deletion.
       </li>
     </ul>
 
     <%# The same `button_to` + `turbo_confirm` shape the Revoke and Disconnect buttons above
-        take, and the same disclosure discipline — the dialog is where the three consequences
+        take, and the same disclosure discipline — the dialog is where the consequences
         get said a second time, because a confirm dialog is often the only thing a person
-        actually reads. %>
+        actually reads. The key sentences are the panel's own, composed plain by the same
+        helpers from the same counts, so the two disclosures cannot drift (SPGD-1934). %>
     <div class="mt-4">
+      <% confirm_text = "Close your account? You cannot sign in again, and this session ends " \
+                        "now. #{closure_key_death_plain(live_user_keys, live_agent_keys)} " \
+                        "#{closure_keys_remain_plain(holds_keys)} " \
+                        "This cannot be undone from within SpecGuard." %>
       <%= button_to "Close account…", close_account_path, method: :post,
                     class: UI::ButtonComponent.classes(variant: :danger, size: :sm),
-                    form: { data: { turbo_confirm:
-                      "Close your account? You cannot sign in again, and this session ends " \
-                      "now. Every sgu_ API key you hold stops working immediately, including " \
-                      "keys on machines you no longer have. Nothing is deleted — your " \
-                      "repositories, runs, intents, keys and memberships remain, with your " \
-                      "name on them. This cannot be undone from within SpecGuard." } } %>
+                    form: { data: { turbo_confirm: confirm_text } } %>
     </div>
   <% end %>
 <% end %>
