@@ -152,6 +152,58 @@ RSpec.describe "Regenerating an API key", type: :request do
     end
   end
 
+  describe "a revoked key" do
+    # SPGD-1930: a revoked row is reachable here through a stale page — the Regenerate button
+    # renders for live rows only — so the refusal has to live in the action rather than in the
+    # UI hiding. Rotating a retired row would reveal a replacement `authenticate` can never
+    # serve and overwrite the digest the failure path attributes a still-presented token with,
+    # so the gesture is refused with the remedy that actually exists: minting a new key.
+    # @intent: {"entity": "ApiKey", "action": "refuse rotating a revoked key", "behavior": "POST regenerate on a revoked key redirects to the bare repository page with an alert naming the key and the New API key remedy, and no sgk_ token is revealed on the follow", "layer": "request"}
+    it "refuses the rotation, says why, and reveals nothing" do
+      api_key = repository.api_keys.create!(name: "CI")
+      api_key.revoke!
+
+      post regenerate_repository_api_key_path(repository, api_key)
+
+      # The bare page — no reveal anchor, on `#destroy`'s reasoning: nothing is revealed, so
+      # there is no panel to land on and the fragment would point at nothing rendered.
+      expect(response).to redirect_to(repository_path(repository))
+      follow_redirect!
+
+      expect(response.body).to include("CI was revoked, so it cannot be regenerated")
+      expect(response.body).to include("Mint a replacement with New API key")
+      # The refusal must not fake the success surfaces either — no rotation panel, no token.
+      expect(response.body).not_to include("Your regenerated API key")
+      expect(revealed_token).to be_nil
+    end
+
+    # @intent: {"entity": "ApiKey", "action": "refuse rotating a revoked key", "behavior": "the refused POST leaves token_digest and rotated_at unchanged, and a Bearer request with the revoked token still attributes: last_refused_at is stamped and the key renders under Revoked and still presented", "layer": "request"}
+    it "leaves the digest and rotation date untouched, keeping a still-presented token attributable" do
+      api_key = repository.api_keys.create!(name: "CI")
+      revoked_token = api_key.raw_token
+      api_key.revoke!
+      digest_before = api_key.reload.token_digest
+
+      post regenerate_repository_api_key_path(repository, api_key)
+
+      # The digest is the only handle `Api::BaseController#attribute_refused_revocation` resolves
+      # a still-presented revoked token by — overwritten by a rotation, the 401 below would land
+      # on nothing and read as an unknown token, and the page would lose the only evidence the
+      # token is still out there.
+      reloaded = api_key.reload
+      expect(reloaded.token_digest).to eq(digest_before)
+      expect(reloaded.rotated_at).to be_nil
+
+      get "/api/v1/repository", headers: { "Authorization" => "Bearer #{revoked_token}" }
+      expect(response).to have_http_status(:unauthorized)
+
+      get repository_path(repository)
+      expect(response.body).to include("Revoked and still presented.")
+      expect(response.body).to include("last presented")
+      expect(api_key.reload.last_refused_at).to be_present
+    end
+  end
+
   describe "the reveal panel" do
     def reveal_panel
       Capybara.string(response.body).find("[data-controller='copy-text'][data-copy-text-auto-copy-value]")

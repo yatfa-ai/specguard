@@ -12,6 +12,15 @@ class ApiKey < ApplicationRecord
   TOKEN_PREFIX = "sgk_"
   TOKEN_BYTES = 24
 
+  # `regenerate!`'s refusal, named once at the top of the class with the other nouns the class
+  # exports: rotating a revoked key has no honest outcome, so the method raises this rather than
+  # faking a rotation a revoked row cannot carry (see the method for what would break). The
+  # controller checks `revoked?` first and answers with a redirect, so in the web flow this raise
+  # is the backstop for every caller after that one — exactly the shape `GithubApi`'s error
+  # family follows, a controlled refusal a rescue can catch rather than a bare `RuntimeError`
+  # nothing can tell apart from a crash.
+  Revoked = Class.new(StandardError)
+
   # What a key is called when nobody chose a name for it.
   #
   # Here rather than at any one of the mint sites, because each mints a key the person never named
@@ -161,6 +170,17 @@ class ApiKey < ApplicationRecord
   # rather than a detail of it: the row can then never carry a new token beside a `last_used_at`
   # stamped by the old one without also carrying the timestamp that says so.
   #
+  # A REVOKED key refuses the gesture outright (`Revoked`), and the guard reads FIRST so nothing
+  # on the row moves. Rotation on a retired row has no honest outcome on either half of the
+  # retirement: the replacement `authenticate` resolves would hand out a token that can never
+  # work (the method filters to `live`), revealed once through a flash that says to copy it; and
+  # overwriting `token_digest` would erase the only handle
+  # `Api::BaseController#attribute_refused_revocation` has for attributing a still-presented
+  # token to this row — the "Revoked and still presented" evidence would silently become an
+  # unattributable 401. The refusal mirrors `revoke!`'s first-wins guard read from the other
+  # side: revocation is terminal, so the gesture that would quietly rewrite its evidence raises
+  # before touching a column.
+  #
   # {#rotated_and_unused?} is the predicate the rotated-but-unused state is DERIVED from, and it is
   # where the rule lives — but the column itself is not private to this class. It is also SERVED, by
   # `GET /api/v1/repository`, under both `api_key.rotated_at` and
@@ -169,6 +189,11 @@ class ApiKey < ApplicationRecord
   # changing when this is written or cleared moves a published API contract and rendered web copy
   # along with the predicate — the blast radius is not local to this model.
   def regenerate!
+    # The guard is deliberately the method's first statement: by the time it passes, nothing has
+    # been cleared, assigned or stamped, so a refused call leaves `token_digest` and `rotated_at`
+    # exactly as it found them.
+    raise Revoked, "cannot regenerate a revoked key — a revoked key never authenticates again" if revoked?
+
     # `assign_token` is idempotent by design, and that is exactly what has to be defeated here:
     # this row is already carrying the token it was minted with.
     @raw_token = nil

@@ -41,7 +41,20 @@ class ApiKeysController < ApplicationController
   # is no way to re-show the old one — `ApiKey` keeps a digest and nothing else — so the only
   # honest answer to "I lost my key" is to replace it.
   #
-  # This travels the same reveal-once flash as `create`, deliberately: a regenerated token is
+  # A REVOKED key is the one row this cannot recover, and the branch below refuses it rather than
+  # letting the model's `regenerate!` fake a rotation a retired row cannot carry: the replacement
+  # would never authenticate (`ApiKey.authenticate` filters to `live`) and the digest swap would
+  # erase the evidence `Api::BaseController#attribute_refused_revocation` attributes a
+  # still-presented token with. The alert names the remedy that actually exists — minting a new
+  # key — and no reveal flash of either kind is set. This is reachable through a stale page (the
+  # Regenerate button renders for live rows only), a second `keys.manage` holder acting after a
+  # revoke, or a double-submit, not through a normal click on a current render.
+  #
+  # The refusal redirects to the bare repository page — no `REVEAL_ANCHOR` fragment, on the same
+  # reasoning `#destroy` states: nothing is revealed, so there is no panel to land on and the
+  # fragment would point at an element that is not rendered.
+  #
+  # The live branch travels the same reveal-once flash as `create`, deliberately: a regenerated token is
   # exactly as unrecoverable as a freshly minted one, and a second reveal path would be a second
   # chance to get that wrong. Gated at `:keys_manage`, matching `create` and `destroy` — rotating a
   # key is bounded above by minting one, since the holder of that permission can already replace
@@ -49,15 +62,25 @@ class ApiKeysController < ApplicationController
   def regenerate
     repository = current_repository(:keys_manage)
     api_key = repository.api_keys.find(params[:id])
-    api_key.regenerate!
 
-    reveal(api_key)
-    # Not folded into `reveal`: it is what distinguishes the two callers, and it is read to decide
-    # whether the panel warns that something just stopped working.
-    flash[:revealed_api_key_regenerated] = true
-    redirect_to reveal_path(repository),
-                notice: "API key regenerated. The previous token has stopped working — copy the new one now, " \
-                        "it is shown only once."
+    # Checked on the row the lookup already loaded — no query the live path doesn't pay — so the
+    # model's `Revoked` raise stays a backstop for every caller after this one rather than the
+    # thing the browser meets.
+    if api_key.revoked?
+      redirect_to repository_path(repository),
+                  alert: "#{api_key.name} was revoked, so it cannot be regenerated — a revoked key " \
+                         "never authenticates again. Mint a replacement with New API key."
+    else
+      api_key.regenerate!
+
+      reveal(api_key)
+      # Not folded into `reveal`: it is what distinguishes the two callers, and it is read to decide
+      # whether the panel warns that something just stopped working.
+      flash[:revealed_api_key_regenerated] = true
+      redirect_to reveal_path(repository),
+                  notice: "API key regenerated. The previous token has stopped working — copy the new one now, " \
+                          "it is shown only once."
+    end
   end
 
   def destroy
