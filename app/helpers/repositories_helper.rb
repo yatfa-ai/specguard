@@ -98,6 +98,24 @@ module RepositoriesHelper
     # `?near_duplicate_cluster=` rides the same conditional carry (SPGD-1888): it opens a drawer on
     # the census panel, and following a link elsewhere on the page must not silently close it.
     asks[:near_duplicate_cluster] = @near_duplicate_cluster_request if @near_duplicate_cluster_request
+    # `?run=` rides the same conditional carry (SPGD-1928): the run the reader anchored BY ID — the
+    # only handle that names one of two same-sha rows — must survive a click elsewhere on the page,
+    # exactly as the sha anchor does. Two precedence rules ride with it, because `run` BEATS
+    # `commit_sha` on the read side (`RepositoryDashboard` resolves the id first):
+    #
+    # * a link whose overrides name an explicit `commit_sha:` — every "Read this run" sha cell and
+    #   the filter bar's `commit_sha: nil` — must DROP the carried run rather than pin it, or those
+    #   gestures would stay anchored to the old row while their own sha named another. An override
+    #   of the losing ask is a re-anchor, and a re-anchor supersedes both anchors.
+    # * the sha CARRY must not ride beside the run carry at all: a link emitting `commit_sha=`
+    #   and `run=` together would name two rows where the target honours one, and every later
+    #   reader of that href would have to know which wins. When the run carry is emitted the sha
+    #   ask is dropped from `asks`, so the two anchors never share a URL — an id ask names its row
+    #   completely, and a sha ask is how you leave it.
+    if @run_request
+      asks[:run] = @run_request unless overrides.key?(:commit_sha)
+      asks.delete(:commit_sha)
+    end
 
     repository_path(repository, **asks.merge(overrides), anchor: anchor)
   end
@@ -389,7 +407,8 @@ module RepositoriesHelper
   # endpoint gives about the same substitution: without it the URL names a sha, the page describes
   # a different run, and nothing anywhere says the ask was not honoured.
   #
-  # Decided on WHETHER THE ASK RESOLVED — `anchored` is the row `?commit_sha=` found, or nil — and
+  # Decided on WHETHER THE ASK RESOLVED — `anchored` is the row `?commit_sha=` or `?run=` found,
+  # or nil — and
   # never by comparing two shas. That is `serialized_run_anchor`'s rule (`resolved:` is read off the
   # finder, not off an equality) and it is what stops the disclosure and the choice it discloses from
   # coming apart: a repository can hold two runs of one commit, and the sha a reader asked for is
@@ -398,14 +417,42 @@ module RepositoriesHelper
   # Both branches return a plain String and not `html_safe` markup, so escaping is ERB's — the same
   # stance `#trajectory_branch_fallback_notice` takes one ask over, and it matters here because the
   # fallback branch prints back a sha nobody validated.
+  #
+  # A `?run=` ask (SPGD-1928) is worded by the resolved ROW rather than by the shared sha: the id
+  # ask exists precisely because the sha alone does not name one of two same-sha rows, so the
+  # sentence names the id, the sha and the ingestion age — the three facts the "Recent runs" rows
+  # display, by which the reader can tell which of the two they are reading. The wording choice is
+  # computed from the same resolved row (`anchored`) the marking below is, never from comparing the
+  # ask to what came back.
   def run_anchor_notice(requested, anchored, shown)
     return nil if requested.blank?
     return run_anchor_fallback_sentence(requested, shown) if anchored.nil?
+
+    if @run_request
+      return "This page is anchored on run ##{@run_request} — #{anchored.commit_sha.first(7)}, " \
+             "ingested #{time_ago_in_words(anchored.created_at)} ago — the run this URL names — " \
+             "rather than on whichever run reported most recently. Every panel describing a single " \
+             "run describes that one. “Recent runs” and “Suite growth” are histories rather than " \
+             "rows, so they are not re-anchored: the run named here need not be the newest one " \
+             "below, and where this commit was re-run, the ingestion age is what tells its rows " \
+             "apart."
+    end
 
     "This page is anchored on #{anchored.commit_sha.first(7)} — the run this URL names — rather " \
       "than on whichever run reported most recently. Every panel describing a single run describes " \
       "that one. “Recent runs” and “Suite growth” are histories rather than rows, so they are not " \
       "re-anchored: the run named here need not be the newest one below."
+  end
+
+  # The ask the Overview's anchor notice is gated on, as the reader made it: the raw sha ask for a
+  # `?commit_sha=` page, and `run #<id>` for a `?run=` page (SPGD-1928) — an id is what was asked
+  # for, and both the notice's gate and its fallback's wording name the ask through this seam so
+  # they cannot drift from how the ask is spelled. A run ask can never be a sha and a sha can
+  # never name one of two same-sha rows, so the two spellings never render the same sentence.
+  def run_anchor_ask_label
+    return "run ##{@run_request}" if @run_request
+
+    @run_anchor_request
   end
 
   # What the anchor means FOR THE "RECENT RUNS" LIST — the panel's half of the same disclosure
@@ -435,12 +482,39 @@ module RepositoriesHelper
   # `listed` is passed in rather than read off `@recent_test_runs`, so the membership test and the
   # `aria-current` marking in the view cannot come to be asked of two different collections — the
   # same reason `anchored` is the row rather than a sha.
+  #
+  # A `?run=` ask (SPGD-1928) words both non-fallback states by the resolved ROW — id, sha and
+  # ingestion age, the facts the rows below display — because the sha alone does not name one of
+  # two same-sha rows and the ask was made by id precisely to get past that. Computed off the same
+  # resolved row the marking is, never off the ask, so the caption and the mark cannot disagree
+  # about which row the page is on.
   def recent_runs_anchor_note(anchored, listed)
     return nil if anchored.nil?
 
     if listed.any? { |test_run| test_run.id == anchored.id }
+      if @run_request
+        if listed.any? { |test_run| test_run.id != anchored.id && test_run.commit_sha == anchored.commit_sha }
+          return "This page is anchored on run ##{@run_request} — #{anchored.commit_sha.first(7)}, " \
+                 "ingested #{time_ago_in_words(anchored.created_at)} ago — the run the URL named, " \
+                 "so the marked row here is the one every panel above describes. Another row in " \
+                 "this list carries the same sha and is a different run; the mark is not on it."
+        end
+
+        return "This page is anchored on run ##{@run_request} — #{anchored.commit_sha.first(7)}, " \
+               "ingested #{time_ago_in_words(anchored.created_at)} ago — the run the URL named, so " \
+               "the marked row here is the one every panel above describes, and it is not " \
+               "necessarily the newest."
+      end
+
       return "This page is anchored on a run the URL named, so the marked row here is the one " \
              "every panel above describes — and it is not necessarily the newest."
+    end
+
+    if @run_request
+      return "This page is anchored on run ##{@run_request} — #{anchored.commit_sha.first(7)}, " \
+             "ingested #{time_ago_in_words(anchored.created_at)} ago — the run the URL named, " \
+             "which every panel above describes. It is not among the most recent runs listed " \
+             "here, so no row below is marked."
     end
 
     "This page is anchored on #{anchored.commit_sha.first(7)} — the run the URL named, which every " \

@@ -26,8 +26,25 @@
               columns: ["Commit", "Branch", { label: "Tests", end: true }, { label: "Duration", end: true }, { label: "Annotated", end: true }, "Ingested",
                         *(repository_policy.can?(:repo_delete) ? [{ label: "", sort: false }] : [])],
               describedby: "recent-runs-basis", sortable: true) do %>
+          <% seen_commit_shas = [] %>
           <% @recent_test_runs.each do |test_run| %>
             <% current = test_run.id == @latest_test_run&.id %>
+            <%# The row's way IN to being read (SPGD-1928). `test_runs` has no uniqueness on
+                `commit_sha`, so two rows here can print the same seven characters, and a sha link
+                always opens the NEWEST of them — `Repository#latest_test_run_for_commit` sorts by
+                `created_at DESC`. A row whose sha already appeared higher in this newest-first
+                window is therefore the one row a sha link can never open: its link is addressed
+                by run id instead, which is the only handle that distinguishes the pair. Every
+                other row keeps the sha link it has always had, so a repository with no re-runs
+                renders the exact hrefs it rendered before this existed. `seen` is the shas of the
+                rows above this one, walked in the same newest-first order the list renders. %>
+            <% read_this_run_href =
+                 if seen_commit_shas.include?(test_run.commit_sha)
+                   drill_down_path(@repository, run: test_run.id, anchor: "summary")
+                 else
+                   drill_down_path(@repository, commit_sha: test_run.commit_sha, anchor: "summary")
+                 end %>
+            <% seen_commit_shas << test_run.commit_sha %>
             <%= drawer_row(test_run.id, kind: "Run", title: "#{test_run.commit_sha.first(7)} on #{test_run.branch.presence || 'no branch'}",
                   facts: [["Commit", test_run.commit_sha], ["Branch", test_run.branch.presence || "not reported"],
                           ["Tests", number_with_delimiter(test_run.total_specs_count.to_i)],
@@ -35,7 +52,7 @@
                           ["Duration", test_run.duration_label + (test_run.multi_shard? && test_run.duration_reported? ? " (#{test_run.wall_clock_coverage})" : "")],
                           ["Annotated", test_run.total_specs_count.to_i.zero? ? "no tests" : "#{test_run.annotated_ratio}%"],
                           ["Ingested", "#{time_ago_in_words(test_run.created_at)} ago"]],
-                  actions: [*(current ? [] : [["Read this run", drill_down_path(@repository, commit_sha: test_run.commit_sha, anchor: "summary"), :primary]]),
+                  actions: [*(current ? [] : [["Read this run", read_this_run_href, :primary]]),
                             ["Open commit on GitHub", @repository.github_commit_url(test_run.commit_sha), :ghost]]) do %>
               <td>
                 <%= row_open(test_run.commit_sha.first(7), mono: true, current: current) %>

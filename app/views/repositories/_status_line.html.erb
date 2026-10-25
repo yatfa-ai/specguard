@@ -23,7 +23,7 @@
     </span>
   <% end %>
 </div>
-<% if (anchor_notice = run_anchor_notice(@run_anchor_request, @run_anchor_run, @latest_test_run)) %>
+<% if (anchor_notice = run_anchor_notice(run_anchor_ask_label, @run_anchor_run, @latest_test_run)) %>
   <%= render UI::AlertComponent.new(tone: :info, id: "run-anchor-notice") do %><%= anchor_notice %><% end %>
 <% end %>
 <% if (fallback_notice = trajectory_branch_fallback_notice(@trajectory_branch_request, @suite_trajectory)) %>
