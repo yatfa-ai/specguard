@@ -179,12 +179,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
   # A closed owner cannot mint, because minting needs a session — so the instruction that works for
   # a colleague is to ask a member who holds keys.manage.
-  # @intent: {"entity": "Repository", "action": "redirect a closed owner's dead end", "behavior": "a member who cannot mint keys on a repository whose owner closed their account sees the Owner row with the handle and a closed marker, and keyless copy in both the checklist and the wire-up section that says the owner cannot mint and names a keys.manage holder instead of Ask owner to mint one", "layer": "request"}
+  # @intent: {"entity": "Repository", "action": "redirect a closed owner's dead end", "behavior": "a member who cannot mint keys on a repository with no runs, whose owner closed their account, sees the Owner row with the handle and a closed marker, and keyless copy in both the checklist and the wire-up section that says the owner cannot mint and names a keys.manage holder instead of Ask owner to mint one", "layer": "request"}
   it "points a member at a keys.manage holder when the owner's account is closed" do
     owner = create_user(github_uid: "8009", github_handle: "gone-owner")
     repository = create_repository(user: owner)
     create_membership(repository: repository, user: @user)
-    create_test_run(repository: repository)
     owner.update!(archived_at: Time.current)
 
     get repository_path(repository)
@@ -195,8 +194,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).to match(%r{<dt[^>]*>\s*Owner\s*</dt>\s*<dd[^>]*>\s*gone-owner \(account closed\)\s*</dd>}m)
   end
 
-  # The wire-up body is also rendered by the onboarding checklist, so the run-less case above
-  # covers the checklist and this one covers the Delivery section's own copy.
+  # The example above has no runs, so it renders the onboarding checklist; this one has runs and
+  # covers the Delivery section's own copy.
   # @intent: {"entity": "Repository", "action": "redirect a closed owner's dead end in wire-up", "behavior": "on a repository that has runs and no keys, whose owner closed their account, the Wire this repository up section names a keys.manage holder and not Ask owner to mint one", "layer": "request"}
   it "rewrites the wire-up copy for a closed owner once runs exist" do
     owner = create_user(github_uid: "8010", github_handle: "gone-owner")
