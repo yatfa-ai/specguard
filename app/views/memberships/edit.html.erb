@@ -63,8 +63,9 @@
             <p class="mt-1">
               <%= @membership.user.github_handle %> currently holds
               <%= stripped.to_sentence %>, which you do not hold yourself and therefore cannot
-              re-grant. Saving this form removes <%= stripped.size == 1 ? "it" : "them" %>. Ask
-              <%= @repository.user.display_name %> if that is not what you intend.
+              re-grant. Saving this form removes <%= stripped.size == 1 ? "it" : "them" %>.<% if repository_owner_closed?(@repository) %>
+              <%= repository_closed_owner_members_sentence(@repository) %><% else %> Ask
+              <%= @repository.user.display_name %> if that is not what you intend.<% end %>
             </p>
           <% end %>
         </div>

@@ -177,6 +177,40 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).to include(%(id="api-keys"))
   end
 
+  # A closed owner cannot mint, because minting needs a session — so the instruction that works for
+  # a colleague is to ask a member who holds keys.manage.
+  # @intent: {"entity": "Repository", "action": "redirect a closed owner's dead end", "behavior": "a member who cannot mint keys on a repository with no runs, whose owner closed their account, sees the Owner row with the handle and a closed marker, and keyless copy in both the checklist and the wire-up section that says the owner cannot mint and names a keys.manage holder instead of Ask owner to mint one", "layer": "request"}
+  it "points a member at a keys.manage holder when the owner's account is closed" do
+    owner = create_user(github_uid: "8009", github_handle: "gone-owner")
+    repository = create_repository(user: owner)
+    create_membership(repository: repository, user: @user)
+    owner.update!(archived_at: Time.current)
+
+    get repository_path(repository)
+
+    expect(page_text).to include("This repository has no API key yet")
+    expect(page_text).not_to include("Ask gone-owner to mint one")
+    expect(page_text).to include("gone-owner's account is closed, so the owner cannot mint one. Ask a member who holds keys.manage.")
+    expect(response.body).to match(%r{<dt[^>]*>\s*Owner\s*</dt>\s*<dd[^>]*>\s*gone-owner \(account closed\)\s*</dd>}m)
+  end
+
+  # The example above has no runs, so it renders the onboarding checklist; this one has runs and
+  # covers the Delivery section's own copy.
+  # @intent: {"entity": "Repository", "action": "redirect a closed owner's dead end in wire-up", "behavior": "on a repository that has runs and no keys, whose owner closed their account, the Wire this repository up section names a keys.manage holder and not Ask owner to mint one", "layer": "request"}
+  it "rewrites the wire-up copy for a closed owner once runs exist" do
+    owner = create_user(github_uid: "8010", github_handle: "gone-owner")
+    repository = create_repository(user: owner)
+    create_membership(repository: repository, user: @user)
+    create_test_run(repository: repository)
+    owner.update!(archived_at: Time.current)
+
+    get repository_path(repository)
+
+    wire_up = Capybara.string(response.body).find("#wire-up", visible: :all).text(:all).gsub(/\s+/, " ")
+    expect(wire_up).not_to include("Ask gone-owner")
+    expect(wire_up).to include("Ask a member who holds keys.manage.")
+  end
+
   # @intent: {"entity": "Repository", "action": "name whom to ask", "behavior": "a member who cannot mint keys sees This repository has no API key yet plus a sentence asking the owner by display name to mint one, and no Mint a key link", "layer": "request"}
   it "tells a member who cannot mint keys who to ask for one" do
     owner = create_user(github_uid: "8008", github_handle: "octo-owner")
