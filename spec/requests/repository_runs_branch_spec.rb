@@ -157,6 +157,33 @@ RSpec.describe "Repository recent runs branch narrowing", type: :request do
       narrowed_hrefs = page.all("a[href*='commit_sha=']", visible: :all, minimum: 1).map { |a| a[:href] }
       expect(narrowed_hrefs).to all(include("runs_branch=main"))
     end
+
+    # SPGD-1940: `test_runs` has no uniqueness on `commit_sha`, and a sha link opens the NEWEST run
+    # on that sha repository-wide. On a narrowed window the feature row is the only row with its
+    # sha, so a window-local "seen" list would send the reader to the main run the panel does not
+    # list, with nothing saying so. Such a row is addressed by run id instead.
+    # @intent: {"entity": "RecentRunsPanel", "action": "address a narrowed row by run id when its sha was reported from another branch", "behavior": "on ?runs_branch=feature/x a row whose commit_sha was also reported from main has a Read this run href with run=<its id> and runs_branch= and no commit_sha=, and following it anchors the page on that feature run", "layer": "request"}
+    it "addresses a narrowed row by run id when its sha also exists on another branch" do
+      feature_run = seed_run(commit_sha: "sharedsha1", branch: "feature/x", created_at: 3.hours.ago)
+      seed_run(commit_sha: "sharedsha1", branch: "main", created_at: 2.hours.ago)
+      seed_run(commit_sha: "uniqfeat1", branch: "feature/x", created_at: 4.hours.ago)
+
+      get repository_path(repository, runs_branch: "feature/x")
+
+      href = run_row("sharedsha1").find("a", exact_text: "Read this run", visible: :all)[:href]
+      expect(href).to include("run=#{feature_run.id}")
+      expect(href).to include("runs_branch=")
+      expect(href).not_to include("commit_sha=")
+      # A unique sha keeps the sha link it has always had.
+      unique_href = run_row("uniqfeat1").find("a", exact_text: "Read this run", visible: :all)[:href]
+      expect(unique_href).to include("commit_sha=uniqfeat1")
+
+      uri = URI.parse(href)
+      get [uri.path, uri.query].compact.join("?")
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("run ##{feature_run.id}")
+    end
   end
 
   describe "a runs_branch parameter that is not a narrowing" do
@@ -280,8 +307,8 @@ RSpec.describe "Repository recent runs branch narrowing", type: :request do
   end
 
   describe "query cost" do
-    # @intent: {"entity": "RecentRunsPanel", "action": "price the narrowing at one count", "behavior": "rendering the panel narrowed to a branch issues exactly one more test_runs statement than the default page - the branch total - and no other read moves", "layer": "request"}
-    it "costs exactly one extra count query narrowed, and the default page none" do
+    # @intent: {"entity": "RecentRunsPanel", "action": "price the narrowing at one count", "behavior": "rendering the panel narrowed to a branch issues exactly two more test_runs statements than the default page - the branch total and the newest-run-per-sha read - and no other read moves", "layer": "request"}
+    it "costs one extra count and one newest-per-sha read narrowed, and the default page none" do
       12.times { |i| seed_run(commit_sha: format("brn%04d", i), branch: "main", created_at: (i + 1).hours.ago) }
       2.times { |i| seed_run(commit_sha: format("oth%04d", i), branch: "feature/x", created_at: (i + 1).minutes.ago) }
 
@@ -289,9 +316,13 @@ RSpec.describe "Repository recent runs branch narrowing", type: :request do
       narrowed = queries_against(/FROM "test_runs"/) { get repository_path(repository, runs_branch: "main") }
 
       expect(runs_rows.size).to eq(10)
-      expect(narrowed.size).to eq(default.size + 1)
+      # +1 for the branch total, and at most +1 for the newest-run-per-sha read behind the rows'
+      # "Read this run" links (SPGD-1940).
+      expect(narrowed.size).to eq(default.size + 2)
       expect(narrowed.count { |sql| sql.include?("COUNT") })
         .to eq(default.count { |sql| sql.include?("COUNT") } + 1)
+      expect(narrowed.count { |sql| sql.include?("DISTINCT ON") }).to eq(1)
+      expect(default.count { |sql| sql.include?("DISTINCT ON") }).to eq(0)
     end
   end
 end

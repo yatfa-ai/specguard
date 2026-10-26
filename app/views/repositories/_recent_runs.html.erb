@@ -37,9 +37,20 @@
                 by run id instead, which is the only handle that distinguishes the pair. Every
                 other row keeps the sha link it has always had, so a repository with no re-runs
                 renders the exact hrefs it rendered before this existed. `seen` is the shas of the
-                rows above this one, walked in the same newest-first order the list renders. %>
+                rows above this one, walked in the same newest-first order the list renders.
+                On a narrowed window (`?runs_branch=`, SPGD-1940) that walk is no longer exact: the
+                window is one branch's rows, not the repository's newest-N, so a sha can be unique
+                here while a newer run on another branch holds it, and the sha link would open that
+                unlisted run. There the dashboard supplies `@sha_link_run_ids` — the ids a sha link
+                WOULD open — and every row outside it is addressed by run id. Un-narrowed, the set
+                is nil and the walk above is used untouched. %>
+            <% by_run_id = if @sha_link_run_ids
+                             !@sha_link_run_ids.include?(test_run.id)
+                           else
+                             seen_commit_shas.include?(test_run.commit_sha)
+                           end %>
             <% read_this_run_href =
-                 if seen_commit_shas.include?(test_run.commit_sha)
+                 if by_run_id
                    drill_down_path(@repository, run: test_run.id, anchor: "summary")
                  else
                    drill_down_path(@repository, commit_sha: test_run.commit_sha, anchor: "summary")

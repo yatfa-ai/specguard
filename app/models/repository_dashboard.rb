@@ -507,6 +507,18 @@ class RepositoryDashboard
       @repository.recent_test_runs(limit: @runs_request || RequestedRunsParam::DEFAULT_RUNS,
                                    branch: @runs_branch_request).to_a
     )
+    # Only on a narrowed, non-empty window (SPGD-1940): the ids that a sha link would open — the
+    # NEWEST run per sha in the whole repository, which is what
+    # `Repository#latest_test_run_for_commit` resolves. A narrowed window is not the repository's
+    # newest-N, so a row's sha can be unique inside it while a newer run on another branch holds the
+    # same sha; the view addresses every row outside this set by run id. One statement over the
+    # window's shas. Left nil on an un-narrowed page, where the window-local walk is exact.
+    @sha_link_run_ids = if @runs_branch_request && @recent_test_runs.any?
+      @repository.test_runs
+                 .where(commit_sha: @recent_test_runs.map(&:commit_sha).uniq)
+                 .reorder(:commit_sha, created_at: :desc, id: :desc)
+                 .pluck(Arel.sql("DISTINCT ON (commit_sha) id")).to_set
+    end
     # Which branch the "Suite growth" panel below is drawn on, and what else the reader may pick.
     #
     # This page has no branch of record: `latest_test_run` is scoped to the repository and names
