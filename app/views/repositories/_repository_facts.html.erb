@@ -10,7 +10,7 @@
     repository-level counts, rather than beside the verdict card's run figures — where, unlabelled
     above a non-zero "Carrying an @intent", it read as a second, contradictory description of the
     same suite. %>
-<%= render UI::DefListComponent.new(rows: [["Owner", @repository.user.display_name],
+<%= render UI::DefListComponent.new(rows: [["Owner", repository_owner_label(@repository)],
                                            ["Test runs", number_with_delimiter(@test_runs_total)],
                                            ["Searchable intents", number_with_delimiter(@repository.spec_intents.count)],
                                            *(viewer_access ? [["Your access", viewer_access.join(", ")]] : [])]) %>

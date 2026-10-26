@@ -973,4 +973,32 @@ module RepositoriesHelper
       @spec_directory_files&.path || @spec_directory_file_growth&.path ||
       @spec_directory_window_file_growth&.path || @spec_directory_window_file_runtime_growth&.path
   end
+
+  # Whether the account that owns this repository has been closed. Closure keeps the repository,
+  # its runs and its memberships working for every colleague, while the owner can no longer sign in
+  # or mint keys — so copy that sends a colleague "to the owner" has to say so instead.
+  def repository_owner_closed?(repository) = repository.user.archived?
+
+  # The owner's handle, followed by a closed marker when their account is closed. The bare handle
+  # otherwise, so a live owner renders exactly as it always did.
+  def repository_owner_label(repository)
+    return repository.user.display_name unless repository_owner_closed?(repository)
+
+    "#{repository.user.display_name} (account closed)"
+  end
+
+  # The keyless-repository pointer for a viewer who cannot mint keys, when the owner is closed. A
+  # closed owner cannot mint, because minting needs a session; the recourse is a member who holds
+  # `keys.manage`. Named from what is already loaded, so it asks the database nothing.
+  def repository_closed_owner_mint_sentence(repository)
+    "#{repository.user.display_name}'s account is closed, so the owner cannot mint one. " \
+      "Ask a member who holds keys.manage."
+  end
+
+  # The strip-warning recourse on the member edit page, when the owner is closed. The owner cannot
+  # re-grant anything; a member who holds `members.manage` can.
+  def repository_closed_owner_members_sentence(repository)
+    "#{repository.user.display_name}'s account is closed, so the owner cannot change this. " \
+      "Ask a member who holds members.manage if that is not what you intend."
+  end
 end

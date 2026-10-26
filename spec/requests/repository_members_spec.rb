@@ -669,6 +669,24 @@ RSpec.describe "Repository members", type: :request do
       # The silent-narrowing disclosure. The grid cannot offer `keys.manage` to this actor, so
       # saving the form drops it — a de-escalation, and safe, but not one they asked for. Silent is
       # the part that is not acceptable on a page whose whole subject is who holds what.
+      # The owner's account being closed turns the recourse above into a dead end: they cannot
+      # re-grant anything. The member to ask is one holding members.manage.
+      # @intent: {"entity": "RepositoryMembership", "action": "redirect a closed owner's dead end", "behavior": "when the owner closed their account the strip warning no longer says Ask octocat and names a members.manage holder as the recourse", "layer": "request"}
+      it "names a members.manage holder in the strip warning when the owner's account is closed" do
+        create_membership(repository: repository, user: create_user(github_uid: "5006", github_handle: "ci-bot"),
+                          permissions: %w[view keys.manage])
+        holder = RepositoryMembership.find_by!(repository: repository, user: User.find_by!(github_handle: "ci-bot"))
+        owner.update!(archived_at: Time.current)
+
+        get edit_repository_member_path(repository, holder)
+
+        prose = Capybara.string(response.body).text.gsub(/\s+/, " ")
+        expect(prose).to include("Saving will also remove permissions you cannot grant")
+        expect(prose).not_to include("Ask octocat")
+        expect(prose).to include("octocat's account is closed, so the owner cannot change this. " \
+                                 "Ask a member who holds members.manage if that is not what you intend.")
+      end
+
       # @intent: {"entity": "RepositoryMembership", "action": "warn about stripping", "behavior": "editing a member holding keys.manage shows Saving will also remove permissions you cannot grant naming keys.manage, and the recourse reads Ask octocat, the owning account, not the acme slug", "layer": "request"}
       it "is warned that saving will strip a permission it cannot re-grant" do
         create_membership(repository: repository, user: create_user(github_uid: "5005", github_handle: "ci-bot"),

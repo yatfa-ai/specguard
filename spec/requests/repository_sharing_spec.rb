@@ -112,6 +112,17 @@ RSpec.describe "Repository sharing", type: :request do
       expect(response.body).not_to include("Shared · acme")
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "mark a closed owner on the badge", "behavior": "when the owner closed their account the shared card badge reads Shared · octocat (account closed) and the repositories index issues the same number of queries as with a live owner", "layer": "request"}
+    it "marks a closed owner on the shared card without extra queries" do
+      live_queries = count_queries { get repositories_path }
+      owner.update!(archived_at: Time.current)
+
+      closed_queries = count_queries { get repositories_path }
+
+      expect(response.body).to include("Shared · octocat (account closed)")
+      expect(closed_queries).to eq(live_queries)
+    end
+
     # The Overview panel states the same fact, and is held to the same rule. Anchored on the
     # `DefList` row rather than on a bare substring, because the org segment is also the first half
     # of the page title directly above it — so a substring match would pass on the title alone.

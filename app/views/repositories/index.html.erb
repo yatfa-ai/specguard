@@ -317,7 +317,7 @@
                   Overview panel. Not the slug's org segment, which names no SpecGuard account.
                   `user` is preloaded by the controller, so this asks nothing per card. %>
               <% unless owns_repository?(repository) %>
-                <%= render UI::BadgeComponent.new(tone: :info, class: "shrink-0") { "Shared · #{repository.user.display_name}" } %>
+                <%= render UI::BadgeComponent.new(tone: :info, class: "shrink-0") { "Shared · #{repository_owner_label(repository)}" } %>
               <% end %>
             </div>
             <div class="flex items-center gap-2">
