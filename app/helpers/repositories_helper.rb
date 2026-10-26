@@ -975,7 +975,7 @@ module RepositoriesHelper
   end
 
   # Whether the account that owns this repository has been closed. Closure keeps the repository,
-  # its runs and its memberships working for every colleague, while the owner can no longer sign in
+  # its runs and its memberships working for colleagues, while the owner can no longer sign in
   # or mint keys — so copy that sends a colleague "to the owner" has to say so instead.
   def repository_owner_closed?(repository) = repository.user.archived?
 

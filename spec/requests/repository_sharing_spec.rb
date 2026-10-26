@@ -123,6 +123,17 @@ RSpec.describe "Repository sharing", type: :request do
       expect(closed_queries).to eq(live_queries)
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "keep the closed-owner badge off the title", "behavior": "when the owner closed their account the shared card header row may wrap so the longer badge drops below the repository name, and a live owner's header row does not wrap", "layer": "request"}
+    it "lets the shared card header wrap for a closed owner but not a live one" do
+      get repositories_path
+      expect(response.body).not_to include("justify-between gap-2 flex-wrap")
+
+      owner.update!(archived_at: Time.current)
+      get repositories_path
+
+      expect(response.body).to include("justify-between gap-2 flex-wrap")
+    end
+
     # The Overview panel states the same fact, and is held to the same rule. Anchored on the
     # `DefList` row rather than on a bare substring, because the org segment is also the first half
     # of the page title directly above it — so a substring match would pass on the title alone.
