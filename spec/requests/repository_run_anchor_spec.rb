@@ -739,6 +739,32 @@ RSpec.describe "Repository run anchor", type: :request do
       expect(anchor_notice).to include("no run for run #424242")
     end
 
+    # The bigint ceiling is pinned to the digit, with literals rather than
+    # RequestedRunIdParam::MAX_RUN_ID so a mutated constant cannot make the example agree with
+    # itself. The largest id the column can hold is still a well-formed ask, which misses and says
+    # so; one past it is no ask at all, and the page claims none.
+    # @intent: {"entity": "RequestedRunIdParam", "action": "accept the largest legal bigint run id", "behavior": "?run=9223372036854775807 is a well-formed ask that matches no row, so it answers 200 anchored on the newest run with a notice saying there is no run for that id", "layer": "request"}
+    it "treats the largest bigint run id as a well-formed ask that misses" do
+      _first, _re_run, newest = re_run_history
+
+      get repository_path(repository, run: "9223372036854775807")
+
+      expect(response).to have_http_status(:ok)
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{newest.commit_sha.first(7)}")
+      expect(anchor_notice).to include("no run for run #9223372036854775807")
+    end
+
+    # @intent: {"entity": "RequestedRunIdParam", "action": "refuse a run id one past the bigint ceiling", "behavior": "?run=9223372036854775808 is no ask, so it answers 200 anchored on the newest run with no anchor notice", "layer": "request"}
+    it "treats a run id one past the bigint ceiling as no ask" do
+      _first, _re_run, newest = re_run_history
+
+      get repository_path(repository, run: "9223372036854775808")
+
+      expect(response).to have_http_status(:ok)
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{newest.commit_sha.first(7)}")
+      expect(anchor_notice).to be_nil
+    end
+
     # A foreign repository's id is the same miss and not a leak: the resolution is scoped through
     # this repository, so the other repository's run can never be served — the ask falls back to
     # THIS repository's newest run.
