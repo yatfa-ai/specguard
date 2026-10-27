@@ -181,8 +181,11 @@ class MembershipsController < ApplicationController
     # page, so send them somewhere that still exists. (They can never revoke the *owner*: an owner
     # membership row is impossible — see RepositoryMembership#user_is_not_the_owner — so that
     # invariant is structural, not a guard here.)
+    #
+    # The notice is `#leave`'s, from the counts read above: this is the same end state, and the
+    # person has just lost the API keys / Agent keys panels the revoke notice would point at.
     if revoked_own_access
-      redirect_to repositories_path, notice: "You no longer have access to #{repository.github_full_name}."
+      redirect_to repositories_path, notice: helpers.leave_notice(repository, keys_minted, agent_keys)
     else
       redirect_to repository_members_path(repository), notice: helpers.revoke_notice(handle, keys_minted, agent_keys)
     end

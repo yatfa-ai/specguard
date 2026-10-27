@@ -1479,6 +1479,73 @@ RSpec.describe "Repository members", type: :request do
     end
   end
 
+  # Revoking your OWN row on the members page is `#leave` by another door: same end state, same
+  # surviving keys. So the person is told what `#leave` tells them, in the same words, and the
+  # confirm on their own row is the Leave dialog rather than the owner-voiced revoke one — the
+  # revoke wording promises a lever they are about to lose.
+  describe "a member revoking their own row" do
+    let(:own_membership) { RepositoryMembership.find_by!(user: colleague, repository: repository) }
+
+    def key_statements(&) = queries_against(/api_keys/, &)
+
+    context "holding 'members.manage' and 'keys.manage', with keys of both kinds" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage keys.manage])
+        repository.api_keys.create!(name: "CI", created_by_user: colleague)
+        create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+        sign_in_via_github(uid: "9999")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "disclose keys on self revoke", "behavior": "a keys.manage holder deleting their own row is flashed the leave notice naming their still-live sgk_ and agent keys", "layer": "request"}
+      it "flashes the leave notice, naming the keys that stay live" do
+        delete repository_member_path(repository, own_membership)
+
+        expect(response).to redirect_to(repositories_path)
+        expect(flash[:notice]).to eq(
+          "You no longer have access to acme/billing-service. The 1 API key you minted is still " \
+          "live — ask an owner to revoke it in the repository's API keys panel. Your 1 live agent " \
+          "key covering this repository also keeps authenticating — revoke it on your account page " \
+          "(/account)."
+        )
+        expect(flash[:notice]).to eq(
+          ApplicationController.helpers.leave_notice(repository, 1, 1)
+        )
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "use leave confirm on own row", "behavior": "the Revoke button on the viewer's own row carries the leave confirmation while another member's row keeps the revoke confirmation", "layer": "request"}
+      it "puts the Leave dialog on their own row and keeps the revoke one on everyone else's" do
+        create_membership(repository: repository, user: third_party, permissions: %w[view])
+
+        get repository_members_path(repository)
+
+        own = ERB::Util.html_escape(ApplicationController.helpers.leave_confirmation(repository, 1, 1))
+        expect(response.body).to include(%(data-turbo-confirm="#{own}"))
+        expect(response.body).to include("The 1 API key you minted will keep authenticating until an owner revokes it.")
+        expect(response.body.scan("Leave acme/billing-service?").size).to eq(1)
+        expect(response.body).to include("Revoke dependabot&#39;s access to acme/billing-service?")
+        expect(response.body).not_to include("Revoke hubot&#39;s access")
+      end
+    end
+
+    context "holding 'members.manage' but not 'keys.manage'" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
+        repository.api_keys.create!(name: "CI", created_by_user: colleague)
+        create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+        sign_in_via_github(uid: "9999")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "keep bare self revoke notice", "behavior": "a members.manage-only holder deleting their own row gets the bare no-longer-have-access sentence and no api_keys or agent_api_keys statement is issued", "layer": "request"}
+      it "keeps the bare sentence, at no key-table query cost" do
+        statements = key_statements { delete repository_member_path(repository, own_membership) }
+
+        expect(response).to redirect_to(repositories_path)
+        expect(flash[:notice]).to eq("You no longer have access to acme/billing-service.")
+        expect(statements.size).to eq(0)
+      end
+    end
+  end
+
   # The table names people — handles and avatars. That is the same category as the credential
   # metadata repositories#show already gates: the whole surface is refused, not just the button.
   describe "a member with only 'view'" do
