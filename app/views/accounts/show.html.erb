@@ -535,6 +535,10 @@
   <% live_user_keys = closure_live_user_keys(@user_api_keys) %>
   <% live_agent_keys = closure_live_agent_keys(@agent_api_keys) %>
   <% holds_keys = @user_api_keys.any? || @agent_api_keys.any? %>
+  <%# SPGD-1947 — the owned-repository disclosure, composed from the owned set and the one
+      permission read the controller made. A person owning nothing gets no bullet, no intro
+      change and no confirm sentence: `owned_summary` is nil. %>
+  <% owned_summary = closure_owned_repositories(@owned_repositories, @owned_repository_permissions) if @owned_repositories.any? %>
 
   <%= render UI::PanelComponent.new(title: "Close account", id: "account-closure",
                                     class: "mt-6") do %>
@@ -545,7 +549,7 @@
       instance, outside the product.
     </p>
 
-    <p class="mb-1 text-sm text-app-content-secondary">Closing does three things, immediately:</p>
+    <p class="mb-1 text-sm text-app-content-secondary">Closing does <%= owned_summary ? "four" : "three" %> things, immediately:</p>
     <ul class="mb-3 list-disc space-y-1 pl-5 text-sm text-app-content-secondary">
       <li>
         <strong>You cannot sign in again.</strong> Any future sign-in attempt is refused, and the
@@ -561,6 +565,12 @@
         <%= closure_keys_remain_html(holds_keys) %>
         Closure is a departure, not a deletion.
       </li>
+      <% if owned_summary %>
+        <li id="account-closure-owned-repositories">
+          <strong>The repositories you own lose their owner.</strong>
+          <%= closure_owned_repositories_html(owned_summary) %>
+        </li>
+      <% end %>
     </ul>
 
     <%# The same `button_to` + `turbo_confirm` shape the Revoke and Disconnect buttons above
@@ -572,6 +582,7 @@
       <% confirm_text = "Close your account? You cannot sign in again, and this session ends " \
                         "now. #{closure_key_death_plain(live_user_keys, live_agent_keys)} " \
                         "#{closure_keys_remain_plain(holds_keys)} " \
+                        "#{"#{closure_owned_repositories_plain(owned_summary)} " if owned_summary}" \
                         "This cannot be undone from within SpecGuard." %>
       <%= button_to "Close account…", close_account_path, method: :post,
                     class: UI::ButtonComponent.classes(variant: :danger, size: :sm),

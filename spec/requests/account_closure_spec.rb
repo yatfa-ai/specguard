@@ -304,4 +304,124 @@ RSpec.describe "Account closure", type: :request do
                                      "SpecGuard can no longer sign you in. Nothing of yours was deleted.")
     expect(response.body).not_to include("stopped authenticating when the account closed")
   end
+
+  # SPGD-1947 — what closure does to the repositories the person OWNS. The owner holds no
+  # membership row and every permission implicitly, so a repository nobody else can administer
+  # becomes unopenable or unadministrable, and renaming (owner-only) is lost for all of them.
+  context "when the person owns repositories" do
+    def owned_item = response.body[response.body.index('id="account-closure-owned-repositories"')..]
+                                  .split("</li>").first
+
+    # @intent: { entity: "Repository", action: "disclose an unopenable owned repository", behavior: "GET /account for an owner of a repository with no members names it as unopenable in the Close-account panel with a link to its Members page and in the turbo_confirm, together with the owner-only rename sentence", layer: "request" }
+    it "names an owned repository with no members as unopenable" do
+      lonely = create_repository(user: person, github_full_name: "acme/lonely")
+
+      get account_path
+
+      item = owned_item
+      expect(item).to include("You own 1 repository.")
+      expect(item).to include("1 has no other members and will become unopenable")
+      expect(item).to include(%(href="#{repository_members_path(lonely)}"))
+      expect(item).to include("acme/lonely")
+      expect(item).to include("Renaming a repository is owner-only")
+      expect(item).not_to include("none who can manage")
+      expect(closure_panel).to include("You own 1 repository. Of those, 1 has no other members " \
+                                       "and will become unopenable (acme/lonely).")
+      expect(closure_panel).to include("Renaming a repository is owner-only, so none of them can " \
+                                       "be renamed once the account is closed.")
+    end
+
+    # @intent: { entity: "Repository", action: "disclose an unadministrable owned repository", behavior: "GET /account for an owner whose repository has only view and runs.ingest members names it as unadministrable, since no member can manage keys or members", layer: "request" }
+    it "names an owned repository whose members cannot manage keys or members as unadministrable" do
+      create_repository(user: person, github_full_name: "acme/stuck").tap do |repository|
+        create_membership(repository: repository, user: colleague,
+                          permissions: [RepositoryMembership::VIEW, RepositoryMembership::RUNS_INGEST])
+      end
+
+      get account_path
+
+      item = owned_item
+      expect(item).to include("1 has members but none who can manage keys or members, so its CI " \
+                              "keys can no longer be minted or revoked from SpecGuard")
+      expect(item).to include("acme/stuck")
+      expect(item).not_to include("unopenable")
+    end
+
+    # @intent: { entity: "Repository", action: "stay quiet about an administrable owned repository", behavior: "GET /account for an owner whose repository has a keys.manage member (or a members.manage one) names no repository as unopenable or unadministrable, but still states the owner-only rename loss", layer: "request" }
+    it "names no per-repository warning when a member can manage keys or members" do
+      keys = create_repository(user: person, github_full_name: "acme/keys")
+      create_membership(repository: keys, user: colleague,
+                        permissions: [RepositoryMembership::KEYS_MANAGE])
+      members = create_repository(user: person, github_full_name: "acme/people")
+      create_membership(repository: members, user: colleague,
+                        permissions: [RepositoryMembership::MEMBERS_MANAGE])
+
+      get account_path
+
+      item = owned_item
+      expect(item).to include("You own 2 repositories.")
+      expect(item).not_to include("unopenable")
+      expect(item).not_to include("none who can manage")
+      expect(item).not_to include("acme/keys")
+      expect(item).to include("Renaming a repository is owner-only")
+    end
+
+    # @intent: { entity: "Repository", action: "cap the named repositories", behavior: "GET /account for an owner of more unopenable repositories than the name cap lists the first few full names and says 'and N more', in both the panel and the confirm", layer: "request" }
+    it "caps the named repositories and counts the rest" do
+      5.times { |n| create_repository(user: person, github_full_name: "acme/solo-#{n}") }
+
+      get account_path
+
+      expect(owned_item).to include("5 have no other members and will become unopenable")
+      expect(owned_item).to include("and 2 more")
+      expect(closure_panel).to include("acme/solo-0, acme/solo-1, acme/solo-2 and 2 more")
+      expect(owned_item).not_to include("acme/solo-3")
+    end
+
+    # @intent: { entity: "Repository", action: "pair the panel and confirm copy", behavior: "GET /account renders the owned-repository disclosure in the turbo_confirm with the same clauses and names as the panel, in plain text", layer: "request" }
+    it "says the same thing in the confirm dialog" do
+      create_repository(user: person, github_full_name: "acme/lonely")
+
+      get account_path
+
+      expect(closure_panel).to include(
+        "You own 1 repository. Of those, 1 has no other members and will become unopenable " \
+        "(acme/lonely). Renaming a repository is owner-only, so none of them can be renamed " \
+        "once the account is closed. Add a member holding keys.manage or members.manage first, " \
+        "or remove the repository."
+      )
+    end
+
+    # @intent: { entity: "Repository", action: "keep copy unchanged for a non-owner", behavior: "GET /account for a person who owns no repository (only a shared one) renders no owned-repository item and the unchanged 'three things' intro", layer: "request" }
+    it "adds nothing for a person who owns no repository" do
+      other = create_repository(user: colleague, github_full_name: "acme/theirs")
+      create_membership(repository: other, user: person)
+
+      get account_path
+
+      panel = closure_panel
+      expect(panel).not_to include("account-closure-owned-repositories")
+      expect(panel).not_to include("You own")
+      expect(panel).to include("Closing does three things, immediately:")
+    end
+
+    # @intent: { entity: "Repository", action: "disclose ownership after closure", behavior: "POST /account/close for an owner of repositories appends the owned count to the closure notice, stamps only archived_at and deletes nothing, while an owner of none keeps the default notice", layer: "request" }
+    it "appends the owned count to the post-close notice and destroys nothing" do
+      create_repository(user: person, github_full_name: "acme/one")
+      create_repository(user: person, github_full_name: "acme/two")
+
+      expect { close_account }.not_to change { Repository.count }
+
+      expect(person.reload.archived_at).to be_present
+      expect(response.body).to include("Nothing of yours was deleted. You still own 2 repositories")
+    end
+
+    # @intent: { entity: "User", action: "keep the default notice for a person owning nothing", behavior: "POST /account/close for a person owning no repository answers the unchanged default notice without an ownership sentence", layer: "request" }
+    it "leaves the post-close notice unchanged for a person owning nothing" do
+      close_account
+
+      expect(response.body).to include("Nothing of yours was deleted.")
+      expect(response.body).not_to include("still own")
+    end
+  end
 end

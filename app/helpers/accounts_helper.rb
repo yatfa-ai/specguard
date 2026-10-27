@@ -122,4 +122,112 @@ module AccountsHelper
       "your name on them. Repository CI keys keep working; your personal and agent keys " \
       "remain as rows with dead tokens."
   end
+
+  # THE OWNED-REPOSITORY DISCLOSURE (SPGD-1947). Closure leaves a person's repositories exactly
+  # as they are — which is the problem for the ones the person alone could run. The owner holds
+  # no membership row and every permission implicitly, so once they cannot sign in a repository
+  # is administrable only by members whose stored `permissions` include `keys.manage` or
+  # `members.manage`; renaming is `RepositoryPolicy`'s `OWNER_ONLY` and is lost for every one of
+  # them. This classification is read off the owned set and the permission map
+  # `AccountsController#show` loaded (one grouped read, none for a person owning nothing):
+  #
+  #   * unopenable — no membership at all, so nobody can open it;
+  #   * unadministrable — members exist, but none can manage keys or members, so no `sgk_` key
+  #     can be minted or revoked and the member list cannot change.
+  #
+  # A repository with a member holding either administering permission is fine and is counted
+  # in the total only.
+  CLOSURE_ADMINISTERING_PERMISSIONS = [RepositoryMembership::KEYS_MANAGE,
+                                       RepositoryMembership::MEMBERS_MANAGE].freeze
+  # How many repositories each list names before it falls back to "and N more".
+  CLOSURE_OWNED_NAME_CAP = 3
+  ClosureOwnedRepositories = Data.define(:total, :unopenable, :unadministrable)
+
+  def closure_owned_repositories(owned_repositories, permissions_by_repository)
+    unopenable = []
+    unadministrable = []
+    owned_repositories.each do |repository|
+      memberships = permissions_by_repository.fetch(repository.id, [])
+      if memberships.empty?
+        unopenable << repository
+      elsif memberships.none? { |permissions| (permissions & CLOSURE_ADMINISTERING_PERMISSIONS).any? }
+        unadministrable << repository
+      end
+    end
+    ClosureOwnedRepositories.new(total: owned_repositories.size, unopenable: unopenable,
+                                 unadministrable: unadministrable)
+  end
+
+  # The consequence clauses and the repositories each one names — shared by the panel and the
+  # confirm so the two cannot say different things (the SPGD-1934 paired-copy rule). Empty for a
+  # person whose every owned repository has a member who can administer it.
+  def closure_owned_clauses(summary)
+    clauses = []
+    if summary.unopenable.any?
+      count = summary.unopenable.size
+      clauses << ["#{count} #{count == 1 ? 'has' : 'have'} no other members and will become " \
+                  "unopenable", summary.unopenable]
+    end
+    if summary.unadministrable.any?
+      count = summary.unadministrable.size
+      clauses << ["#{count} #{count == 1 ? 'has' : 'have'} members but none who can manage keys " \
+                  "or members, so #{count == 1 ? 'its' : 'their'} CI keys can no longer be minted " \
+                  "or revoked from SpecGuard", summary.unadministrable]
+    end
+    clauses
+  end
+
+  # The names a clause carries, capped: the first few, then "and N more".
+  def closure_owned_name_list(repositories)
+    shown = repositories.first(CLOSURE_OWNED_NAME_CAP)
+    hidden = repositories.size - shown.size
+    [shown, hidden]
+  end
+
+  # The panel bullet's body, HTML-shaped: each named repository links to its Members page, the
+  # place the remedy (add a member who can manage) is performed.
+  def closure_owned_repositories_html(summary)
+    parts = [h("You own #{pluralize(summary.total, 'repository')}.")]
+    clauses = closure_owned_clauses(summary)
+    unless clauses.empty?
+      rendered = clauses.map do |text, repositories|
+        shown, hidden = closure_owned_name_list(repositories)
+        links = safe_join(shown.map { |repository|
+          link_to(repository.github_full_name, repository_members_path(repository),
+                  class: "font-mono text-xs")
+        }, ", ")
+        more = hidden.positive? ? " and #{hidden} more" : ""
+        safe_join([text, " (", links, more, ")"])
+      end
+      parts << " Of those, " << safe_join(rendered, "; ") << "."
+    end
+    parts << " Renaming a repository is owner-only, so none of them can be renamed once the " \
+             "account is closed."
+    unless clauses.empty?
+      parts << " Add a member holding " << tag.code("keys.manage", class: "font-mono text-xs") <<
+        " or " << tag.code("members.manage", class: "font-mono text-xs") <<
+        " first, or remove the repository."
+    end
+    safe_join(parts)
+  end
+
+  # The confirm dialog's twin of the sentence above, plain text.
+  def closure_owned_repositories_plain(summary)
+    sentence = +"You own #{pluralize(summary.total, 'repository')}."
+    clauses = closure_owned_clauses(summary)
+    unless clauses.empty?
+      rendered = clauses.map do |text, repositories|
+        shown, hidden = closure_owned_name_list(repositories)
+        names = shown.map(&:github_full_name).join(", ")
+        names << " and #{hidden} more" if hidden.positive?
+        "#{text} (#{names})"
+      end
+      sentence << " Of those, #{rendered.join('; ')}."
+    end
+    sentence << " Renaming a repository is owner-only, so none of them can be renamed once the " \
+                "account is closed."
+    sentence << " Add a member holding keys.manage or members.manage first, or remove the " \
+                "repository." unless clauses.empty?
+    sentence
+  end
 end
