@@ -256,12 +256,23 @@ class RepositoriesController < ApplicationController
           AgentApiKey.live.covering(repository).joins(:user).merge(User.active).pluck(:repository_ids)
         end
       agent_keys = key_grants.size
-      only_here = key_grants.count { |ids| ids == [repository.id] }
+      only_here = agent_keys_only_here(repository, key_grants)
     end
 
     RepositoriesHelper::RemovalConsequences.new(
       other_members: members, ci_keys: ci_keys, agent_keys: agent_keys, agent_keys_only_here: only_here
     )
+  end
+
+  # How many of these agent-key grants would be left with NO existing repository once this one is
+  # removed. A grant is a mint-time `repository_ids` array with no foreign key, so an id naming a
+  # repository deleted since still sits in it; literal `== [repository.id]` would count such a key
+  # as "keeps working elsewhere" when it is in fact inert. The extra `repositories` SELECT runs only
+  # when some grant names another id, so single-repository grants add no query.
+  def agent_keys_only_here(repository, key_grants)
+    others = key_grants.flatten.uniq - [repository.id]
+    surviving = others.empty? ? Set.new : Repository.where(id: others).pluck(:id).to_set
+    key_grants.count { |ids| (ids - [repository.id]).none? { |id| surviving.include?(id) } }
   end
 
   # The `?sort=stale` ordering is `RepositoryNarrowing#stale_first`, shared with

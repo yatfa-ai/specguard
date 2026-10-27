@@ -909,6 +909,24 @@ RSpec.describe "Repository sharing", type: :request do
         )
       end
 
+      # @intent: {"entity": "AgentApiKey", "action": "count dangling grants as inert on remove", "behavior": "an agent key whose only other stored repository was already deleted reads as becoming inert, not as keeping working on its other repositories", "layer": "request"}
+      it "counts a key whose other stored repository was already deleted as inert" do
+        other = create_repository(user: owner, github_full_name: "acme/payments-service")
+        create_agent_api_key(user: owner, repositories: [repository, other], name: "Wide")
+        other.destroy!
+
+        get repository_path(repository)
+        expect(remove_dialog).to eq(
+          "#{question} 1 live agent key covering it stays live after the removal: 1 covers only " \
+          "this repository and becomes inert. Each owner can revoke theirs on /account."
+        )
+        expect(remove_dialog).not_to include("keeps working on its other repositories")
+
+        delete repository_path(repository)
+        expect(flash[:notice]).to include("is now inert")
+        expect(flash[:notice]).not_to include("other repositories")
+      end
+
       # @intent: {"entity": "AgentApiKey", "action": "ignore keys that cannot authenticate on remove", "behavior": "a revoked agent key, an archived-owner agent key and a key covering another repository add no agent clause", "layer": "request"}
       it "does not claim keys that cannot authenticate or do not cover the repository" do
         other = create_repository(user: owner, github_full_name: "acme/payments-service")
