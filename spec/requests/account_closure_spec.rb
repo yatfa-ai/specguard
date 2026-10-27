@@ -399,6 +399,55 @@ RSpec.describe "Account closure", type: :request do
       expect(item).to include("Renaming a repository is owner-only")
     end
 
+    # @intent: { entity: "Repository", action: "ignore archived members when classifying an owned repository", behavior: "GET /account for an owner whose repository's only keys.manage member has closed their own account names it as unopenable with a link to its Members page, because an archived member cannot administer or open it", layer: "request" }
+    it "names an owned repository whose only administering member is archived as unopenable" do
+      closed = create_user(github_uid: "3003", github_handle: "closed-admin", installation_id: nil)
+      gone = create_repository(user: person, github_full_name: "acme/gone")
+      create_membership(repository: gone, user: closed, permissions: [RepositoryMembership::KEYS_MANAGE])
+      closed.update!(archived_at: Time.current)
+
+      get account_path
+
+      item = owned_item
+      expect(item).to include("1 has no other members and will become unopenable")
+      expect(item).to include(%(href="#{repository_members_path(gone)}"))
+      expect(item).to include("acme/gone")
+      expect(item).not_to include("none who can manage")
+    end
+
+    # @intent: { entity: "Repository", action: "ignore archived members when classifying an owned repository", behavior: "GET /account for an owner whose repository has an archived keys.manage member and a live view-only member names it as unadministrable", layer: "request" }
+    it "names an owned repository with an archived administrator and a live view-only member as unadministrable" do
+      closed = create_user(github_uid: "3003", github_handle: "closed-admin", installation_id: nil)
+      stuck = create_repository(user: person, github_full_name: "acme/stuck")
+      create_membership(repository: stuck, user: closed, permissions: [RepositoryMembership::KEYS_MANAGE])
+      create_membership(repository: stuck, user: colleague)
+      closed.update!(archived_at: Time.current)
+
+      get account_path
+
+      item = owned_item
+      expect(item).to include("1 has members but none who can manage keys or members")
+      expect(item).to include("acme/stuck")
+      expect(item).not_to include("unopenable")
+    end
+
+    # @intent: { entity: "Repository", action: "keep a live administrator counting alongside an archived member", behavior: "GET /account for an owner whose repository has an archived member and a live keys.manage member names no repository as unopenable or unadministrable", layer: "request" }
+    it "names no per-repository warning when a live member can manage beside an archived one" do
+      closed = create_user(github_uid: "3003", github_handle: "closed-admin", installation_id: nil)
+      fine = create_repository(user: person, github_full_name: "acme/fine")
+      create_membership(repository: fine, user: closed)
+      create_membership(repository: fine, user: colleague, permissions: [RepositoryMembership::KEYS_MANAGE])
+      closed.update!(archived_at: Time.current)
+
+      get account_path
+
+      item = owned_item
+      expect(item).to include("You own 1 repository.")
+      expect(item).not_to include("unopenable")
+      expect(item).not_to include("none who can manage")
+      expect(item).not_to include("acme/fine")
+    end
+
     # @intent: { entity: "Repository", action: "cap the named repositories", behavior: "GET /account for an owner of more unopenable repositories than the name cap lists the first few full names and says 'and N more', in both the panel and the confirm", layer: "request" }
     it "caps the named repositories and counts the rest" do
       5.times { |n| create_repository(user: person, github_full_name: "acme/solo-#{n}") }
