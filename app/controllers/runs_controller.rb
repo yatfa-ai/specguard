@@ -23,7 +23,13 @@ class RunsController < ApplicationController
     # Composed BEFORE the row goes away, the discipline `RepositoriesController#destroy` and
     # `MembershipsController#destroy` both follow: reading a destroyed record's columns to word
     # the notice is reading memory that is no longer backed by anything.
-    notice = helpers.delete_run_notice(test_run)
+    #
+    # SPGD-1958: when the row is the repository's newest it is the run every panel anchors on, so
+    # the notice also names the run the page reads once it is gone. The successor is read only in
+    # that case — deleting any other row issues neither query.
+    was_newest = repository.latest_test_run&.id == test_run.id
+    successor = was_newest ? repository.latest_test_run_excluding(test_run) : nil
+    notice = helpers.delete_run_notice(test_run, successor: successor, was_newest: was_newest)
 
     test_run.destroy!
 

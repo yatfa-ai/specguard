@@ -211,9 +211,17 @@ module RepositoriesHelper
   # form, matching `remove_confirmation` above; the sentence must name what goes so the dialog is
   # an informed consent rather than a speed bump — this run, its shards, its per-example
   # observations, and that it cannot be undone.
-  def delete_run_confirmation(test_run)
-    "Delete run #{test_run.commit_sha.first(7)}? This removes the run, its shards and its " \
-      "per-example observations from #{test_run.repository.github_full_name}, and it cannot be undone."
+  #
+  # `newest:` (SPGD-1958) appends the one consequence only the repository's newest run has: it is
+  # the run every panel reads, so deleting it hands the page to the previous run. The caller
+  # decides — the view compares ids against the dashboard's published newest-run id — so this
+  # helper issues no query. Every other row's sentence is unchanged.
+  def delete_run_confirmation(test_run, newest: false)
+    sentence = "Delete run #{test_run.commit_sha.first(7)}? This removes the run, its shards and its " \
+               "per-example observations from #{test_run.repository.github_full_name}, and it cannot be undone."
+    return sentence unless newest
+
+    "#{sentence} This is the repository's newest run — deleting it makes the previous run the one every panel reads."
   end
 
   # The counterpart after the click, called from `RunsController#destroy` — the same
@@ -223,9 +231,25 @@ module RepositoriesHelper
   # row of ten seven-character hashes can tell which one went. `branch` is nullable, so a run
   # that reported no branch reads "branch not reported" rather than a blank — the same fallback
   # the Branch column itself renders.
-  def delete_run_notice(test_run)
-    branch = test_run.branch.presence || "branch not reported"
-    "Deleted run #{test_run.commit_sha.first(7)} (#{branch}) and its shards and observations."
+  #
+  # `was_newest:` / `successor:` (SPGD-1958): when the deleted row was the repository's newest run
+  # the page re-anchors, so the notice says on what — the successor's sha and branch — or that
+  # nothing remains. A row that was not the newest reads exactly as it always did.
+  def delete_run_notice(test_run, successor: nil, was_newest: false)
+    notice = "Deleted run #{run_label(test_run)} and its shards and observations."
+    return notice unless was_newest
+
+    if successor
+      "#{notice} It was the repository's newest run, so the page now reads #{run_label(successor)}."
+    else
+      "#{notice} No runs remain — the page will read empty until CI reports again."
+    end
+  end
+
+  # "a1b2c3d (main)" — a run's short sha and branch, `branch` being nullable and read as
+  # "branch not reported" like the Branch column.
+  def run_label(test_run)
+    "#{test_run.commit_sha.first(7)} (#{test_run.branch.presence || 'branch not reported'})"
   end
 
   # The two halves of the SAME disclosure for the repository's own ingest-key (`sgk_`) revoke
