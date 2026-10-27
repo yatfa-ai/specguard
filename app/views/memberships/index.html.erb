@@ -35,6 +35,7 @@
       <%= render UI::TableComponent.new(columns: ["Member", "Permissions", "Since", "Permissions set by", ""]) do %>
         <% @memberships.each do |membership| %>
           <% keys_minted = @keys_minted.fetch(membership.user_id, 0) %>
+          <% agent_keys = @agent_keys_covering.fetch(membership.user_id, 0) %>
           <tr>
             <td class="px-3 py-2">
               <div class="flex flex-wrap items-center gap-2">
@@ -56,6 +57,19 @@
                               title: "Revoking access will not revoke these keys — review them in the API keys panel." do %>
                     <%= render UI::BadgeComponent.new(tone: :warning) do %>
                       <%= pluralize(keys_minted, "API key") %> minted
+                    <% end %>
+                  <% end %>
+                <% end %>
+                <%# Live `sga_` agent keys whose stored set covers this repository: they outlive the
+                    membership for the same reason the keys above do. Same gate by construction
+                    (`@agent_keys_covering` is `{}` without `keys.manage`, see
+                    MintedKeyCounts#agent_keys_covering_by), and the `#agent-keys` panel it points
+                    at renders under that permission. %>
+                <% if agent_keys.positive? %>
+                  <%= link_to repository_path(@repository, anchor: "agent-keys"),
+                              title: "Revoking access will not revoke these agent keys — review them in the Agent keys panel." do %>
+                    <%= render UI::BadgeComponent.new(tone: :warning) do %>
+                      <%= pluralize(agent_keys, "agent key") %> covering this repo
                     <% end %>
                   <% end %>
                 <% end %>
@@ -110,7 +124,7 @@
                 <% end %>
                 <%= button_to "Revoke", repository_member_path(@repository, membership), method: :delete,
                               class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                              form: { data: { turbo_confirm: revoke_confirmation(@repository, membership.user.github_handle, keys_minted) } } %>
+                              form: { data: { turbo_confirm: revoke_confirmation(@repository, membership.user.github_handle, keys_minted, agent_keys) } } %>
               </div>
             </td>
           </tr>

@@ -91,23 +91,41 @@ module MembershipsHelper
   # to name that consequence *before* the click rather than let the owner discover it later. A
   # member who minted nothing keeps the original one-sentence question verbatim — a dialog that
   # mentions keys that do not exist is noise, and would train the owner to skim it.
-  def revoke_confirmation(repository, handle, keys_minted)
+  #
+  # `agent_keys` is the count of live `sga_` agent keys covering this repository that the member
+  # holds (`MintedKeyCounts#agent_keys_covering_by`). They survive for the same reason, so they get
+  # their own clause, composed after the `sgk_` one; zero agent keys appends nothing, which keeps
+  # every existing string byte-for-byte.
+  def revoke_confirmation(repository, handle, keys_minted, agent_keys = 0)
     question = "Revoke #{handle}'s access to #{repository.github_full_name}?"
-    return question if keys_minted.zero?
-
-    keys, _verb, object = minted_keys_agreement(keys_minted)
-    "#{question} The #{keys} they minted will keep authenticating until you revoke #{object}."
+    sentences = []
+    unless keys_minted.zero?
+      keys, _verb, object = minted_keys_agreement(keys_minted)
+      sentences << "The #{keys} they minted will keep authenticating until you revoke #{object}."
+    end
+    unless agent_keys.zero?
+      keys, verb, object = agent_keys_agreement(agent_keys)
+      sentences << "Their #{keys} covering this repository #{'also ' if sentences.any?}#{verb} " \
+                   "authenticating until you revoke #{object} in the Agent keys panel."
+    end
+    ([question] + sentences).join(" ")
   end
 
   # The counterpart after the click, called from `MembershipsController#destroy`. It points at the
   # lever rather than pulling it: whether a departing colleague's CI key should survive them is the
   # owner's judgement, because only they know what it authenticates.
-  def revoke_notice(handle, keys_minted)
-    return "Revoked #{handle}'s access." if keys_minted.zero?
-
-    keys, verb, object = minted_keys_agreement(keys_minted)
-    "Revoked #{handle}'s access. #{keys} they minted #{verb} still live — " \
-      "review #{object} in the API keys panel."
+  def revoke_notice(handle, keys_minted, agent_keys = 0)
+    sentences = ["Revoked #{handle}'s access."]
+    unless keys_minted.zero?
+      keys, verb, object = minted_keys_agreement(keys_minted)
+      sentences << "#{keys} they minted #{verb} still live — review #{object} in the API keys panel."
+    end
+    unless agent_keys.zero?
+      keys, verb, object = agent_keys_agreement(agent_keys)
+      sentences << "Their #{keys} covering this repository #{'also ' if sentences.size > 1}#{verb} " \
+                   "authenticating — review #{object} in the Agent keys panel."
+    end
+    sentences.join(" ")
   end
 
   # The leaver's own halves of the same disclosure — the Leave dialog on repositories#show, and
@@ -133,13 +151,24 @@ module MembershipsHelper
   # them", because the moment the row is gone the leaver can no longer open the panel the revoke
   # pair points at. Telling them to review a panel they just 404'd themselves out of would be the
   # affordance-that-lands-nowhere shape `keys_minted_by`'s gate exists to prevent.
-  def leave_confirmation(repository, keys_minted)
+  #
+  # The agent-key clause changes the lever's hands a second time: an agent key is the leaver's own
+  # (the person who minted it owns it), so they can revoke it themselves on their account page,
+  # which stays reachable after the row is gone — unlike the repository's Agent keys panel.
+  def leave_confirmation(repository, keys_minted, agent_keys = 0)
     question = "Leave #{repository.github_full_name}? You will lose access immediately, and only " \
                "an owner can add you back."
-    return question if keys_minted.zero?
-
-    keys, _verb, object = minted_keys_agreement(keys_minted)
-    "#{question} The #{keys} you minted will keep authenticating until an owner revokes #{object}."
+    sentences = []
+    unless keys_minted.zero?
+      keys, _verb, object = minted_keys_agreement(keys_minted)
+      sentences << "The #{keys} you minted will keep authenticating until an owner revokes #{object}."
+    end
+    unless agent_keys.zero?
+      keys, verb, object = agent_keys_agreement(agent_keys)
+      sentences << "Your #{keys} covering this repository #{'also ' if sentences.any?}#{verb} " \
+                   "authenticating until you revoke #{object} on your account page (/account)."
+    end
+    ([question] + sentences).join(" ")
   end
 
   # The counterpart after the click, called from `MembershipsController#leave`. It keeps, verbatim,
@@ -147,13 +176,19 @@ module MembershipsHelper
   # same end state and must read as one sentence — and adds the same keys-are-still-live line the
   # owner's revoke notice carries, rerouted at the person who now holds the only lever there is:
   # asking an owner to revoke them, from outside a repository they can no longer open.
-  def leave_notice(repository, keys_minted)
-    base = "You no longer have access to #{repository.github_full_name}."
-    return base if keys_minted.zero?
-
-    keys, verb, object = minted_keys_agreement(keys_minted)
-    "#{base} The #{keys} you minted #{verb} still live — ask an owner to revoke #{object} in the " \
-      "repository's API keys panel."
+  def leave_notice(repository, keys_minted, agent_keys = 0)
+    sentences = ["You no longer have access to #{repository.github_full_name}."]
+    unless keys_minted.zero?
+      keys, verb, object = minted_keys_agreement(keys_minted)
+      sentences << "The #{keys} you minted #{verb} still live — ask an owner to revoke #{object} in the " \
+                   "repository's API keys panel."
+    end
+    unless agent_keys.zero?
+      keys, verb, object = agent_keys_agreement(agent_keys)
+      sentences << "Your #{keys} covering this repository #{'also ' if sentences.size > 1}#{verb} " \
+                   "authenticating — revoke #{object} on your account page (/account)."
+    end
+    sentences.join(" ")
   end
 
   private
@@ -165,5 +200,15 @@ module MembershipsHelper
     singular = count == 1
 
     [pluralize(count, "API key"), singular ? "is" : "are", singular ? "it" : "them"]
+  end
+
+  # The agent-key sibling of `minted_keys_agreement`, so number agreement for BOTH counts is decided
+  # in this one place. Its middle element is the present-tense verb the agent clauses use ("keeps
+  # authenticating" / "keep authenticating") rather than a copula, because those clauses state a
+  # continuing fact instead of a state of the key.
+  def agent_keys_agreement(count)
+    singular = count == 1
+
+    [pluralize(count, "live agent key"), singular ? "keeps" : "keep", singular ? "it" : "them"]
   end
 end

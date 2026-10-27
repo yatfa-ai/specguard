@@ -23,7 +23,7 @@
     <p class="text-xs text-app-content-secondary"><%= held_access_description(viewer_access) %></p>
     <%= button_to "Leave", leave_repository_members_path(@repository), method: :delete,
                   class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                  form: { data: { turbo_confirm: leave_confirmation(@repository, @viewer_keys_minted) } } %>
+                  form: { data: { turbo_confirm: leave_confirmation(@repository, @viewer_keys_minted, @viewer_agent_keys_covering) } } %>
   </div>
 <% end %>
 </div>

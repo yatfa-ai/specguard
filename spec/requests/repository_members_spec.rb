@@ -968,7 +968,11 @@ RSpec.describe "Repository members", type: :request do
     # at every call. The rule it watches by is not restated here — `queries_against` in
     # spec/support/query_capture.rb states it once, and that file's header says why a second copy of
     # a subscriber is worse than none.
-    def api_key_queries(&) = queries_against("api_keys", &)
+    #
+    # A Regexp rather than the bare string: `"api_keys"` is a substring of `agent_api_keys`, and the
+    # page now (SPGD-1950) issues its own grouped agent-key read, which this badge's budget must not
+    # absorb. The agent half is budgeted separately, in "the agent keys covering the repository".
+    def api_key_queries(&) = queries_against(/(?<!agent_)api_keys/, &)
 
     # @intent: {"entity": "RepositoryMembership", "action": "show key counts grouped", "behavior": "the page prints 2 API keys minted and 1 API key minted per member while issuing exactly one api_keys query for the whole table", "layer": "request"}
     it "shows each member's live key count, and asks for it in one grouped query" do
@@ -1123,6 +1127,167 @@ RSpec.describe "Repository members", type: :request do
       expect(response.parsed_body.dig("repository", "full_name")).to eq("acme/billing-service")
       # The key survived intact; only its attribution is at risk, and only if the *user* is deleted.
       expect(repository.api_keys.exists?(key.id)).to be(true)
+    end
+  end
+
+  # The `sga_` half of the same disclosure (SPGD-1950): an agent key whose stored set covers this
+  # repository outlives the membership that let its owner mint it, exactly as an `sgk_` key does, so
+  # the surfaces that end an access quote it too. Counted as `AgentApiKey.authenticate` would still
+  # resolve it — live, covering this repository, owner active — through one grouped query.
+  describe "the agent keys covering the repository that a member holds" do
+    before do
+      create_membership(repository: repository, user: colleague, permissions: %w[view keys.manage])
+      create_membership(repository: repository, user: third_party, permissions: %w[view keys.manage])
+      sign_in_via_github
+    end
+
+    def agent_key_queries(&) = queries_against("agent_api_keys", &)
+
+    def membership_of(user) = RepositoryMembership.find_by!(user: user, repository: repository)
+
+    # @intent: {"entity": "RepositoryMembership", "action": "show agent key badge grouped", "behavior": "the page prints 2 agent keys covering this repo for one member and 1 agent key covering this repo for another while issuing exactly one agent_api_keys query for the whole table", "layer": "request"}
+    it "badges each member's covering agent keys, in one grouped query" do
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet B")
+      create_agent_api_key(user: third_party, repositories: [repository], name: "Fleet C")
+
+      queries = agent_key_queries { get repository_members_path(repository) }
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("2 agent keys covering this repo")
+      expect(response.body).to include("1 agent key covering this repo")
+      expect(response.body).to include("#{repository_path(repository)}#agent-keys")
+      expect(queries.size).to eq(1)
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "keep sgk badge separate", "behavior": "a member with only an sgk_ key shows the N API keys minted badge and no agent key badge", "layer": "request"}
+    it "draws no agent badge for a member who holds only repository keys" do
+      repository.api_keys.create!(name: "CI", created_by_user: colleague)
+
+      get repository_members_path(repository)
+
+      expect(response.body).to include("1 API key minted")
+      expect(response.body).not_to match(/agent keys? covering this repo/)
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "exclude revoked agent keys", "behavior": "after one of two covering agent keys is revoked the page reports 1 agent key and not 2", "layer": "request"}
+    it "counts only live agent keys" do
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A").revoke!
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet B")
+
+      get repository_members_path(repository)
+
+      expect(response.body).to include("1 agent key covering this repo")
+      expect(response.body).not_to include("2 agent keys covering this repo")
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "scope agent keys per repository", "behavior": "an agent key covering only another repository is not counted here, so a member holding only that key gets no badge", "layer": "request"}
+    it "does not count agent keys that cover another repository" do
+      other_repository = create_repository(user: owner, github_full_name: "acme/payments-service")
+      create_membership(repository: other_repository, user: colleague, permissions: %w[view])
+      create_agent_api_key(user: colleague, repositories: [other_repository], name: "Elsewhere")
+
+      get repository_members_path(repository)
+
+      expect(response.body).not_to match(/agent keys? covering this repo/)
+      expect(response.body).to include("Revoke hubot&#39;s access to acme/billing-service?")
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "exclude archived owners", "behavior": "an agent key whose owner is archived is not counted, because its token no longer authenticates", "layer": "request"}
+    it "does not count the keys of an archived owner" do
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+      colleague.update_columns(archived_at: Time.current)
+
+      get repository_members_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).not_to match(/agent keys? covering this repo/)
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "name agent keys in revoke confirm", "behavior": "the revoke confirmation names the 2 live agent keys covering this repository and says they keep authenticating until revoked in the Agent keys panel", "layer": "request"}
+    it "names the surviving agent keys in the revoke confirmation" do
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet B")
+
+      get repository_members_path(repository)
+
+      expect(response.body).to include(
+        "Their 2 live agent keys covering this repository keep authenticating until you revoke " \
+        "them in the Agent keys panel."
+      )
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "compose both key kinds in confirm and notice", "behavior": "with one sgk_ key and one agent key the confirm and the notice carry both clauses with singular agreement and the agent clause says also", "layer": "request"}
+    it "composes both clauses, singular, when the member holds both kinds" do
+      repository.api_keys.create!(name: "CI", created_by_user: colleague)
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+
+      get repository_members_path(repository)
+      expect(response.body).to include(
+        "The 1 API key they minted will keep authenticating until you revoke it. Their 1 live " \
+        "agent key covering this repository also keeps authenticating until you revoke it in the " \
+        "Agent keys panel."
+      )
+
+      delete repository_member_path(repository, membership_of(colleague))
+      expect(flash[:notice]).to eq(
+        "Revoked hubot's access. 1 API key they minted is still live — review it in the API keys " \
+        "panel. Their 1 live agent key covering this repository also keeps authenticating — " \
+        "review it in the Agent keys panel."
+      )
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "notice surviving agent keys", "behavior": "revoking a member with two covering agent keys flashes a notice naming them and pointing at the Agent keys panel", "layer": "request"}
+    it "tells the owner the agent keys are still live after revoking the member" do
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+      create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet B")
+
+      delete repository_member_path(repository, membership_of(colleague))
+
+      expect(flash[:notice]).to eq(
+        "Revoked hubot's access. Their 2 live agent keys covering this repository keep " \
+        "authenticating — review them in the Agent keys panel."
+      )
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "keep copy without agent keys", "behavior": "a member with no agent keys gets the unchanged revoke question and notice", "layer": "request"}
+    it "leaves the existing copy untouched when there are no agent keys" do
+      get repository_members_path(repository)
+      expect(response.body).to include("Revoke hubot&#39;s access to acme/billing-service?")
+      expect(response.body).not_to include("agent key")
+
+      delete repository_member_path(repository, membership_of(colleague))
+      expect(flash[:notice]).to eq("Revoked hubot's access.")
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "keep agent key authenticating", "behavior": "after the revoke deletes the membership the agent key's bearer token still authenticates and the row survives", "layer": "request"}
+    it "leaves the revoked member's agent key authenticating" do
+      key = create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+      token = key.raw_token
+
+      delete repository_member_path(repository, membership_of(colleague))
+      expect(RepositoryMembership.exists?(user: colleague, repository: repository)).to be(false)
+
+      get "/api/v1/repositories", headers: { "Authorization" => "Bearer #{token}" }
+      expect(response).to have_http_status(:ok)
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "withhold agent keys without keys.manage", "behavior": "a viewer holding members.manage but not keys.manage sees no agent badge, the plain revoke question, the plain notice, and zero agent_api_keys statements are issued", "layer": "request"}
+    it "withholds all of it from a viewer without keys.manage, at no query cost" do
+      create_agent_api_key(user: third_party, repositories: [repository], name: "Fleet A")
+      create_membership(repository: repository, user: create_user(github_uid: "5555", github_handle: "manager"),
+                        permissions: %w[view members.manage])
+      sign_in_via_github(uid: "5555")
+
+      queries = agent_key_queries { get repository_members_path(repository) }
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("dependabot")
+      expect(response.body).not_to include("agent key")
+      expect(queries.size).to eq(0)
+
+      delete repository_member_path(repository, membership_of(third_party))
+      expect(flash[:notice]).to eq("Revoked dependabot's access.")
     end
   end
 

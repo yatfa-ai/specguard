@@ -1,10 +1,15 @@
 # frozen_string_literal: true
 
-# THE SINGLE READER FOR "HOW MANY LIVE API KEYS DID THESE PEOPLE MINT", extracted from
-# `MembershipsController` when a second controller needed the same count.
+# THE SINGLE READER FOR "WHICH LIVE KEYS DOES ENDING THIS ACCESS LEAVE BEHIND", extracted from
+# `MembershipsController` when a second controller needed the same count. It answers for both key
+# kinds a member can leave behind — `keys_minted_by` for the `sgk_` repository keys they minted and
+# `agent_keys_covering_by` for the `sga_` agent keys whose stored set covers the repository — behind
+# one gate, so the two disclosures cannot disagree about who may be told.
 #
-# `Revoking/leaving a membership deliberately does not touch the API keys that member minted (see
-# `User has_many :created_api_keys, dependent: :nullify`), so every surface that ends an access —
+# Revoking/leaving a membership deliberately does not touch the API keys that member minted (see
+# `User has_many :created_api_keys, dependent: :nullify`), nor an agent key whose stored
+# `repository_ids` names the repository (`AgentApiKey` freezes its grant at mint time and
+# authenticates for as long as its owner is active), so every surface that ends an access —
 # the owner's members table, the owner's Revoke dialog and flash, a member's own Leave dialog and
 # flash — has to quote how many keys the act leaves behind. Those surfaces live on two controllers
 # (`MembershipsController` renders the members page and serves both removals; `RepositoriesController`
@@ -37,6 +42,11 @@
 # wider would render an affordance that lands on a page where the panel, the anchor and the Revoke
 # button it promises all do not exist.
 #
+# The agent-key half counts what `AgentApiKey.authenticate` would still resolve: live, covering this
+# repository, and owned by a person who is still active. An archived owner's token does not
+# authenticate, so counting it would warn about a key that cannot survive. Its anchor is the Agent
+# keys panel (`#agent-keys`), which renders under the same `keys.manage`.
+#
 # Ordering is load-bearing and pinned by the query-count examples: the gate returns `{}` BEFORE the
 # `api_keys` query runs, so a viewer without `keys.manage` is charged nothing at all —
 # repositories#show's absolute budgets count on that.
@@ -55,5 +65,16 @@ module MintedKeyCounts
     return {} if user_ids.empty?
 
     repository.api_keys.live.where(created_by_user_id: user_ids).group(:created_by_user_id).count
+  end
+
+  # `user_id => live agent key count` for `user_ids`: the `sga_` keys covering `repository` that
+  # could still authenticate. The same gate and the same early returns, in the same order, as
+  # `keys_minted_by`, so a viewer without `keys.manage` is charged nothing.
+  def agent_keys_covering_by(repository, user_ids)
+    return {} unless repository_policy(repository).can?(:keys_manage)
+    return {} if user_ids.empty?
+
+    AgentApiKey.live.covering(repository).joins(:user).merge(User.active)
+               .where(user_id: user_ids).group(:user_id).count
   end
 end

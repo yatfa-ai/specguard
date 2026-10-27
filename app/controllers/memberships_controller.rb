@@ -89,7 +89,9 @@ class MembershipsController < ApplicationController
                               .includes(:user, :granted_by_user)
                               .joins(:user)
                               .order("users.github_handle")
-    @keys_minted = keys_minted_by(@repository, @memberships.map(&:user_id))
+    user_ids = @memberships.map(&:user_id)
+    @keys_minted = keys_minted_by(@repository, user_ids)
+    @agent_keys_covering = agent_keys_covering_by(@repository, user_ids)
   end
 
   def new
@@ -170,6 +172,7 @@ class MembershipsController < ApplicationController
     # destroying the *user* nullifies `created_by_user_id` — so this count is stable either side of
     # the destroy. Taking it first keeps the notice's claim and the state it describes in one place.
     keys_minted = keys_minted_by(repository, [membership.user_id]).fetch(membership.user_id, 0)
+    agent_keys = agent_keys_covering_by(repository, [membership.user_id]).fetch(membership.user_id, 0)
 
     membership.destroy!
 
@@ -181,7 +184,7 @@ class MembershipsController < ApplicationController
     if revoked_own_access
       redirect_to repositories_path, notice: "You no longer have access to #{repository.github_full_name}."
     else
-      redirect_to repository_members_path(repository), notice: helpers.revoke_notice(handle, keys_minted)
+      redirect_to repository_members_path(repository), notice: helpers.revoke_notice(handle, keys_minted, agent_keys)
     end
   end
 
@@ -212,12 +215,13 @@ class MembershipsController < ApplicationController
     # api_keys row, so the count is stable either side — taking it first keeps the notice's claim
     # and the state it describes in one place.
     keys_minted = keys_minted_by(repository, [membership.user_id]).fetch(membership.user_id, 0)
+    agent_keys = agent_keys_covering_by(repository, [membership.user_id]).fetch(membership.user_id, 0)
 
     membership.destroy!
 
     # The leaver has just 404'd themselves out of this repository — the destination `#destroy`'s
     # self-revoke arm already reasoned about, somewhere that still exists.
-    redirect_to repositories_path, notice: helpers.leave_notice(repository, keys_minted)
+    redirect_to repositories_path, notice: helpers.leave_notice(repository, keys_minted, agent_keys)
   end
 
   private

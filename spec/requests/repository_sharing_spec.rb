@@ -574,6 +574,77 @@ RSpec.describe "Repository sharing", type: :request do
     end
   end
 
+  # SPGD-1950: the agent-key half of the Leave disclosure. An `sga_` key the leaver minted keeps
+  # authenticating after the row goes, and the lever is the leaver's own — on /account, which they
+  # can still open — not an owner's, so the copy is a second-person variant, not the sgk_ one.
+  describe "the Leave control and agent keys" do
+    def leave_dialog
+      action = leave_repository_members_path(repository)
+      form_tag = response.body[/<form[^>]*action="#{Regexp.escape(action)}"[^>]*>/]
+      CGI.unescapeHTML(form_tag[/data-turbo-confirm="([^"]*)"/, 1].to_s).squish
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "disclose agent keys on leave", "behavior": "a keys.manage leaver holding one covering agent key reads the second-person /account clause in the leave dialog and in the flash after leaving", "layer": "request"}
+    it "points a keys.manage leaver at /account for their own agent key, in dialog and flash" do
+      membership = sign_in_as_member(%w[view keys.manage])
+      create_agent_api_key(user: membership.user, repositories: [repository], name: "Fleet A")
+
+      get repository_path(repository)
+      expect(leave_dialog).to eq(
+        "Leave acme/billing-service? You will lose access immediately, and only an owner can add " \
+        "you back. Your 1 live agent key covering this repository keeps authenticating until you " \
+        "revoke it on your account page (/account)."
+      )
+
+      delete leave_repository_members_path(repository)
+      expect(flash[:notice]).to eq(
+        "You no longer have access to acme/billing-service. Your 1 live agent key covering this " \
+        "repository keeps authenticating — revoke it on your account page (/account)."
+      )
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "compose both key kinds on leave", "behavior": "a leaver with one sgk_ key and two covering agent keys reads both clauses, the agent one saying also and plural", "layer": "request"}
+    it "composes the sgk_ and agent clauses for a leaver holding both" do
+      membership = sign_in_as_member(%w[view keys.manage])
+      repository.api_keys.create!(name: "CI", created_by_user: membership.user)
+      create_agent_api_key(user: membership.user, repositories: [repository], name: "Fleet A")
+      create_agent_api_key(user: membership.user, repositories: [repository], name: "Fleet B")
+
+      delete leave_repository_members_path(repository)
+
+      expect(flash[:notice]).to eq(
+        "You no longer have access to acme/billing-service. The 1 API key you minted is still " \
+        "live — ask an owner to revoke it in the repository's API keys panel. Your 2 live agent " \
+        "keys covering this repository also keep authenticating — revoke them on your account " \
+        "page (/account)."
+      )
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "withhold agent keys from view-only leaver", "behavior": "a view-only member holding a covering agent key sees no agent clause in the dialog or the flash because the keys.manage gate returns nothing", "layer": "request"}
+    it "says nothing about agent keys to a leaver without keys.manage" do
+      membership = sign_in_as_member(%w[view])
+      create_agent_api_key(user: membership.user, repositories: [repository], name: "Fleet A")
+
+      get repository_path(repository)
+      expect(leave_dialog).not_to include("agent key")
+
+      delete leave_repository_members_path(repository)
+      expect(flash[:notice]).to eq("You no longer have access to acme/billing-service.")
+    end
+
+    # @intent: {"entity": "RepositoryMembership", "action": "isolate agent keys per repository on leave", "behavior": "an agent key covering only another repository adds nothing to the leave dialog", "layer": "request"}
+    it "ignores an agent key that covers a different repository" do
+      membership = sign_in_as_member(%w[view keys.manage])
+      other = create_repository(user: repository.user, github_full_name: "acme/payments-service")
+      create_membership(repository: other, user: membership.user, permissions: %w[view])
+      create_agent_api_key(user: membership.user, repositories: [other], name: "Elsewhere")
+
+      get repository_path(repository)
+
+      expect(leave_dialog).not_to include("agent key")
+    end
+  end
+
   # The action behind the control, exercised from the member's own session: leaving really does
   # end the access, the page they land on exists, and no submitted parameter can name whose row
   # goes. (The refusal shapes — owner, non-member, cross-repository — are pinned beside `#destroy`
