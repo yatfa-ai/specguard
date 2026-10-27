@@ -241,6 +241,11 @@ class Repository < ApplicationRecord
     test_runs.order(created_at: :desc, id: :desc).first
   end
 
+  # The run `latest_test_run` becomes once `test_run` is gone — the same ordering, one LIMIT 1.
+  def latest_test_run_excluding(test_run)
+    test_runs.where.not(id: test_run.id).order(created_at: :desc, id: :desc).first
+  end
+
   # The newest run on ONE named branch — the anchor for a history the reader asked for by name,
   # where `latest_test_run` is the anchor for the one the repository happens to have pushed last.
   #

@@ -395,6 +395,10 @@ class RepositoryDashboard
     # Evaluated HERE, at the position the local it replaced held, so the anchor's two reads keep
     # issuing in the order they have always issued in. The method's memo lives below.
     newest_test_run
+    # Published for the Recent runs panel's per-row Delete confirm (SPGD-1958): the memo above is
+    # internal, so the id is handed over as its own ivar and the view compares ids without a
+    # per-row query. It is the repository's newest run whatever the page was asked to anchor on.
+    @newest_test_run_id = newest_test_run&.id
     @run_anchor_request = requested_commit_sha
     @run_request = requested_run_id
     @run_anchor_run =

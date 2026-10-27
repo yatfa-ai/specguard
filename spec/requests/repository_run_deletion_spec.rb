@@ -224,6 +224,85 @@ RSpec.describe "Deleting a test run", type: :request do
     end
   end
 
+  # SPGD-1958: the newest run is the one every panel anchors on, so deleting it re-anchors the
+  # page. The confirm and the notice say so for that row only; every other row reads as before.
+  describe "when the run is the repository's newest" do
+    let!(:older) { create_test_run(repository: repository, commit_sha: "0ld0ld0ld0ld", branch: "main", created_at: 2.days.ago) }
+    let!(:newest) { create_test_run(repository: repository, commit_sha: "a1b2c3d4e5f6", branch: "main", created_at: 1.day.ago) }
+
+    def confirm_for(sha)
+      CGI.unescapeHTML(response.body[/data-turbo-confirm="([^"]*#{sha[0, 7]}[^"]*)"/, 1].to_s)
+    end
+
+    # @intent: {"entity": "TestRun", "action": "disclose newest in confirm", "behavior": "the Delete confirm of the repository's newest run says it is the newest run and that the previous run becomes the one every panel reads, while an older row's confirm carries no such clause", "layer": "request"}
+    it "adds the newest-run clause to the newest row's confirm only" do
+      get repository_path(repository)
+
+      expect(confirm_for("a1b2c3d")).to include("This is the repository's newest run")
+      expect(confirm_for("a1b2c3d")).to include("cannot be undone")
+      expect(confirm_for("0ld0ld0")).not_to include("newest run")
+      expect(confirm_for("0ld0ld0")).to end_with("and it cannot be undone.")
+    end
+
+    # @intent: {"entity": "TestRun", "action": "name successor in notice", "behavior": "deleting the newest run flashes the surviving run's sha and branch as the one the page now reads", "layer": "request"}
+    it "names the successor run in the notice" do
+      delete repository_run_path(repository, newest)
+      follow_redirect!
+
+      expect(response.body).to include("Deleted run a1b2c3d (main) and its shards and observations.")
+      expect(response.body).to include("It was the repository&#39;s newest run, so the page now reads 0ld0ld0 (main).")
+    end
+
+    # @intent: {"entity": "TestRun", "action": "name successor on another branch", "behavior": "the notice names a successor that sits on a different branch by that branch", "layer": "request"}
+    it "names a successor on a different branch" do
+      older.update!(branch: "release")
+
+      delete repository_run_path(repository, newest)
+      follow_redirect!
+
+      expect(response.body).to include("the page now reads 0ld0ld0 (release).")
+    end
+
+    # @intent: {"entity": "TestRun", "action": "name successor without branch", "behavior": "the notice words a successor that reported no branch as branch not reported", "layer": "request"}
+    it "says 'branch not reported' for a successor with no branch" do
+      older.update!(branch: nil)
+
+      delete repository_run_path(repository, newest)
+      follow_redirect!
+
+      expect(response.body).to include("the page now reads 0ld0ld0 (branch not reported).")
+    end
+
+    # @intent: {"entity": "TestRun", "action": "disclose empty page", "behavior": "deleting the only run says no runs remain and the page will read empty until CI reports again", "layer": "request"}
+    it "says no runs remain when the deleted run was the only one" do
+      older.destroy!
+
+      delete repository_run_path(repository, newest)
+      follow_redirect!
+
+      expect(response.body).to include("No runs remain — the page will read empty until CI reports again.")
+      expect(response.body).not_to include("the page now reads")
+    end
+
+    # @intent: {"entity": "TestRun", "action": "keep notice for older row", "behavior": "deleting a run that is not the newest flashes exactly Deleted run 0ld0ld0 (main) and its shards and observations. with no newest-run clause", "layer": "request"}
+    it "leaves a non-newest row's notice exactly as it was" do
+      delete repository_run_path(repository, older)
+
+      expect(flash[:notice]).to eq("Deleted run 0ld0ld0 (main) and its shards and observations.")
+    end
+
+    # @intent: {"entity": "TestRun", "action": "bound successor read", "behavior": "deleting a non-newest run issues no successor query while deleting the newest issues exactly one", "layer": "request"}
+    it "reads the successor only when the deleted row was the newest" do
+      successor_read = /"test_runs"\."id" != /
+
+      non_newest = queries_against(successor_read) { delete repository_run_path(repository, older) }
+      newest_read = queries_against(successor_read) { delete repository_run_path(repository, newest) }
+
+      expect(non_newest).to be_empty
+      expect(newest_read.size).to eq(1)
+    end
+  end
+
   describe "who may fire it" do
     # @intent: {"entity": "TestRun", "action": "refuse without permission", "behavior": "a member holding view and keys.manage but not repo.delete gets 403 and the run survives", "layer": "request"}
     it "refuses a member without repo.delete with 403, and the run survives" do
