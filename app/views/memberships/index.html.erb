@@ -36,6 +36,14 @@
         <% @memberships.each do |membership| %>
           <% keys_minted = @keys_minted.fetch(membership.user_id, 0) %>
           <% agent_keys = @agent_keys_covering.fetch(membership.user_id, 0) %>
+          <%# On the viewer's own row Revoke is a self-revoke (see MembershipsController#destroy), so
+              it carries the Leave dialog: the revoke wording promises a lever the viewer is about to
+              lose. %>
+          <% revoke_confirm = if membership.user_id == current_user.id
+                                leave_confirmation(@repository, keys_minted, agent_keys)
+                              else
+                                revoke_confirmation(@repository, membership.user.github_handle, keys_minted, agent_keys)
+                              end %>
           <tr>
             <td class="px-3 py-2">
               <div class="flex flex-wrap items-center gap-2">
@@ -124,7 +132,7 @@
                 <% end %>
                 <%= button_to "Revoke", repository_member_path(@repository, membership), method: :delete,
                               class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                              form: { data: { turbo_confirm: revoke_confirmation(@repository, membership.user.github_handle, keys_minted, agent_keys) } } %>
+                              form: { data: { turbo_confirm: revoke_confirm } } %>
               </div>
             </td>
           </tr>
