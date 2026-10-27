@@ -201,12 +201,15 @@ class AccountsController < ApplicationController
   # THE ONE READ BEHIND THE OWNED-REPOSITORY DISCLOSURE (SPGD-1947) — `{repository_id => [stored
   # permissions of each membership]}` for the repositories given, in a single grouped
   # `repository_memberships` read that is skipped outright when the person owns nothing, so a
-  # person owning no repository pays no query for it. A repository with no membership has no key;
-  # the helper reads that as "no members".
+  # person owning no repository pays no query for it. Only members who can still sign in are read:
+  # a member whose own account is closed (archived) cannot act, so their row is left out by joining
+  # `users` through `User.active` inside the same statement. A repository with no such membership
+  # has no key; the helper reads that as "no members".
   def owned_repository_permissions_for(owned_repositories)
     return {} if owned_repositories.empty?
 
-    RepositoryMembership.where(repository_id: owned_repositories.map(&:id))
+    RepositoryMembership.joins(:user).merge(User.active)
+                        .where(repository_id: owned_repositories.map(&:id))
                         .pluck(:repository_id, :permissions)
                         .group_by(&:first)
                         .transform_values { |rows| rows.map(&:last) }

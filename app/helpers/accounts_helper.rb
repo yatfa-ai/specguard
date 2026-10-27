@@ -143,6 +143,8 @@ module AccountsHelper
   CLOSURE_OWNED_NAME_CAP = 3
   ClosureOwnedRepositories = Data.define(:total, :unopenable, :unadministrable)
 
+  # "Members" here means members who can still sign in: the permissions map is built from live
+  # users only, so a closed member's row never reaches this method.
   def closure_owned_repositories(owned_repositories, permissions_by_repository)
     unopenable = []
     unadministrable = []
