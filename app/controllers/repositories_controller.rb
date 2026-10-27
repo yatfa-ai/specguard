@@ -145,12 +145,16 @@ class RepositoriesController < ApplicationController
     # Skipped for the OWNER, who is never shown the control — `viewer_access` is nil for them in
     # the template — and must not pay the grouped query: this page's query budgets are absolute
     # and pinned, and the owner's must not move for a dialog they cannot see.
-    @viewer_keys_minted =
-      if repository_policy.can?(:owner)
-        0
-      else
-        keys_minted_by(@repository, [current_user.id]).fetch(current_user.id, 0)
-      end
+    #
+    # The agent-key count beside it (`@viewer_agent_keys_covering`) follows the same rule and the
+    # same owner skip, through the same gate.
+    @viewer_keys_minted = 0
+    @viewer_agent_keys_covering = 0
+    unless repository_policy.can?(:owner)
+      @viewer_keys_minted = keys_minted_by(@repository, [current_user.id]).fetch(current_user.id, 0)
+      @viewer_agent_keys_covering =
+        agent_keys_covering_by(@repository, [current_user.id]).fetch(current_user.id, 0)
+    end
   end
 
   def new
