@@ -231,6 +231,39 @@ RSpec.describe "Account closure", type: :request do
                              "including keys on machines you no longer have.")
   end
 
+  # The grammar branches of `AccountsHelper` the count-first example above cannot reach: its single
+  # agent key flips the verb ("stops", not "stop"), and with zero live `sgu_` keys the plain-text
+  # confirm joins the agent-key sentence with a bare comma while the HTML panel keeps the em-dash.
+  # @intent: { entity: "User", action: "compose the one-agent-key closure disclosure", behavior: "GET /account with exactly one live agent key covering one repository and no personal keys renders the panel and confirm with the singular verb 'stops' and the confirm joining the agent-key sentence with a comma instead of an em-dash", layer: "request" }
+  it "uses the singular verb and the no-sgu_ separator for exactly one live agent key" do
+    alpha = create_repository(user: person, github_full_name: "acme/alpha")
+    create_agent_api_key(user: person, repositories: [alpha], name: "Fleet")
+
+    get account_path
+
+    panel = closure_panel
+    expect(panel).to include("every <code class=\"font-mono text-xs\">sgu_</code> token — " \
+                             "and so does every agent key you minted: 1 live agent key, covering " \
+                             "1 repository, stops working immediately")
+    expect(panel).to include("Every sgu_ API key you hold stops working immediately, and so does " \
+                             "every agent key you minted: 1 live agent key, covering 1 repository, " \
+                             "stops working immediately")
+  end
+
+  # `'token'.pluralize(count)` appears in both the panel phrase and the confirm; only the singular
+  # was asserted anywhere.
+  # @intent: { entity: "UserApiKey", action: "pluralize the personal token count", behavior: "GET /account with two live personal keys renders the panel and confirm naming 2 live sgu_ tokens, plural", layer: "request" }
+  it "pluralizes token for two live personal keys" do
+    create_user_api_key(user: person, name: "Laptop")
+    create_user_api_key(user: person, name: "CI")
+
+    get account_path
+
+    panel = closure_panel
+    expect(panel).to include("your 2 live <code class=\"font-mono text-xs\">sgu_</code> tokens")
+    expect(panel).to include("Every sgu_ API key you hold stops working immediately — 2 live tokens")
+  end
+
   # A revoked `sga_` row already authenticates nothing, so it is not counted as something the
   # closure cuts — the count names the live cut only. The row itself is still retained, so the
   # what-remains truths still apply to it.
