@@ -63,6 +63,14 @@ class AccountsController < ApplicationController
     # it never offers what NO accessible repository accepts.
     @grantable_permissions = grantable_permissions_for(@grantable_repositories)
 
+    # WHAT CLOSURE DOES TO THE REPOSITORIES THIS PERSON OWNS (SPGD-1947) — the owned subset of the
+    # set above, filtered in memory (`@grantable_repositories` is already materialized), plus the
+    # stored `permissions` of every membership on those repositories. The owner holds no membership
+    # row of their own, so after closure a repository is administrable only by members whose stored
+    # permissions say so; `AccountsHelper#closure_owned_repositories` classifies from this map.
+    @owned_repositories = @grantable_repositories.select { |repository| repository.user_id == current_user.id }
+    @owned_repository_permissions = owned_repository_permissions_for(@owned_repositories)
+
     # Set by UserApiKeysController#create, readable exactly once. One reveal-once mechanism for
     # both credentials, not two: a second implementation is a second chance to get "shown exactly
     # once" wrong, and the two pages can never be reached by one redirect. The KEY NAMES, however,
@@ -166,8 +174,14 @@ class AccountsController < ApplicationController
   # `authenticate` resolves through; the archived-owner merge is moot one line later) and is
   # appended only when positive, so the notice for a person holding no live agent keys is
   # byte-identical to the sentence it has always been.
+  #
+  # SPGD-1947 — and, on the same terms, how many repositories the person owns: closure leaves each
+  # of them with a rename nobody can ever perform again (owner-only) and, for those without a
+  # member able to administer them, with nobody to mint or revoke their CI keys. Read before the
+  # `update!` like the agent-key count and appended only when positive.
   def close
     live_agent_keys = current_user.agent_api_keys.live.count
+    owned_repositories = current_user.repositories.count
     current_user.update!(archived_at: Time.current)
     reset_session
 
@@ -175,11 +189,28 @@ class AccountsController < ApplicationController
               "longer sign you in. Nothing of yours was deleted."
     notice << " Your #{pluralize(live_agent_keys, 'live agent key')} stopped " \
               "authenticating when the account closed." if live_agent_keys.positive?
+    notice << " You still own #{pluralize(owned_repositories, 'repository')}: renaming is owner-only " \
+              "and is no longer possible, and one without a member who can manage keys or members " \
+              "can no longer be administered." if owned_repositories.positive?
 
     redirect_to root_path, notice: notice
   end
 
   private
+
+  # THE ONE READ BEHIND THE OWNED-REPOSITORY DISCLOSURE (SPGD-1947) — `{repository_id => [stored
+  # permissions of each membership]}` for the repositories given, in a single grouped
+  # `repository_memberships` read that is skipped outright when the person owns nothing, so a
+  # person owning no repository pays no query for it. A repository with no membership has no key;
+  # the helper reads that as "no members".
+  def owned_repository_permissions_for(owned_repositories)
+    return {} if owned_repositories.empty?
+
+    RepositoryMembership.where(repository_id: owned_repositories.map(&:id))
+                        .pluck(:repository_id, :permissions)
+                        .group_by(&:first)
+                        .transform_values { |rows| rows.map(&:last) }
+  end
 
   # THE UNION THE MINT GRID OFFERS — `RepositoryPolicy#grantable_permissions` for every accessible
   # repository at once, read in ONE pass over `repository_memberships` rather than one query per

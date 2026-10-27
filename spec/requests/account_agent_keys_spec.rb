@@ -607,6 +607,22 @@ RSpec.describe "Account agent keys", type: :request do
 
       expect(statements.size).to eq(2)
     end
+
+    # SPGD-1947 — the owned-repository disclosure reads the owned repositories' memberships in ONE
+    # grouped query however many repositories are owned; a person owning none pays nothing more
+    # (the example above pins that at two). An owner's total is also two, because ownership
+    # dominates the grid's union and skips that read — so the closure read replaces it rather than
+    # adding to it; a regression to a per-repository read answers 5 here.
+    # @intent: { entity: "User", action: "hold the owned-repository disclosure's query budget", behavior: "GET /account for an owner of several repositories reads repository_memberships exactly twice — the boundary subquery plus one grouped read for the closure disclosure (the grid's union read is skipped for an owner), never one per owned repository", layer: "request" }
+    it "reads repository_memberships a constant number of times however many repositories are owned" do
+      4.times { |n| create_repository(user: person, github_full_name: "acme/owned-#{n}") }
+
+      statements = queries_against("repository_memberships") { get account_path }
+
+      expect(statements.size).to eq(2)
+      closure_reads = statements.grep(/SELECT "repository_memberships"\."repository_id", "repository_memberships"\."permissions"/)
+      expect(closure_reads.size).to eq(1)
+    end
   end
 
   # A person with no accessible repositories has nothing to tick and is offered no permission —
