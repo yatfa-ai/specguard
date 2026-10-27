@@ -800,6 +800,246 @@ RSpec.describe "Repository sharing", type: :request do
     end
   end
 
+  # SPGD-1954: what Remove says it takes with it beyond the repository's own rows — colleagues'
+  # access, the live `sgk_` CI keys, and the `sga_` agent keys that SURVIVE as dangling grants. The
+  # first sentence is the one pinned above and is never reworded; each clause is appended only when
+  # its count is non-zero and only to a viewer holding the permission that already shows them that
+  # metadata (`members.manage` for members, `keys.manage` for both key kinds).
+  describe "what Remove discloses about members and keys" do
+    let(:question) { "Remove acme/billing-service and all of its data?" }
+
+    def remove_dialog
+      response.body.scan(/data-turbo-confirm="([^"]*)"/).flatten
+              .map { |value| CGI.unescapeHTML(value) }
+              .find { |value| value.start_with?("Remove ") }
+    end
+
+    def add_member(handle, uid, permissions = %w[view])
+      user = create_user(github_uid: uid, github_handle: handle, installation_id: nil)
+      create_membership(repository: repository, user: user, permissions: permissions)
+      user
+    end
+
+    describe "the owner" do
+      before do
+        repository
+        sign_in_via_github
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "disclose lost member access on remove", "behavior": "an owner with two other members reads that 2 other members lose access in the dialog and that 2 other members lost access in the flash", "layer": "request"}
+      it "is told how many colleagues lose access, before and after" do
+        add_member("hubot", "9001")
+        add_member("monalisa", "9002")
+
+        get repository_path(repository)
+        expect(remove_dialog).to eq("#{question} 2 other members lose access.")
+
+        delete repository_path(repository)
+        expect(flash[:notice]).to eq("Removed acme/billing-service. 2 other members lost access.")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "agree singular member count", "behavior": "one other member reads 1 other member loses access in the dialog", "layer": "request"}
+      it "uses singular agreement for one colleague" do
+        add_member("hubot", "9001")
+
+        get repository_path(repository)
+
+        expect(remove_dialog).to eq("#{question} 1 other member loses access.")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "skip closed members on remove", "behavior": "a member whose account is closed is not counted among the colleagues who lose access", "layer": "request"}
+      it "does not count a member whose account is closed" do
+        add_member("hubot", "9001")
+        add_member("gone", "9002").update!(archived_at: Time.current)
+
+        get repository_path(repository)
+
+        expect(remove_dialog).to eq("#{question} 1 other member loses access.")
+      end
+
+      # @intent: {"entity": "ApiKey", "action": "disclose stopped CI keys on remove", "behavior": "an owner with two live sgk_ keys and one revoked key reads that 2 live CI keys stop authenticating and later that they stopped", "layer": "request"}
+      it "is told how many live CI keys stop authenticating, ignoring revoked ones" do
+        repository.api_keys.create!(name: "CI one")
+        repository.api_keys.create!(name: "CI two")
+        repository.api_keys.create!(name: "Old").revoke!
+
+        get repository_path(repository)
+        expect(remove_dialog).to eq("#{question} 2 live CI keys stop authenticating.")
+
+        delete repository_path(repository)
+        expect(flash[:notice]).to eq("Removed acme/billing-service. 2 live CI keys stopped authenticating.")
+      end
+
+      # @intent: {"entity": "AgentApiKey", "action": "disclose surviving agent keys on remove", "behavior": "an owner with one agent key covering only this repository reads that it stays live, becomes inert and is revoked on /account", "layer": "request"}
+      it "is told an agent key covering only this repository becomes inert but stays live" do
+        create_agent_api_key(user: owner, repositories: [repository], name: "Fleet")
+
+        get repository_path(repository)
+        expect(remove_dialog).to eq(
+          "#{question} 1 live agent key covering it stays live after the removal: 1 covers only " \
+          "this repository and becomes inert. Each owner can revoke theirs on /account."
+        )
+
+        delete repository_path(repository)
+        expect(flash[:notice]).to eq(
+          "Removed acme/billing-service. 1 live agent key covering it stays live after the " \
+          "removal: 1 covers only this repository and is now inert. Each owner can revoke theirs " \
+          "on /account."
+        )
+      end
+
+      # @intent: {"entity": "AgentApiKey", "action": "split agent keys by surviving coverage", "behavior": "two agent keys, one also covering another repository and one covering only this one, read that one keeps working elsewhere but loses this one and one becomes inert", "layer": "request"}
+      it "splits agent keys into those that keep working elsewhere and those that go inert" do
+        other = create_repository(user: owner, github_full_name: "acme/payments-service")
+        create_agent_api_key(user: owner, repositories: [repository, other], name: "Wide")
+        create_agent_api_key(user: owner, repositories: [repository], name: "Narrow")
+
+        get repository_path(repository)
+        expect(remove_dialog).to eq(
+          "#{question} 2 live agent keys covering it stay live after the removal: 1 keeps working " \
+          "on its other repositories but loses this one; 1 covers only this repository and " \
+          "becomes inert. Each owner can revoke theirs on /account."
+        )
+
+        delete repository_path(repository)
+        expect(flash[:notice]).to eq(
+          "Removed acme/billing-service. 2 live agent keys covering it stay live after the " \
+          "removal: 1 keeps working on its other repositories but no longer covers this one; 1 " \
+          "covers only this repository and is now inert. Each owner can revoke theirs on /account."
+        )
+      end
+
+      # @intent: {"entity": "AgentApiKey", "action": "ignore keys that cannot authenticate on remove", "behavior": "a revoked agent key, an archived-owner agent key and a key covering another repository add no agent clause", "layer": "request"}
+      it "does not claim keys that cannot authenticate or do not cover the repository" do
+        other = create_repository(user: owner, github_full_name: "acme/payments-service")
+        create_agent_api_key(user: owner, repositories: [repository], name: "Revoked").revoke!
+        create_agent_api_key(user: owner, repositories: [other], name: "Elsewhere")
+        closed = add_member("closed", "9003", %w[view keys.manage])
+        create_agent_api_key(user: closed, repositories: [repository], name: "Closed owner")
+        closed.update!(archived_at: Time.current)
+
+        get repository_path(repository)
+
+        expect(remove_dialog).to eq(question)
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "compose all remove consequences", "behavior": "members, CI keys and agent keys compose in that order after the unchanged first sentence", "layer": "request"}
+      it "composes the member, CI key and agent key clauses in order" do
+        add_member("hubot", "9001")
+        repository.api_keys.create!(name: "CI one")
+        create_agent_api_key(user: owner, repositories: [repository], name: "Fleet")
+
+        get repository_path(repository)
+
+        expect(remove_dialog).to eq(
+          "#{question} 1 other member loses access. 1 live CI key stops authenticating. " \
+          "1 live agent key covering it stays live after the removal: 1 covers only this " \
+          "repository and becomes inert. Each owner can revoke theirs on /account."
+        )
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "keep zero case unchanged", "behavior": "an owner with no members and no keys reads the dialog and flash byte for byte as before", "layer": "request"}
+      it "reads exactly what it always read when there is nothing to disclose" do
+        get repository_path(repository)
+        expect(remove_dialog).to eq(question)
+
+        delete repository_path(repository)
+        expect(flash[:notice]).to eq("Removed acme/billing-service.")
+      end
+
+      # The member count is the one aggregate this page adds; the key clauses are counted off rows
+      # the dashboard already loaded. It must not scale with the number of members.
+      # @intent: {"entity": "RepositoryMembership", "action": "bound remove disclosure queries", "behavior": "the show page issues the same number of repository_memberships queries for one member as for five", "layer": "request"}
+      it "reads memberships in the same number of queries however many members there are" do
+        add_member("hubot", "9001")
+        get repository_path(repository)
+        one = queries_against('"repository_memberships"') { get repository_path(repository) }.size
+
+        4.times { |n| add_member("member#{n}", (9100 + n).to_s) }
+        five = queries_against('"repository_memberships"') { get repository_path(repository) }.size
+
+        expect(five).to eq(one)
+      end
+    end
+
+    describe "a member holding 'repo.delete' and 'members.manage' only" do
+      before do
+        sign_in_as_member(%w[view repo.delete members.manage])
+        add_member("monalisa", "9002")
+        create_agent_api_key(user: owner, repositories: [repository], name: "Fleet")
+        repository.api_keys.create!(name: "CI one")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "gate key clauses on keys.manage", "behavior": "a repo.delete member without keys.manage reads the member clause counting the owner but no CI or agent key clause", "layer": "request"}
+      it "is told about members but not about credential metadata" do
+        get repository_path(repository)
+        expect(remove_dialog).to eq(
+          "#{question} It belongs to octocat — this destroys their repository along with its API " \
+          "keys, its entire run history and every other member's access. 1 other member loses access."
+        )
+        expect(remove_dialog).not_to include("CI key")
+        expect(remove_dialog).not_to include("agent key")
+
+        delete repository_path(repository)
+        expect(flash[:notice]).not_to include("CI key")
+        expect(flash[:notice]).not_to include("agent key")
+      end
+    end
+
+    describe "a member holding 'repo.delete' and 'keys.manage' only" do
+      before do
+        sign_in_as_member(%w[view repo.delete keys.manage])
+        add_member("monalisa", "9002")
+        repository.api_keys.create!(name: "CI one")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "gate member clause on members.manage", "behavior": "a repo.delete member without members.manage reads the CI key clause but never a member count", "layer": "request"}
+      it "is told about CI keys but not how many members lose access" do
+        get repository_path(repository)
+
+        expect(remove_dialog).to eq(
+          "#{question} It belongs to octocat — this destroys their repository along with its API " \
+          "keys, its entire run history and every other member's access. " \
+          "1 live CI key stops authenticating."
+        )
+      end
+    end
+
+    describe "a member holding only 'repo.delete'" do
+      before do
+        sign_in_as_member(%w[view repo.delete])
+        add_member("monalisa", "9002")
+        repository.api_keys.create!(name: "CI one")
+        create_agent_api_key(user: owner, repositories: [repository], name: "Fleet")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "keep ungated wording", "behavior": "a repo.delete member with neither members.manage nor keys.manage reads the dialog and flash byte for byte as before", "layer": "request"}
+      it "reads exactly what it always read" do
+        get repository_path(repository)
+        expect(remove_dialog).to eq(
+          "#{question} It belongs to octocat — this destroys their repository along with its API " \
+          "keys, its entire run history and every other member's access."
+        )
+
+        delete repository_path(repository)
+        expect(flash[:notice]).to eq(
+          "Removed acme/billing-service. It was octocat's repository — its API keys, its run " \
+          "history and every other member's access went with it."
+        )
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "charge nothing for ungated disclosure", "behavior": "a repo.delete member without members.manage or keys.manage issues no membership count and no agent-key listing", "layer": "request"}
+      it "pays for no member count or key listing" do
+        queries = queries_against(/agent_api_keys|COUNT\(\*\) FROM "repository_memberships"/) do
+          get repository_path(repository)
+        end
+
+        # The only agent-key statement is the ungated connection indicator's MAX(last_used_at).
+        expect(queries.reject { |sql| sql.include?("MAX(") }).to be_empty
+      end
+    end
+  end
+
   # Deliberately its own describe rather than a seventh key in `rendered_controls` above: that
   # matrix is for *controls*, things that 403 if they render ungated. This is a badge — it grants
   # nothing and 403s nowhere. What it discloses is who was removed from this repository, which is a

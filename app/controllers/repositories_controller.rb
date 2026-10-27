@@ -155,6 +155,14 @@ class RepositoriesController < ApplicationController
       @viewer_agent_keys_covering =
         agent_keys_covering_by(@repository, [current_user.id]).fetch(current_user.id, 0)
     end
+    # What the Remove confirm tells the presser it will take with it (SPGD-1954). Built only for a
+    # viewer who is shown the control (`repo_delete`), and the CI-key and agent-key counts are read
+    # off the rows the dashboard above already loaded, so the only query this adds is the member
+    # count, and only for a viewer holding `members.manage`.
+    @removal_consequences =
+      if repository_policy.can?(:repo_delete)
+        removal_consequences(@repository, api_keys: @api_keys, agent_api_keys: @agent_api_keys)
+      end
   end
 
   def new
@@ -204,7 +212,11 @@ class RepositoriesController < ApplicationController
     # `revoke_notice`: the non-owner sentence names `repository.user`, and a destroyed record is not
     # something to be asking for its associations. `repository_policy` defaults to the record
     # `current_repository` just resolved and is memoized, so this costs no query.
-    notice = helpers.remove_notice(repository, owner: repository_policy.owner?)
+    #
+    # The consequence counts are read here for the same reason: the rows they count are deleted (or,
+    # for agent keys, orphaned) by the line below, so a count taken afterwards would be zero.
+    notice = helpers.remove_notice(repository, owner: repository_policy.owner?,
+                                               consequences: removal_consequences(repository))
 
     repository.destroy!
 
@@ -212,6 +224,45 @@ class RepositoriesController < ApplicationController
   end
 
   private
+
+  # THE COUNTS BEHIND THE REMOVE DISCLOSURE (SPGD-1954), already gated: each is zero unless the
+  # viewer holds the permission that shows them that class of metadata elsewhere (`members.manage`
+  # for the member count, `keys.manage` for both key counts — the line `MintedKeyCounts` draws), so
+  # `RepositoriesHelper` never consults a policy and a viewer who may not know a number reads
+  # today's wording.
+  #
+  # `api_keys:` / `agent_api_keys:` are the rows `RepositoryDashboard` already loaded for the show
+  # page (live `sgk_` rows; live covering `sga_` rows with their owner joined), so the page pays no
+  # further key query. The destroy path passes neither and reads the same sets with one aggregate
+  # apiece. Both agree on the predicate `AgentApiKey.authenticate` applies: archived-owner agent
+  # keys do not authenticate, so they are not claimed to keep working.
+  def removal_consequences(repository, api_keys: nil, agent_api_keys: nil)
+    members = 0
+    ci_keys = 0
+    agent_keys = 0
+    only_here = 0
+
+    if repository_policy(repository).can?(:members_manage)
+      members = repository.repository_memberships.joins(:user).merge(User.active)
+                          .where.not(user_id: current_user.id).count
+    end
+
+    if repository_policy(repository).can?(:keys_manage)
+      ci_keys = api_keys ? api_keys.size : repository.api_keys.live.count
+      key_grants =
+        if agent_api_keys
+          agent_api_keys.select { |key| key.user.active? }.map(&:repository_ids)
+        else
+          AgentApiKey.live.covering(repository).joins(:user).merge(User.active).pluck(:repository_ids)
+        end
+      agent_keys = key_grants.size
+      only_here = key_grants.count { |ids| ids == [repository.id] }
+    end
+
+    RepositoriesHelper::RemovalConsequences.new(
+      other_members: members, ci_keys: ci_keys, agent_keys: agent_keys, agent_keys_only_here: only_here
+    )
+  end
 
   # The `?sort=stale` ordering is `RepositoryNarrowing#stale_first`, shared with
   # `Api::V1::UserRepositoriesController` — one definition of what "stale" means, so the grid and

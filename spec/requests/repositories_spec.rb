@@ -2915,7 +2915,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # spec/requests/repository_unannotated_directories_spec.rb, which also carries the panel's own
       # N+1 guard: the equality across two suite sizes that an absolute count here cannot tell from
       # an ordinary widening.
-      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 26 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
+      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 27 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -2984,7 +2984,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # Rebaselined by two rather than carved out, because this is an ABSOLUTE page budget:
         # hiding a real new query behind a filter would be the regression this count exists to
         # catch.
-        expect(count_all_queries { get repository_path(repository) }).to eq(26)
+        #
+        # +1 from SPGD-1954: the Remove confirm now tells the presser how many other members lose
+        # access. That is ONE aggregate over `repository_memberships` (joined to `users` so a closed
+        # account is not counted), bought only by a viewer who is shown the Remove control AND holds
+        # `members.manage` — the owner, here — and constant in the number of members. The two key
+        # clauses beside it cost nothing: they are counted off the `sgk_` and `sga_` rows the
+        # dashboard has already loaded. A member without both permissions pays no query for it
+        # (pinned in spec/requests/repository_sharing_spec.rb). 26 -> 27.
+        expect(count_all_queries { get repository_path(repository) }).to eq(27)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("tbody tr").size).to eq(4)

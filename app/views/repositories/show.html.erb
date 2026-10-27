@@ -26,7 +26,7 @@
       <% if repository_policy.can?(:repo_delete) %>
         <%= button_to "Remove", repository_path(@repository), method: :delete,
                       class: UI::ButtonComponent.classes(variant: :danger, size: :md),
-                      form: { data: { turbo_confirm: remove_confirmation(@repository, owner: repository_policy.can?(:owner)) } } %>
+                      form: { data: { turbo_confirm: remove_confirmation(@repository, owner: repository_policy.can?(:owner), consequences: @removal_consequences) } } %>
       <% end %>
     <% end %>
   <% end %>

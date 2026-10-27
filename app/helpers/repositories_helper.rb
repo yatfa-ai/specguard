@@ -146,34 +146,65 @@ module RepositoriesHelper
   # the request already built (`ApplicationController#repository_policy`, memoized per repository)
   # instead of a helper opening a second, unmemoized route to the same question.
 
+  # What removing a repository takes away beyond the rows it owns outright, as plain counts the
+  # caller has already gated (SPGD-1954). Each count is ZERO for a viewer who may not be told it —
+  # `RepositoriesController#removal_consequences` zeroes a count unless the viewer holds the
+  # permission that already shows them that metadata (`members.manage` for the member count,
+  # `keys.manage` for both key counts, the same line `MintedKeyCounts` draws) — so the helper never
+  # asks a policy and "may not know" and "none exist" read the same: today's wording.
+  #
+  #   other_members          memberships (not the viewer's own) of people who can still sign in; their
+  #                          access goes with the row (`has_many :repository_memberships, dependent:
+  #                          :destroy`).
+  #   ci_keys                live `sgk_` keys; deleted with the repository (`has_many :api_keys,
+  #                          dependent: :destroy`), so the pipeline starts getting 401s.
+  #   agent_keys             live `sga_` keys covering it whose owner can still authenticate. They
+  #                          are NOT deleted: `AgentApiKey#repository_ids` is a mint-time array with
+  #                          no foreign key, so the grant simply dangles.
+  #   agent_keys_only_here   the subset of `agent_keys` whose whole stored set is this repository —
+  #                          after removal they authenticate nothing but remain live rows.
+  RemovalConsequences = Data.define(:other_members, :ci_keys, :agent_keys, :agent_keys_only_here) do
+    def none? = [other_members, ci_keys, agent_keys].all?(&:zero?)
+  end
+  NO_REMOVAL_CONSEQUENCES = RemovalConsequences.new(
+    other_members: 0, ci_keys: 0, agent_keys: 0, agent_keys_only_here: 0
+  )
+
   # The copy in the Remove confirm dialog, rendered by repositories/show.
   #
   # The first sentence is unchanged for BOTH paths, and that is load-bearing beyond taste:
   # `spec/requests/repository_sharing_spec.rb` detects whether the Remove control rendered at all by
   # looking for the substring `and all of its data?`. Appending a second sentence preserves that
   # marker; rewording the first would silently blind the control matrix that pins who may see this
-  # button.
-  def remove_confirmation(repository, owner:)
+  # button. The consequence clauses (`consequences`) are appended after everything else, each only
+  # when non-zero, so a repository with no colleagues and no keys reads byte-identically to before.
+  def remove_confirmation(repository, owner:, consequences: NO_REMOVAL_CONSEQUENCES)
     question = "Remove #{repository.github_full_name} and all of its data?"
-    return question if owner
+    unless owner
+      question = "#{question} It belongs to #{repository.user.display_name} — this destroys their " \
+                 "repository along with its API keys, its entire run history and every other " \
+                 "member's access."
+    end
 
-    "#{question} It belongs to #{repository.user.display_name} — this destroys their repository " \
-      "along with its API keys, its entire run history and every other member's access."
+    [question, *removal_consequence_clauses(consequences, tense: :future)].join(" ")
   end
 
   # The counterpart after the click, called from `RepositoriesController#destroy` — the same shape
   # `MembershipsController#destroy` already uses for `revoke_notice`.
   #
-  # Past tense and no lever to pull: unlike a revoked colleague's surviving API keys, nothing here
-  # is recoverable and there is nothing to send the reader to. What it does instead is say plainly
+  # Past tense and no lever to pull for the rows that went with the repository: unlike a revoked
+  # colleague's surviving API keys, nothing there is recoverable. What it does instead is say plainly
   # whose repository just went, so a member who clicked through on the wrong row can tell the owner
-  # rather than discover it from them.
-  def remove_notice(repository, owner:)
+  # rather than discover it from them. The one lever that remains is the agent-key clause, which
+  # points at /account because those rows survive the removal.
+  def remove_notice(repository, owner:, consequences: NO_REMOVAL_CONSEQUENCES)
     removed = "Removed #{repository.github_full_name}."
-    return removed if owner
+    unless owner
+      removed = "#{removed} It was #{repository.user.display_name}'s repository — its API keys, " \
+                "its run history and every other member's access went with it."
+    end
 
-    "#{removed} It was #{repository.user.display_name}'s repository — its API keys, its run " \
-      "history and every other member's access went with it."
+    [removed, *removal_consequence_clauses(consequences, tense: :past)].join(" ")
   end
 
   # The copy in the per-row Delete confirm dialog on the "Recent runs" panel (SPGD-812). Question
@@ -1000,5 +1031,56 @@ module RepositoriesHelper
   def repository_closed_owner_members_sentence(repository)
     "#{repository.user.display_name}'s account is closed, so the owner cannot change this. " \
       "Ask a member who holds members.manage if that is not what you intend."
+  end
+
+  # The sentences behind both halves of the Remove disclosure, decided in one place so the dialog
+  # and the flash cannot drift in what they claim or how they agree with their count. Zero counts
+  # contribute nothing. `tense` is `:future` for the dialog and `:past` for the flash.
+  def removal_consequence_clauses(consequences, tense:)
+    past = tense == :past
+    clauses = []
+
+    unless consequences.other_members.zero?
+      count = consequences.other_members
+      verb = past ? "lost" : (count == 1 ? "loses" : "lose")
+      clauses << "#{pluralize(count, 'other member')} #{verb} access."
+    end
+
+    unless consequences.ci_keys.zero?
+      count = consequences.ci_keys
+      verb = past ? "stopped" : (count == 1 ? "stops" : "stop")
+      clauses << "#{pluralize(count, 'live CI key')} #{verb} authenticating."
+    end
+
+    clauses << removal_agent_keys_clause(consequences, past: past) unless consequences.agent_keys.zero?
+    clauses
+  end
+
+  # The `sga_` half. These rows survive the removal (the stored grant is an array, not a foreign
+  # key), so unlike the two clauses above this one names what is left behind: keys that also cover
+  # another repository go on authenticating there, and keys that covered only this one become inert
+  # but stay live rows until their owners revoke them on /account. Number agreement for every verb
+  # is decided here from the two counts, in one place.
+  def removal_agent_keys_clause(consequences, past:)
+    total = consequences.agent_keys
+    only_here = consequences.agent_keys_only_here
+    elsewhere = total - only_here
+
+    parts = []
+    if elsewhere.positive?
+      one = elsewhere == 1
+      loss = past ? (one ? "no longer covers" : "no longer cover") : (one ? "loses" : "lose")
+      parts << "#{elsewhere} #{one ? 'keeps' : 'keep'} working on #{one ? 'its' : 'their'} other " \
+               "repositories but #{loss} this one"
+    end
+    if only_here.positive?
+      one = only_here == 1
+      state = past ? (one ? "is now inert" : "are now inert") : (one ? "becomes inert" : "become inert")
+      parts << "#{only_here} #{one ? 'covers' : 'cover'} only this repository and #{state}"
+    end
+
+    verb = total == 1 ? "stays" : "stay"
+    "#{pluralize(total, 'live agent key')} covering it #{verb} live after the removal: " \
+      "#{parts.join('; ')}. Each owner can revoke theirs on /account."
   end
 end
