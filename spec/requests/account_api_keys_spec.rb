@@ -87,6 +87,70 @@ RSpec.describe "Account API keys", type: :request do
     expect(response).to have_http_status(:ok)
   end
 
+  # SPGD-1966: the Revoke confirm (a `data-turbo-confirm` attribute on the button's form) and the
+  # notice carry the consequence disclosure its `sgk_` / `sga_` siblings already have: the last-used
+  # age, whether this is the only live personal key, and that other credentials keep working.
+  describe "the revoke disclosure" do
+    include ActiveSupport::Testing::TimeHelpers
+
+    let(:separate_credentials) do
+      "Your agent (sga_) keys and repositories' CI (sgk_) keys are separate credentials and keep working."
+    end
+
+    def confirm_for(key)
+      get account_path
+      form = Nokogiri::HTML(response.body).at_css("form[action='#{account_api_key_path(key)}']")
+      form["data-turbo-confirm"]
+    end
+
+    # @intent: {"entity": "DELETE /account/api_keys/:id", "action": "disclose on revoke with a sibling", "behavior": "with two live personal keys the confirm carries the last-used age and the separate-credentials clause without the only-live sentence, and the notice names the key and carries the clause", "layer": "request"}
+    it "names the age and separate credentials, without the only-live sentence, when another key is live" do
+      doomed = create_user_api_key(user: person, name: "Laptop")
+      create_user_api_key(user: person, name: "Agent")
+      doomed.touch_last_used!
+      travel_to(3.hours.from_now) do
+        confirm = confirm_for(doomed)
+        expect(confirm).to include("Revoke Laptop?").and include("Last used about 3 hours ago.")
+        expect(confirm).to include(separate_credentials)
+        expect(confirm).not_to include("only live personal key")
+      end
+
+      delete account_api_key_path(doomed)
+
+      expect(flash[:notice]).to eq("Revoked Laptop. Its token no longer authenticates. #{separate_credentials}")
+    end
+
+    # @intent: {"entity": "DELETE /account/api_keys/:id", "action": "disclose on revoking the only key", "behavior": "the confirm and the notice for the only live personal key carry the only-live and mint-replacement sentences, and a never-used key reads It has never been used", "layer": "request"}
+    it "says so when it is the only live personal key, and when it was never used" do
+      only = create_user_api_key(user: person, name: "Solo")
+      create_user_api_key(user: person, name: "Old").tap(&:revoke!)
+
+      confirm = confirm_for(only)
+      expect(confirm).to include("It has never been used.")
+      expect(confirm).to include("It is your only live personal key")
+      expect(confirm).to include(separate_credentials)
+
+      delete account_api_key_path(only)
+
+      expect(flash[:notice]).to include("Revoked Solo.").and include(separate_credentials)
+      expect(flash[:notice]).to include("No live personal key remains — mint a replacement")
+    end
+
+    # @intent: {"entity": "DELETE /account/api_keys/:id", "action": "replay a revoke", "behavior": "replaying DELETE on an already-revoked key says it was already revoked and leaves revoked_at unchanged", "layer": "request"}
+    it "reads as already revoked on a replay and does not re-stamp revoked_at" do
+      key = create_user_api_key(user: person, name: "Laptop")
+      create_user_api_key(user: person, name: "Agent")
+      delete account_api_key_path(key)
+      stamp = key.reload.revoked_at
+
+      travel_to(2.days.from_now) { delete account_api_key_path(key) }
+
+      expect(flash[:notice]).to include("Laptop was already revoked — nothing changed.")
+      expect(flash[:notice]).not_to start_with("Revoked")
+      expect(key.reload.revoked_at).to eq(stamp)
+    end
+  end
+
   # @intent: {"entity": "UserApiKey", "action": "omit in-place rotation", "behavior": "The account page offers no Regenerate control, so a compromised user key can only be revoked and re-minted rather than rotated in place.", "layer": "request"}
   it "offers no way to rotate a key in place" do
     mint("Laptop")
