@@ -274,10 +274,25 @@ module RepositoriesHelper
     parts = ["Revoke #{api_key.name}? Its token stops working immediately."]
     if live_count == 1
       parts << "It is this repository's only live ingest key — CI authenticating with it stops " \
-               "ingesting until a new key is minted. To rotate without a gap, use Regenerate, " \
-               "which issues the replacement token for this key."
+               "ingesting until a new key is minted. To rotate without a gap, create a New API key, " \
+               "update CI to use it, then Revoke this one — Regenerate swaps the token in place, so " \
+               "the old one stops immediately."
     end
     parts << api_key_last_used_clause(api_key, stranded: stranded)
+    parts.compact.join(" ")
+  end
+
+  # The Regenerate counterpart of the revoke confirmation above (SPGD-1970). `ApiKey#regenerate!`
+  # overwrites the digest in one save with no grace window, so the confirm says what that costs —
+  # anything still presenting the old token, CI included, is refused until the replacement is
+  # deployed — and names the gap-free path (New API key, update CI, Revoke the old key). Display
+  # copy only: `stranded` is handed in from the page's partition, so it costs no query.
+  def api_key_regenerate_confirmation(api_key, stranded:)
+    parts = ["Regenerate #{api_key.name}? Its current token stops working immediately, and the " \
+             "replacement is shown only once."]
+    parts << api_key_last_used_clause(api_key, stranded: stranded)
+    parts << "Anything still presenting the old token, CI included, is refused until the replacement " \
+             "is deployed. To rotate with no gap, create a New API key, update CI, then Revoke this one instead."
     parts.compact.join(" ")
   end
 

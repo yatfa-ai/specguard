@@ -594,6 +594,17 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(confirm).to include("never been used")
       end
 
+      # @intent: {"entity": "ApiKey", "action": "name the gap-free rotation", "behavior": "the Revoke confirm of the only live key names New API key, update CI, then Revoke as the gap-free path and no longer claims Regenerate rotates without a gap", "layer": "request"}
+      it "names the gap-free rotation path rather than recommending Regenerate" do
+        repository.api_keys.create!(name: "CI main")
+
+        get repository_path(repository)
+
+        confirm = revoke_confirm_for("CI main")
+        expect(confirm).to include("New API key", "update CI", "then Revoke this one", "only live ingest key", "stops working immediately")
+        expect(confirm).not_to include("rotate without a gap, use Regenerate")
+      end
+
       # @intent: {"entity": "ApiKey", "action": "omit the last-key warning", "behavior": "with two live keys the Revoke confirm still names the key but does not claim it is the only live key, and a used key prints its last-used age", "layer": "request"}
       it "does not claim the key is the only one when a second is live" do
         used = repository.api_keys.create!(name: "CI main")

@@ -41,9 +41,10 @@
                     <%= button_to "Regenerate", regenerate_repository_api_key_path(@repository, api_key),
                                   method: :post,
                                   class: UI::ButtonComponent.classes(variant: :warning, size: :xs),
-                                  form: { data: { turbo_confirm: "Regenerate #{api_key.name}? Its current " \
-                                                                 "token stops working immediately, and the " \
-                                                                 "replacement is shown only once." } } %>
+                                  form: { data: { turbo_confirm: api_key_regenerate_confirmation(
+                                                   api_key,
+                                                   stranded: @rotated_unused_api_keys.include?(api_key)
+                                                 ) } } %>
                     <%= button_to "Revoke", repository_api_key_path(@repository, api_key), method: :delete,
                                   class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
                                   form: { data: { turbo_confirm: api_key_revoke_confirmation(
