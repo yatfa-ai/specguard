@@ -1637,11 +1637,21 @@ RSpec.describe "Repository members", type: :request do
         expect(flash[:notice]).to eq("Updated dependabot. They hold nothing beyond opening acme/billing-service.")
       end
 
-      # @intent: {"entity": "RepositoryMembership", "action": "budget third party edit key reads", "behavior": "viewing and saving a colleague's row issues no api_keys or agent_api_keys statement", "layer": "request"}
-      it "pays no key-table queries on the third-party path" do
+      # The budget case the own-row guard exists for. A view-only colleague's row is already
+      # refused by the persisted-`keys.manage` guard, so a budget pinned there stays green even with
+      # `editing_own_row?` deleted; on a row that holds `keys.manage` and has minted keys, only that
+      # guard stands between the edit and the two grouped key reads — and a third-party save renders
+      # neither count, so they would be pure waste.
+      # @intent: {"entity": "RepositoryMembership", "action": "budget third party edit key reads", "behavior": "viewing and saving a keys.manage-holding colleague's row with a minted key issues no api_keys or agent_api_keys statement", "layer": "request"}
+      it "pays no key-table queries even when the colleague holds keys.manage and has minted keys" do
+        keys_holder = create_user(github_uid: "7777", github_handle: "renovate")
+        create_membership(repository: repository, user: keys_holder, permissions: %w[view keys.manage])
+        repository.api_keys.create!(name: "CI — renovate", created_by_user: keys_holder)
+        holder_membership = RepositoryMembership.find_by!(user: keys_holder, repository: repository)
+
         statements = queries_against(/api_keys/) do
-          get edit_repository_member_path(repository, other_membership)
-          patch_permissions(other_membership, [])
+          get edit_repository_member_path(repository, holder_membership)
+          patch_permissions(holder_membership, [])
         end
 
         expect(statements.size).to eq(0)
