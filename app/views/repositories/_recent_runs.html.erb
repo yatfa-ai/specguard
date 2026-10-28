@@ -110,7 +110,7 @@
                   <%= button_to "Delete", repository_run_path(@repository, test_run), method: :delete,
                                 class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
                                 params: { runs: @runs_request, runs_branch: @runs_branch_request }.compact,
-                                form: { data: { turbo_confirm: delete_run_confirmation(test_run, newest: test_run.id == @newest_test_run_id) } } %>
+                                form: { data: { turbo_confirm: delete_run_confirmation(test_run, newest: test_run.id == @newest_test_run_id, successor: @test_runs_total.to_i > 1) } } %>
                 </td>
               <% end %>
             <% end %>
