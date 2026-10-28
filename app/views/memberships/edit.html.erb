@@ -10,6 +10,11 @@
     narrowing one the actor did not intend to touch, without a word, is not. So the form says so
     before the click. %>
 <% stripped = @membership.permissions_was.to_a - repository_policy.grantable_permissions %>
+<%# A member editing their OWN row is de-escalating themselves, and only an owner or another
+    `members.manage` holder can undo it. Read from the PERSISTED row for the same reason as
+    `stripped`. Counts were loaded by the controller, gated on `keys.manage`. %>
+<% own_row = @membership.user_id == current_user.id %>
+<% own_warnings = own_row ? self_edit_warnings(@membership.permissions_was.to_a & MembershipsHelper::SELF_EDIT_GATED, @self_edit_keys_minted.to_i, @self_edit_agent_keys.to_i) : [] %>
 
 <%= render UI::PageComponent.new do %>
   <%= render UI::BreadcrumbComponent.new(items: [
@@ -21,8 +26,12 @@
 
   <%= render UI::PageHeaderComponent.new(
         title: "Edit #{@membership.user.github_handle}",
-        subtitle: "Change what #{@membership.user.github_handle} holds on #{@repository.github_full_name}. " \
-                  "They keep their access and the date they were added."
+        subtitle: if own_row
+                    self_edit_subtitle(@repository)
+                  else
+                    "Change what #{@membership.user.github_handle} holds on #{@repository.github_full_name}. " \
+                      "They keep their access and the date they were added."
+                  end
       ) %>
 
   <%= render UI::PanelComponent.new do %>
@@ -56,6 +65,18 @@
           Added <%= time_ago_in_words(@membership.created_at) %> ago
         </span>
       </div>
+
+      <% if own_warnings.any? %>
+        <div class="mb-4">
+          <%= render UI::AlertComponent.new(tone: :warning, title: "Saving will reduce your own access") do %>
+            <ul class="mt-1 list-disc space-y-1 pl-5">
+              <% own_warnings.each do |sentence| %>
+                <li><%= sentence %></li>
+              <% end %>
+            </ul>
+          <% end %>
+        </div>
+      <% end %>
 
       <% if stripped.any? %>
         <div class="mb-4">
@@ -99,9 +120,16 @@
     <% end %>
   <% end %>
 
-  <p class="max-w-prose text-xs text-app-muted">
-    Editing keeps the membership row, so <%= @membership.user.github_handle %> keeps their access to
-    <%= @repository.github_full_name %> and any API keys they minted, or agent keys covering it, keep working. To remove their
-    access entirely, revoke it from the members list instead.
-  </p>
+  <% if own_row %>
+    <p class="max-w-prose text-xs text-app-muted">
+      Editing keeps your membership row, so you keep your access to <%= @repository.github_full_name %>.
+      To end your access entirely, use Leave on the repository page instead.
+    </p>
+  <% else %>
+    <p class="max-w-prose text-xs text-app-muted">
+      Editing keeps the membership row, so <%= @membership.user.github_handle %> keeps their access to
+      <%= @repository.github_full_name %> and any API keys they minted, or agent keys covering it, keep working. To remove their
+      access entirely, revoke it from the members list instead.
+    </p>
+  <% end %>
 <% end %>

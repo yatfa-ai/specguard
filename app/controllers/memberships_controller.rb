@@ -132,6 +132,7 @@ class MembershipsController < ApplicationController
   def edit
     @repository = current_repository(:members_manage)
     @membership = find_membership!(@repository)
+    load_self_edit_key_counts
   end
 
   # The narrowing path, and the reason it is safe to gate at `:members_manage` rather than `:owner`.
@@ -151,6 +152,10 @@ class MembershipsController < ApplicationController
   def update
     @repository = current_repository(:members_manage)
     @membership = find_membership!(@repository)
+    # Before the save: the counts depend on the `keys.manage` the actor holds on the way in, and
+    # `repository_policy` was memoized with that holding. See `after_update_path`.
+    load_self_edit_key_counts
+    @permissions_before = @membership.permissions.to_a
 
     @membership.assign_attributes(membership_params)
     @membership.granted_by_user = current_user
@@ -327,12 +332,39 @@ class MembershipsController < ApplicationController
   # exists for, and the owner needs to read that the colleague can still open the repository rather
   # than assume they were locked out.
   def update_notice
+    return self_update_notice if editing_own_row?
+
     handle = @membership.user.github_handle
     if @membership.permissions.empty?
       return "Updated #{handle}. They hold nothing beyond opening #{@repository.github_full_name}."
     end
 
     "Updated #{handle}: #{@membership.permissions.to_sentence}."
+  end
+
+  def editing_own_row? = @membership.user_id == current_user.id
+
+  # The second-person flash for a member who edited their own row. Only the gated permissions that
+  # actually left the row add a clause; a self-edit that drops neither keeps the plain sentence.
+  def self_update_notice
+    helpers.self_edit_notice(
+      @repository, @membership.permissions,
+      helpers.self_edit_dropped(@permissions_before, @membership.permissions),
+      @self_edit_keys_minted, @self_edit_agent_keys
+    )
+  end
+
+  # The editor's own live `sgk_`/`sga_` key counts, for the self-edit page and flash. Read ONLY on
+  # the own-row path and only when the persisted row holds `keys.manage` (otherwise no clause can
+  # name them), so editing a colleague pays nothing. `MintedKeyCounts` still applies the
+  # `keys.manage` gate itself: a viewer without it gets zeros and so no key clause.
+  def load_self_edit_key_counts
+    @self_edit_keys_minted = @self_edit_agent_keys = 0
+    return unless editing_own_row?
+    return unless @membership.permissions_was.to_a.include?(RepositoryMembership::KEYS_MANAGE)
+
+    @self_edit_keys_minted = keys_minted_by(@repository, [current_user.id]).fetch(current_user.id, 0)
+    @self_edit_agent_keys = agent_keys_covering_by(@repository, [current_user.id]).fetch(current_user.id, 0)
   end
 
   # Re-renders the form with the reasons, and never with a redirect: the owner's typed handle and

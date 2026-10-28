@@ -191,7 +191,80 @@ module MembershipsHelper
     sentences.join(" ")
   end
 
+  # The self-edit pair: the Edit page and the flash after Save, for a `members.manage` holder
+  # editing their OWN row. Saving it is a de-escalation of the editor's own access that only an
+  # owner (or another `members.manage` holder) can undo, and it is the one self-directed
+  # access-ending gesture that said nothing — Leave and Revoke-self both have second-person copy
+  # above. Third-party edits never reach these: the callers branch on `user_id == current_user.id`
+  # and leave their own wording byte-for-byte as it was.
+  #
+  # Counts come from `MintedKeyCounts` through the same `keys.manage` gate as Leave, so a viewer
+  # without it hands these zeros and the key clause disappears rather than being told less. The
+  # CALLER reads them before the save: they depend on the pre-save `keys.manage` holding.
+  SELF_EDIT_GATED = [RepositoryMembership::MEMBERS_MANAGE, RepositoryMembership::KEYS_MANAGE].freeze
+
+  def self_edit_subtitle(repository)
+    "Change what you hold on #{repository.github_full_name}. You keep your access and the date you were added."
+  end
+
+  # The permissions among the two gated ones that `before` held and `after` no longer does.
+  def self_edit_dropped(before, after)
+    SELF_EDIT_GATED & (before.to_a - after.to_a)
+  end
+
+  # The Edit page's warning, one sentence per gated permission the PERSISTED row holds — what
+  # unticking it would cost. Said before the click, because the save cannot be undone by its actor.
+  def self_edit_warnings(held, keys_minted = 0, agent_keys = 0)
+    sentences = []
+    if held.include?(RepositoryMembership::MEMBERS_MANAGE)
+      sentences << "Unticking members.manage means you lose this Members page; only an owner or " \
+                   "another members.manage holder can restore it."
+    end
+    if held.include?(RepositoryMembership::KEYS_MANAGE)
+      sentences << "Unticking keys.manage means you lose the API keys panel. #{self_edit_keys_clause(keys_minted, agent_keys, 'would')}".strip
+    end
+    sentences
+  end
+
+  # The flash after Save. Second person throughout; a clause is added only for a gated permission
+  # that actually moved, so an edit dropping neither keeps the plain "You now hold" sentence.
+  def self_edit_notice(repository, permissions, dropped, keys_minted = 0, agent_keys = 0)
+    sentences = [
+      if permissions.empty?
+        "You now hold nothing beyond opening #{repository.github_full_name}."
+      else
+        "You now hold: #{permissions.to_sentence}."
+      end
+    ]
+    if dropped.include?(RepositoryMembership::MEMBERS_MANAGE)
+      sentences << "The Members page no longer opens for you; only an owner or another " \
+                   "members.manage holder can restore it."
+    end
+    if dropped.include?(RepositoryMembership::KEYS_MANAGE)
+      sentences << "The API keys panel is gone for you. #{self_edit_keys_clause(keys_minted, agent_keys, 'is')}".strip
+    end
+    sentences.join(" ")
+  end
+
   private
+
+  # What happens to the editor's keys when they lose `keys.manage`; empty when they hold none.
+  # `tense` is "would" on the page (before the click) and "is" in the flash (after it) and only
+  # chooses the lead-in; the key facts and the levers are the same sentence in both places.
+  def self_edit_keys_clause(keys_minted, agent_keys, tense)
+    sentences = []
+    unless keys_minted.zero?
+      keys, _verb, object = minted_keys_agreement(keys_minted)
+      sentences << "The #{keys} you minted #{tense == 'would' ? 'will keep' : 'keep'} authenticating until " \
+                   "an owner or another keys.manage holder revokes #{object}."
+    end
+    unless agent_keys.zero?
+      keys, verb, object = agent_keys_agreement(agent_keys)
+      sentences << "Your #{keys} covering this repository #{'also ' if sentences.any?}#{verb} " \
+                   "authenticating until you revoke #{object} on your account page (/account)."
+    end
+    sentences.join(" ")
+  end
 
   # The one place number agreement is decided for both sentences above. `pluralize` covers the noun
   # phrase; the verb and the pronoun have no such helper, and hand-rolling those per call site is
