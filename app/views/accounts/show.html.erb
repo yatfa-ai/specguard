@@ -35,6 +35,9 @@
     </p>
 
     <% if @user_api_keys.any? %>
+      <%# One partition for the whole table, off the rows already loaded (no query): the Revoke
+          confirm names whether the key it cuts is the only live one (SPGD-1966). %>
+      <% live_user_key_count = closure_live_user_keys(@user_api_keys).size %>
       <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created", "Last used", ""],
                                         describedby: "user-api-keys-caption") do %>
         <% @user_api_keys.each do |user_api_key| %>
@@ -89,9 +92,9 @@
                     is a fresh key plus this button. %>
                 <%= button_to "Revoke", account_api_key_path(user_api_key), method: :delete,
                               class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                              form: { data: { turbo_confirm: "Revoke #{user_api_key.name}? Anything " \
-                                                             "still using this token stops working " \
-                                                             "immediately." } } %>
+                              form: { data: { turbo_confirm: user_key_revoke_confirmation(
+                                                 user_api_key,
+                                                 live_count: live_user_key_count) } } %>
               <% end %>
             </td>
           </tr>

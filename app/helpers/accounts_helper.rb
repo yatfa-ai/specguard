@@ -15,6 +15,48 @@
 # `AgentApiKey.authenticate` resolve through their `User.active` merges, read the only way a
 # browser render can read it.
 module AccountsHelper
+  # The fixed clause both halves of the personal-key revoke disclosure carry (SPGD-1966): the
+  # question somebody answering a leaked key is asking is whether the cut also reached their
+  # automation, and the answer is no — `AgentApiKey` and `ApiKey` rows are separate credentials.
+  USER_KEY_REVOKE_SEPARATE_CREDENTIALS =
+    "Your agent (sga_) keys and repositories' CI (sgk_) keys are separate credentials and keep working."
+
+  # What the presser is told BEFORE revoking a personal `sgu_` key (SPGD-1966), the sibling of
+  # `RepositoriesHelper#api_key_revoke_confirmation`. Display copy only: the view hands in
+  # `live_count` read off the already-loaded `@user_api_keys` (`closure_live_user_keys`), so the
+  # confirm costs no query. There is no rotation for this credential, hence no stranded variant:
+  # the last-used clause is always either an age or "never been used".
+  def user_key_revoke_confirmation(user_api_key, live_count:)
+    parts = ["Revoke #{user_api_key.name}? Anything still using this token stops working immediately."]
+    parts << user_key_last_used_clause(user_api_key)
+    if live_count == 1
+      parts << "It is your only live personal key — scripts and machines using it lose read and " \
+               "repository-registration access until you mint another."
+    end
+    parts << USER_KEY_REVOKE_SEPARATE_CREDENTIALS
+    parts.join(" ")
+  end
+
+  # What they are told after. `already_revoked` is the stale-tab replay (the row was retired before
+  # this request; `revoke!` kept its first stamp), which must not read like a real revocation.
+  # `remaining_live` is whether any live personal key is left, read after the cut.
+  def user_key_revoke_notice(user_api_key, remaining_live:, already_revoked: false)
+    notice = if already_revoked
+               "#{user_api_key.name} was already revoked — nothing changed. Its token no longer authenticates."
+             else
+               "Revoked #{user_api_key.name}. Its token no longer authenticates."
+             end
+    notice = "#{notice} #{USER_KEY_REVOKE_SEPARATE_CREDENTIALS}"
+    return notice if remaining_live
+
+    "#{notice} No live personal key remains — mint a replacement with New API key if scripts or " \
+      "machines still need access."
+  end
+
+  def user_key_last_used_clause(user_api_key)
+    user_api_key.last_used_at ? "Last used #{time_ago_in_words(user_api_key.last_used_at)} ago." : "It has never been used."
+  end
+
   # The `sgu_` tokens that would die with the closure, read off the loaded table relation through
   # the partition seam so the panel and the confirm share one count and no extra query is paid
   # for it.

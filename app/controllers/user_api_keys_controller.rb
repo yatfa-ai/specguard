@@ -71,9 +71,18 @@ class UserApiKeysController < ApplicationController
   # delete: first revocation wins and the replay is a no-op — the same rule `ApiKey#revoke!` states. Notice and redirect are unchanged:
   # the person asked for the key to stop working, and it has.
   def destroy
-    current_user.user_api_keys.find(params[:id]).revoke!
+    user_api_key = current_user.user_api_keys.find(params[:id])
+    # Captured BEFORE `revoke!` (SPGD-1966): afterwards a replay and a real revocation are the
+    # same row state, and the notice must not claim a revocation that did not happen now.
+    already_revoked = user_api_key.revoked?
+    user_api_key.revoke!
 
-    redirect_to account_path, notice: "API key revoked."
+    # The one query this action adds, on the write path only: whether any live personal key is
+    # left, read AFTER `revoke!` so the retired row no longer counts.
+    redirect_to account_path,
+                notice: helpers.user_key_revoke_notice(user_api_key,
+                                                       remaining_live: current_user.user_api_keys.live.exists?,
+                                                       already_revoked: already_revoked)
   end
 
   private
