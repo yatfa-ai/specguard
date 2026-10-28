@@ -309,7 +309,8 @@ module RepositoriesHelper
   def api_key_last_used_clause(api_key, stranded:)
     return "It has not been used since it was rotated." if stranded
 
-    api_key.last_used_at ? "Last used #{time_ago_in_words(api_key.last_used_at)} ago." : "It has never been used."
+    age = key_last_used_age(api_key)
+    age ? "Last used #{age}." : "It has never been used."
   end
 
   # The two halves of the SAME disclosure for the agent-key revoke (SPGD-989): what the presser

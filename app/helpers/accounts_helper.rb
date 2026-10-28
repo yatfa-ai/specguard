@@ -54,7 +54,8 @@ module AccountsHelper
   end
 
   def user_key_last_used_clause(user_api_key)
-    user_api_key.last_used_at ? "Last used #{time_ago_in_words(user_api_key.last_used_at)} ago." : "It has never been used."
+    age = key_last_used_age(user_api_key)
+    age ? "Last used #{age}." : "It has never been used."
   end
 
   # The `sgu_` tokens that would die with the closure, read off the loaded table relation through
