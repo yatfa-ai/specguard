@@ -244,6 +244,17 @@ RSpec.describe "Deleting a test run", type: :request do
       expect(confirm_for("0ld0ld0")).to end_with("and it cannot be undone.")
     end
 
+    # @intent: {"entity": "TestRun", "action": "disclose only run in confirm", "behavior": "the Delete confirm of a repository's sole run says it is the only run and that the page goes empty, claims no previous run, and still says it cannot be undone", "layer": "request"}
+    it "names the sole run as the only run, with no previous-run claim, in its confirm" do
+      older.destroy!
+
+      get repository_path(repository)
+
+      expect(confirm_for("a1b2c3d")).to include("This is the repository's only run — deleting it leaves the page empty until CI reports again.")
+      expect(confirm_for("a1b2c3d")).not_to include("previous run")
+      expect(confirm_for("a1b2c3d")).to include("cannot be undone")
+    end
+
     # @intent: {"entity": "TestRun", "action": "disclose newest under an anchored page", "behavior": "when the page is anchored on an older run with ?run=, the newest-run clause stays on the repository's newest row's confirm and the anchored older row's confirm does not claim it", "layer": "request"}
     it "marks the repository's newest run, not the anchored one, when the page is anchored with ?run=" do
       get repository_path(repository, run: older.id)

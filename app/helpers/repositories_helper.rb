@@ -216,10 +216,15 @@ module RepositoriesHelper
   # the run every panel reads, so deleting it hands the page to the previous run. The caller
   # decides — the view compares ids against the dashboard's published newest-run id — so this
   # helper issues no query. Every other row's sentence is unchanged.
-  def delete_run_confirmation(test_run, newest: false)
+  #
+  # `successor:` (SPGD-1968) is whether another run exists to take over. A repository's only run
+  # has no successor, so the newest clause says the page goes empty instead — the same fact the
+  # post-click `delete_run_notice` states — rather than promising a previous run that is not there.
+  def delete_run_confirmation(test_run, newest: false, successor: true)
     sentence = "Delete run #{test_run.commit_sha.first(7)}? This removes the run, its shards and its " \
                "per-example observations from #{test_run.repository.github_full_name}, and it cannot be undone."
     return sentence unless newest
+    return "#{sentence} This is the repository's only run — deleting it leaves the page empty until CI reports again." unless successor
 
     "#{sentence} This is the repository's newest run — deleting it makes the previous run the one every panel reads."
   end
