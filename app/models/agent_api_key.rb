@@ -120,6 +120,18 @@ class AgentApiKey < ApplicationRecord
     where("agent_api_keys.repository_ids @> ARRAY[?]::bigint[]", repository.id)
   }
 
+  # The keys that could still AUTHENTICATE against a repository (SPGD-1963): live, covering it, and
+  # owned by somebody who is still active. This is the SQL restatement of `authenticate`'s two
+  # cuts — `live` and `merge(User.active)` — plus `covering`'s boundary, named ONCE so the
+  # disclosure counts (members page badges, remove-repository consequences, the connection
+  # indicator) cannot drift from what actually authenticates: change the rule here and every
+  # reader follows. `joins`, not `eager_load`, because the callers count or pluck and never read
+  # the owner. Listings that deliberately show archived owners' keys compose `live.covering`
+  # themselves and do not use this scope.
+  scope :authenticating_on, lambda { |repository|
+    live.covering(repository).joins(:user).merge(User.active)
+  }
+
   # The keys that could be CARRYING INGEST into a repository right now (SPGD-984): live, covering
   # it, holding `runs.ingest`, and owned by somebody `authenticate` would still resolve. The
   # connection indicator's agent-key half reads `maximum(:last_used_at)` off this.
@@ -127,15 +139,13 @@ class AgentApiKey < ApplicationRecord
   # Every limb is a way a row's `last_used_at` would otherwise describe something that is not CI
   # reaching this repository: a REVOKED key's stamp is the history of a credential that no longer
   # exists (the same rule `ApiKeyPartition` applies to the `sgk_` side), an ARCHIVED owner's key
-  # no longer authenticates (`authenticate`'s `merge(User.active)`, restated here by the same
-  # merge), and a key WITHOUT `runs.ingest` stamps `last_used_at` on every read it makes — a
+  # no longer authenticates (`authenticating_on` carries that cut), and a key WITHOUT `runs.ingest` stamps `last_used_at` on every read it makes — a
   # monitoring agent listing the repository would otherwise turn "Not connected yet" into
   # "Connected" while no run could ever arrive under it. Agent keys have no rotation, so there is
   # no stranded half to account for.
   scope :carrying_ingest_for, lambda { |repository|
-    live.covering(repository)
-        .where("agent_api_keys.permissions @> ARRAY[?]::text[]", RepositoryMembership::RUNS_INGEST)
-        .joins(:user).merge(User.active)
+    authenticating_on(repository)
+      .where("agent_api_keys.permissions @> ARRAY[?]::text[]", RepositoryMembership::RUNS_INGEST)
   }
 
   def self.digest(token)

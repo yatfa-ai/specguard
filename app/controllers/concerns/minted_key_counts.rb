@@ -42,9 +42,9 @@
 # wider would render an affordance that lands on a page where the panel, the anchor and the Revoke
 # button it promises all do not exist.
 #
-# The agent-key half counts what `AgentApiKey.authenticate` would still resolve: live, covering this
-# repository, and owned by a person who is still active. An archived owner's token does not
-# authenticate, so counting it would warn about a key that cannot survive. Its anchor is the Agent
+# The agent-key half counts `AgentApiKey.authenticating_on(repository)` — the keys `authenticate`
+# would still resolve. An archived owner's token does not authenticate, so counting it would warn
+# about a key that cannot survive. Its anchor is the Agent
 # keys panel (`#agent-keys`), which renders under the same `keys.manage`.
 #
 # Ordering is load-bearing and pinned by the query-count examples: the gate returns `{}` BEFORE the
@@ -74,7 +74,6 @@ module MintedKeyCounts
     return {} unless repository_policy(repository).can?(:keys_manage)
     return {} if user_ids.empty?
 
-    AgentApiKey.live.covering(repository).joins(:user).merge(User.active)
-               .where(user_id: user_ids).group(:user_id).count
+    AgentApiKey.authenticating_on(repository).where(user_id: user_ids).group(:user_id).count
   end
 end

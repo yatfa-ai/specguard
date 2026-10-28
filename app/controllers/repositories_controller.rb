@@ -234,8 +234,8 @@ class RepositoriesController < ApplicationController
   # `api_keys:` / `agent_api_keys:` are the rows `RepositoryDashboard` already loaded for the show
   # page (live `sgk_` rows; live covering `sga_` rows with their owner joined), so the page pays no
   # further key query. The destroy path passes neither and reads the same sets with one aggregate
-  # apiece. Both agree on the predicate `AgentApiKey.authenticate` applies: archived-owner agent
-  # keys do not authenticate, so they are not claimed to keep working.
+  # apiece. Both agree on `AgentApiKey.authenticating_on`: archived-owner agent keys do not
+  # authenticate, so they are not claimed to keep working.
   def removal_consequences(repository, api_keys: nil, agent_api_keys: nil)
     members = 0
     ci_keys = 0
@@ -253,7 +253,7 @@ class RepositoriesController < ApplicationController
         if agent_api_keys
           agent_api_keys.select { |key| key.user.active? }.map(&:repository_ids)
         else
-          AgentApiKey.live.covering(repository).joins(:user).merge(User.active).pluck(:repository_ids)
+          AgentApiKey.authenticating_on(repository).pluck(:repository_ids)
         end
       agent_keys = key_grants.size
       only_here = agent_keys_only_here(repository, key_grants)
