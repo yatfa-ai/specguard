@@ -43,7 +43,7 @@
                   <%= time_ago_in_words(agent_api_key.created_at) %> ago
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary tabular-nums">
-                  <%= agent_api_key.last_used_at ? "#{time_ago_in_words(agent_api_key.last_used_at)} ago" : "never" %>
+                  <%= key_last_used_age(agent_api_key) || "never" %>
                 </td>
                 <td class="px-3 py-2 text-right">
                   <%= button_to "Revoke", repository_agent_key_path(@repository, agent_api_key),

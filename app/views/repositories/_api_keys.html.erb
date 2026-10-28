@@ -33,7 +33,7 @@
                   <% if api_key.rotated_and_unused? %>
                     not used since rotation, <%= time_ago_in_words(api_key.rotated_at) %> ago
                   <% else %>
-                    <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
+                    <%= key_last_used_age(api_key) || "never" %>
                   <% end %>
                 </td>
                 <td class="px-3 py-2 text-right">

@@ -53,7 +53,7 @@
               <%# No rotated-and-unused case to report here, unlike the repository key table: there
                   is no rotation for this credential, so `last_used_at` can never have been stamped
                   by a token that has since stopped existing. See UserApiKey. %>
-              <%= user_api_key.last_used_at ? "#{time_ago_in_words(user_api_key.last_used_at)} ago" : "never" %>
+              <%= key_last_used_age(user_api_key) || "never" %>
             </td>
             <td class="px-3 py-2 text-right">
               <%# RETIRED, NOT DELETED (SPGD-943): revoked keys STAY on this list — the row is
@@ -267,7 +267,7 @@
               <%= time_ago_in_words(agent_api_key.created_at) %> ago
             </td>
             <td class="px-3 py-2 text-app-content-secondary tabular-nums">
-              <%= agent_api_key.last_used_at ? "#{time_ago_in_words(agent_api_key.last_used_at)} ago" : "never" %>
+              <%= key_last_used_age(agent_api_key) || "never" %>
             </td>
             <td class="px-3 py-2 text-right">
               <%# Revoked keys STAY on this list — the row is retained so a still-presenting token

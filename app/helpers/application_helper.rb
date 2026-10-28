@@ -16,6 +16,24 @@ module ApplicationHelper
     ["specguard", name.to_s.parameterize.presence, "api-key"].compact.join("-") + ".txt"
   end
 
+  # A credential key's `last_used_at` as the age it renders as: `"3 months ago"`, or nil when no
+  # use was ever stamped on the row.
+  #
+  # One seam rather than the ternary typed wherever a table cell or a sentence needs the figure:
+  # the cells and the confirm prose read the same column and must not be able to disagree about
+  # what a key with no stamp looks like — the same failure `refused_deliveries_note` is one seam
+  # against, where two copies of a shared wording are agreement that merely HOLDS TODAY.
+  #
+  # Nil is the empty-case return rather than a `"never"` literal, and that is the shape's point:
+  # each caller owns the words for a never-used key — the cells print the bare word, the confirm
+  # clauses print a full sentence — so this helper says only the age and never has to learn a
+  # caller's phrasing. Dated from `last_used_at` exactly as stamped: a rotated key whose
+  # `rotated_and_unused?` state needs different words passes through here too, and its caller
+  # keeps the branch that decides that, because the honest figure for it is not a last use.
+  def key_last_used_age(key)
+    "#{time_ago_in_words(key.last_used_at)} ago" if key.last_used_at
+  end
+
   # What a repository whose deliveries are being REFUSED is called, in the one place both surfaces
   # that say it read from.
   #
