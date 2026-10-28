@@ -348,6 +348,30 @@ RSpec.describe "Regenerating an API key", type: :request do
         .to include("token stops working immediately")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "disclose regenerate consequences", "behavior": "the Regenerate confirm of a used, a never-used and a rotated-unused key reads the matching last-use clause, says the old token is refused until the replacement is deployed, and names the New API key alternative", "layer": "request"}
+    it "discloses last use, the CI refusal and the gap-free path in the Regenerate confirm" do
+      used = repository.api_keys.create!(name: "Used")
+      used.touch_last_used!
+      repository.api_keys.create!(name: "Fresh")
+      stranded = repository.api_keys.create!(name: "Stranded")
+      stranded.touch_last_used!
+      post regenerate_repository_api_key_path(repository, stranded)
+
+      get repository_path(repository)
+      confirm_for = lambda do |name|
+        Capybara.string(response.body).find("#api-keys table tbody tr", text: name)
+                .find("form[action*='regenerate']")["data-turbo-confirm"]
+      end
+
+      expect(confirm_for.call("Used")).to include("Last used", "ago.")
+      expect(confirm_for.call("Fresh")).to include("It has never been used")
+      expect(confirm_for.call("Stranded")).to include("not been used since it was rotated")
+      %w[Used Fresh Stranded].each do |name|
+        expect(confirm_for.call(name)).to include("token stops working immediately", "refused until the replacement is deployed",
+                                                  "create a New API key, update CI, then Revoke this one")
+      end
+    end
+
     # @intent: {"entity": "ApiKey", "action": "attribute use correctly", "behavior": "after rotating a used key its cell reads not used since rotation, less than a minute ago while an identically used untouched key still reads less than a minute ago", "layer": "request"}
     it "stops attributing the retired token's use to the replacement" do
       rotated = repository.api_keys.create!(name: "Rotated")
