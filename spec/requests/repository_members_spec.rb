@@ -1546,6 +1546,133 @@ RSpec.describe "Repository members", type: :request do
     end
   end
 
+  # Editing your OWN row is a de-escalation only an owner or another members.manage holder can
+  # undo, so it carries the second-person disclosure Leave and Revoke-self already have. The
+  # third-party edit page and flash are the same bytes they were.
+  describe "a member editing their own row" do
+    let(:own_membership) { RepositoryMembership.find_by!(user: colleague, repository: repository) }
+    let(:other_membership) { RepositoryMembership.find_by!(user: third_party, repository: repository) }
+
+    def patch_permissions(membership, permissions)
+      patch repository_member_path(repository, membership),
+            params: { repository_membership: { permissions: [""] + permissions } }
+    end
+
+    def prose = Capybara.string(response.body).text.gsub(/\s+/, " ")
+
+    context "holding 'members.manage' and 'keys.manage', with keys of both kinds" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage keys.manage])
+        create_membership(repository: repository, user: third_party, permissions: %w[view])
+        repository.api_keys.create!(name: "CI", created_by_user: colleague)
+        repository.api_keys.create!(name: "CI 2", created_by_user: colleague)
+        create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+        sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "disclose self edit consequences", "behavior": "the Edit page on the viewer's own row is second person and names the Members page and API keys panel losses with the live sgk_ and agent key counts", "layer": "request"}
+      it "renders the second-person page with both permission clauses and the key counts" do
+        get edit_repository_member_path(repository, own_membership)
+
+        expect(response).to have_http_status(:ok)
+        expect(prose).to include("Change what you hold on acme/billing-service.")
+        expect(prose).not_to include("Change what hubot holds")
+        expect(prose).to include("Saving will reduce your own access")
+        expect(prose).to include("Unticking members.manage means you lose this Members page; only an owner " \
+                                 "or another members.manage holder can restore it.")
+        expect(prose).to include("Unticking keys.manage means you lose the API keys panel. The 2 API keys " \
+                                 "you minted will keep authenticating until an owner or another keys.manage " \
+                                 "holder revokes them. Your 1 live agent key covering this repository also " \
+                                 "keeps authenticating until you revoke it on your account page (/account).")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "flash self edit dropping members.manage", "behavior": "a self-save dropping members.manage flashes the second-person notice naming that the Members page no longer opens, and adds no keys clause", "layer": "request"}
+      it "flashes the Members-page consequence when members.manage is dropped" do
+        patch_permissions(own_membership, %w[view keys.manage])
+
+        expect(response).to redirect_to(repository_path(repository))
+        expect(flash[:notice]).to eq(
+          "You now hold: view and keys.manage. The Members page no longer opens for you; only an owner " \
+          "or another members.manage holder can restore it."
+        )
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "flash self edit dropping keys.manage", "behavior": "a self-save dropping keys.manage flashes the gone panel and the still-live sgk_ and agent keys, counted before the save", "layer": "request"}
+      it "flashes the still-live keys when keys.manage is dropped, counted before the save" do
+        patch_permissions(own_membership, %w[view members.manage])
+
+        expect(response).to redirect_to(repository_members_path(repository))
+        expect(flash[:notice]).to eq(
+          "You now hold: view and members.manage. The API keys panel is gone for you. The 2 API keys you " \
+          "minted keep authenticating until an owner or another keys.manage holder revokes them. Your 1 live " \
+          "agent key covering this repository also keeps authenticating until you revoke it on your account " \
+          "page (/account)."
+        )
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "flash self edit dropping nothing", "behavior": "a self-save that drops neither gated permission keeps a plain second-person notice with no consequence clause", "layer": "request"}
+      it "keeps a plain second-person notice when nothing gated is dropped" do
+        patch_permissions(own_membership, %w[view members.manage keys.manage])
+
+        expect(flash[:notice]).to eq("You now hold: view, members.manage, and keys.manage.")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "flash self edit to empty set", "behavior": "a self-save to nothing says they hold nothing beyond opening the repository and names both consequences", "layer": "request"}
+      it "says it holds nothing beyond opening the repository when every box is cleared" do
+        patch_permissions(own_membership, [])
+
+        expect(flash[:notice]).to start_with("You now hold nothing beyond opening acme/billing-service. The Members page no longer opens")
+        expect(flash[:notice]).to include("The API keys panel is gone for you.")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "leave third party edit bytes", "behavior": "editing a colleague keeps the third-person subtitle, notice and footer and shows no own-access warning", "layer": "request"}
+      it "leaves the third-party edit page and notice as they were" do
+        get edit_repository_member_path(repository, other_membership)
+
+        expect(prose).to include("Change what dependabot holds on acme/billing-service. They keep their access and the date they were added.")
+        expect(prose).not_to include("Saving will reduce your own access")
+        expect(prose).to include("Editing keeps the membership row, so dependabot keeps their access")
+
+        patch_permissions(other_membership, [])
+        expect(flash[:notice]).to eq("Updated dependabot. They hold nothing beyond opening acme/billing-service.")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "budget third party edit key reads", "behavior": "viewing and saving a colleague's row issues no api_keys or agent_api_keys statement", "layer": "request"}
+      it "pays no key-table queries on the third-party path" do
+        statements = queries_against(/api_keys/) do
+          get edit_repository_member_path(repository, other_membership)
+          patch_permissions(other_membership, [])
+        end
+
+        expect(statements.size).to eq(0)
+      end
+    end
+
+    context "holding 'members.manage' only" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
+        repository.api_keys.create!(name: "CI", created_by_user: colleague)
+        sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "omit key clause without keys.manage", "behavior": "a members.manage-only holder sees the Members-page clause but no keys clause and issues no key-table query", "layer": "request"}
+      it "shows only the Members-page clause, at no key-table query cost" do
+        statements = queries_against(/api_keys/) { get edit_repository_member_path(repository, own_membership) }
+
+        expect(prose).to include("Unticking members.manage means you lose this Members page")
+        expect(prose).not_to include("keys.manage")
+        expect(statements.size).to eq(0)
+
+        statements = queries_against(/api_keys/) { patch_permissions(own_membership, %w[view]) }
+        expect(flash[:notice]).to eq(
+          "You now hold: view. The Members page no longer opens for you; only an owner or another " \
+          "members.manage holder can restore it."
+        )
+        expect(statements.size).to eq(0)
+      end
+    end
+  end
+
   # The table names people — handles and avatars. That is the same category as the credential
   # metadata repositories#show already gates: the whole surface is refused, not just the button.
   describe "a member with only 'view'" do
