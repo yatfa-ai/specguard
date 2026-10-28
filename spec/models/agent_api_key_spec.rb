@@ -291,4 +291,29 @@ RSpec.describe AgentApiKey do
       expect(AgentApiKey.live.covering(mine)).to be_empty
     end
   end
+
+  # The "could still authenticate" predicate, named once (SPGD-1963): the SQL restatement of
+  # `authenticate`'s liveness and owner cuts plus `covering`'s boundary.
+  describe ".authenticating_on" do
+    it "selects only live, covering keys whose owner is active" do
+      key, mine = owned_key
+      revoked = create_agent_api_key(user: mine.user, repositories: [mine], name: "Revoked")
+      revoked.revoke!
+      other = create_repository(user: create_user(github_uid: "3003", github_handle: "other"),
+                                github_full_name: "other/owned")
+      create_agent_api_key(user: other.user, repositories: [other], name: "Elsewhere")
+
+      expect(AgentApiKey.authenticating_on(mine)).to contain_exactly(key)
+    end
+
+    it "drops a key whose owner is archived, though the key is live and covering" do
+      key, mine = owned_key
+      expect(AgentApiKey.authenticating_on(mine)).to contain_exactly(key)
+
+      key.user.update_columns(archived_at: Time.current)
+
+      expect(AgentApiKey.live.covering(mine)).to contain_exactly(key)
+      expect(AgentApiKey.authenticating_on(mine)).to be_empty
+    end
+  end
 end
