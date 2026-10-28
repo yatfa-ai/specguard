@@ -244,6 +244,29 @@ RSpec.describe "Deleting a test run", type: :request do
       expect(confirm_for("0ld0ld0")).to end_with("and it cannot be undone.")
     end
 
+    # @intent: {"entity": "TestRun", "action": "disclose newest under an anchored page", "behavior": "when the page is anchored on an older run with ?run=, the newest-run clause stays on the repository's newest row's confirm and the anchored older row's confirm does not claim it", "layer": "request"}
+    it "marks the repository's newest run, not the anchored one, when the page is anchored with ?run=" do
+      get repository_path(repository, run: older.id)
+
+      expect(confirm_for("a1b2c3d")).to include("This is the repository's newest run")
+      expect(confirm_for("0ld0ld0")).not_to include("newest run")
+    end
+
+    # @intent: {"entity": "TestRun", "action": "withhold newest outside the window", "behavior": "when a runs_branch narrowing excludes the repository's newest run, no listed row's confirm carries the newest-run clause", "layer": "request"}
+    it "gives no row the newest-run clause when a runs_branch narrowing excludes the newest run" do
+      create_test_run(repository: repository, commit_sha: "feat0001feat", branch: "feature/x", created_at: 1.hour.ago)
+
+      get repository_path(repository, runs_branch: "main")
+
+      panel = Nokogiri::HTML(response.body).at_css("#recent-runs")
+      listed = panel.css("form[data-turbo-confirm]").map { |f| f["data-turbo-confirm"] }
+
+      # Both main rows are listed (so the assertion is not vacuous), and neither claims the clause.
+      expect(listed.size).to eq(2)
+      expect(listed).to all(include("cannot be undone"))
+      expect(listed.grep(/newest run/)).to be_empty
+    end
+
     # @intent: {"entity": "TestRun", "action": "name successor in notice", "behavior": "deleting the newest run flashes the surviving run's sha and branch as the one the page now reads", "layer": "request"}
     it "names the successor run in the notice" do
       delete repository_run_path(repository, newest)
