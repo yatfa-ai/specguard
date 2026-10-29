@@ -235,6 +235,12 @@ RSpec.describe "Repository console — ?compare_to= explicit cross-branch baseli
       basis = Capybara.string(response.body).find("#suite-size-basis")
       expect(basis).to have_text("You asked to compare against stale", normalize_ws: true)
       expect(basis).to have_text("this delta is still the same-branch one", normalize_ws: true)
+      # ...and the ask-wording family of an HONOURED comparison never renders beside it. The
+      # miss and the delta above are all still true if the page ever mistakes a MISSED ask for
+      # an honoured one (the one-ivar conflation `compare_to_active?` must not make), so the
+      # false cross-branch naming is what has to be pinned ABSENT here.
+      expect(basis).to have_no_text("a different branch, asked for")
+      expect(basis).to have_no_text("You asked for this comparison with")
     end
   end
 
