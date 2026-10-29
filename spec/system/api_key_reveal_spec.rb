@@ -126,6 +126,27 @@ RSpec.describe "Revealing an API key", type: :system do
     JS
   end
 
+  # Lets the reveal controller's one deferred scroll actually land, so that "the reveal has landed"
+  # below means the scroll has run — not merely that the panel exists in the DOM.
+  #
+  # `have_css` returns on presence. The controller scrolls one animation frame later (see its own
+  # header for why the deferral exists), and a frame is bound to the browser's frame production,
+  # not to the wall clock — on a loaded CI runner it can fire long after the example has moved on.
+  # That exact ordering is what CI measured on this file (SPGD-1982): the deferred scroll landed
+  # after the example had scrolled to the bottom and read the offset, dragging the reader back to
+  # the reveal — the example expected the 2450 it had moved to and read back 278, the reveal's own
+  # position. Two frames settle it deterministically: the controller
+  # registers its callback before this helper registers its own (Stimulus connects in the body
+  # swap's microtask, long before the next Capybara round-trip), and same-frame callbacks run in
+  # registration order. Nothing here names a position, so it stays correct wherever the panel ends
+  # up. A page whose frames never fire fails loudly at the script timeout instead of racing.
+  def let_the_deferred_reveal_scroll_land
+    page.evaluate_async_script(<<~JS)
+      const done = arguments[arguments.length - 1]
+      requestAnimationFrame(() => requestAnimationFrame(() => done()))
+    JS
+  end
+
   def expect_the_reveal_to_be_on_screen
     position = reveal_position
 
@@ -149,6 +170,7 @@ RSpec.describe "Revealing an API key", type: :system do
     click_button "New API key"
 
     expect(page).to have_css("#revealed-key")
+    let_the_deferred_reveal_scroll_land
     expect(page).to have_content("This is the only time this token is shown")
     expect_the_reveal_to_be_on_screen
 
@@ -178,6 +200,7 @@ RSpec.describe "Revealing an API key", type: :system do
     accept_confirm { first(:button, "Regenerate").click }
 
     expect(page).to have_css("#revealed-key")
+    let_the_deferred_reveal_scroll_land
     expect(page).to have_content("Your regenerated API key")
     expect_the_reveal_to_be_on_screen
 
@@ -195,6 +218,7 @@ RSpec.describe "Revealing an API key", type: :system do
     visit repository_path(repository)
     click_button "New API key"
     expect(page).to have_css("#revealed-key")
+    let_the_deferred_reveal_scroll_land
 
     page.execute_script("window.scrollTo(0, document.documentElement.scrollHeight)")
     moved_to = scroll_offset
