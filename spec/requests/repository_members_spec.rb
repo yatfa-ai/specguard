@@ -1658,6 +1658,102 @@ RSpec.describe "Repository members", type: :request do
       end
     end
 
+    # The remaining key mixes a `keys.manage` holder can present when every gated box is cleared:
+    # no key of either kind, an agent key without a minted one, and minted keys without an agent
+    # one. Each is a different clause shape the both-kinds context above never renders, so each is
+    # pinned in its own context — "no keys" must end the disclosure at the panel sentence (never a
+    # "0 API keys" count), an agent-only holder must not read "also" with nothing before it, and a
+    # minted-only holder must not read an agent-key sentence about a key they do not have. The
+    # minted count is 2 on purpose: the singular flash copy is a separate copy defect, and pinning
+    # "The 1 API key you minted keep authenticating" here would lock the wrong grammar.
+    context "holding 'members.manage' and 'keys.manage', with no keys of either kind" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage keys.manage])
+        sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "disclose self edit no keys", "behavior": "the Edit page on a keys.manage holder who minted nothing and covers no agent keys ends the keys warning at the panel sentence, naming no key count of either kind", "layer": "request"}
+      it "ends the page warning at the panel sentence, naming no key count" do
+        get edit_repository_member_path(repository, own_membership)
+
+        expect(response).to have_http_status(:ok)
+        expect(prose).to include("Unticking keys.manage means you lose the API keys panel. Permissions")
+        expect(prose).not_to match(/\d+ (API keys?|live agent keys?)/)
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "flash self edit no keys", "behavior": "a self-save dropping keys.manage with no key of either kind flashes exactly the gone-panel sentence and nothing after it", "layer": "request"}
+      it "flashes exactly the gone-panel sentence when no keys are live" do
+        patch_permissions(own_membership, %w[view members.manage])
+
+        expect(response).to redirect_to(repository_members_path(repository))
+        expect(flash[:notice]).to eq(
+          "You now hold: view and members.manage. The API keys panel is gone for you."
+        )
+      end
+    end
+
+    context "holding 'members.manage' and 'keys.manage', with an agent key only" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage keys.manage])
+        create_agent_api_key(user: colleague, repositories: [repository], name: "Fleet A")
+        sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "disclose self edit agent key only", "behavior": "the Edit page names the 1 covering agent key as the first and only key sentence, with no also and no minted-keys sentence", "layer": "request"}
+      it "names the covering agent key without an also and without a minted-keys sentence" do
+        get edit_repository_member_path(repository, own_membership)
+
+        expect(response).to have_http_status(:ok)
+        expect(prose).to include("Unticking keys.manage means you lose the API keys panel. Your 1 live agent " \
+                                 "key covering this repository keeps authenticating until you revoke it on " \
+                                 "your account page (/account).")
+        expect(prose).not_to include("also keeps")
+        expect(prose).not_to include("you minted")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "flash self edit agent key only", "behavior": "a self-save dropping keys.manage with only a covering agent key flashes the gone panel and that key's sentence, with no also and no minted-keys sentence", "layer": "request"}
+      it "flashes the covering agent key sentence alone" do
+        patch_permissions(own_membership, %w[view members.manage])
+
+        expect(response).to redirect_to(repository_members_path(repository))
+        expect(flash[:notice]).to eq(
+          "You now hold: view and members.manage. The API keys panel is gone for you. Your 1 live agent " \
+          "key covering this repository keeps authenticating until you revoke it on your account page (/account)."
+        )
+      end
+    end
+
+    context "holding 'members.manage' and 'keys.manage', with minted keys only" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage keys.manage])
+        repository.api_keys.create!(name: "CI", created_by_user: colleague)
+        repository.api_keys.create!(name: "CI 2", created_by_user: colleague)
+        sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "disclose self edit minted keys only", "behavior": "the Edit page names the 2 minted keys as the first and only key sentence, with no agent-key sentence", "layer": "request"}
+      it "names the minted keys without an agent-key sentence" do
+        get edit_repository_member_path(repository, own_membership)
+
+        expect(response).to have_http_status(:ok)
+        expect(prose).to include("Unticking keys.manage means you lose the API keys panel. The 2 API keys " \
+                                 "you minted will keep authenticating until an owner or another keys.manage " \
+                                 "holder revokes them.")
+        expect(prose).not_to include("live agent key")
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "flash self edit minted keys only", "behavior": "a self-save dropping keys.manage with only minted keys flashes the gone panel and their sentence, with no agent-key sentence", "layer": "request"}
+      it "flashes the minted-keys sentence alone" do
+        patch_permissions(own_membership, %w[view members.manage])
+
+        expect(response).to redirect_to(repository_members_path(repository))
+        expect(flash[:notice]).to eq(
+          "You now hold: view and members.manage. The API keys panel is gone for you. The 2 API keys you " \
+          "minted keep authenticating until an owner or another keys.manage holder revokes them."
+        )
+      end
+    end
+
     context "holding 'members.manage' only" do
       before do
         create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
