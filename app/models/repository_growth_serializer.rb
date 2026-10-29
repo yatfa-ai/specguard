@@ -51,7 +51,9 @@ class RepositoryGrowthSerializer
   # not the only block on this endpoint where it is. `SpecObservation.directory_growth_between`
   # orders by `ABS(anchor_count - baseline_count) DESC` then `path ASC`, and both operands and the
   # path go out on every row — so a client CAN reproduce this order from what it holds, unlike
-  # `history` (whose tie-break is an ingest sequence no row carries) and `branches`.
+  # `history`, whose tie-break is an ingest sequence no row carries. (`branches` is no longer the
+  # exception either: each of its rows carries `last_run_at`, the key its middle ordering term
+  # compares.)
   #
   # `basis` IS THE OBJECT'S OWN LOAD-BEARING LIMITATION, served as a token because a client cannot
   # act on the paragraph `spec_directory_window_growth.rb` spends on it. The figures compare TWO

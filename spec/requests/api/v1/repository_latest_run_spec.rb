@@ -3424,16 +3424,20 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     # AC1. The same repository, the same instant, NO query parameter — and the name that appears
     # nowhere in `history` appears in `branches`, with the count that says why a client should care.
-    # Removing the catalogue turns this red; nothing else in the body can answer it.
-    # @intent: { entity: "Repository branches catalogue", action: "name main with its count", behavior: "a repository whose whole history window hides main still serves main with its run count", layer: "request" }
-    it "names main, with its run count, on a repository whose whole history window hides it" do
+    # Removing the catalogue turns this red; nothing else in the body can answer it. The newest run
+    # rides the same row, re-derived from the table rather than from the same Ruby the serializer
+    # read.
+    # @intent: { entity: "Repository branches catalogue", action: "name main with its count", behavior: "a repository whose whole history window hides main still serves main with its run count and the branch's newest run", layer: "request" }
+    it "names main, with its run count and its newest run, on a repository whose history window hides it" do
       trunk_hidden_repository
 
       body = get_repository
 
       expect(body["history"].map { |row| row["branch"] }).not_to include("main")
-      expect(body["branches"])
-        .to include("name" => "main", "run_count" => 12, "run_count_capped" => false)
+      expect(body["branches"]).to include(
+        "name" => "main", "run_count" => 12, "run_count_capped" => false,
+        "last_run_at" => repository.test_runs.where(branch: "main").maximum(:created_at).utc.iso8601
+      )
     end
 
     # AC1's second half, and it is the sibling panel's stated rule rather than a convenience: the
@@ -3466,13 +3470,19 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       rows = get_repository["branches"].index_by { |row| row["name"] }
 
       expect(repository.test_runs.where(branch: "main").count).to eq(35)
-      expect(rows.fetch("main"))
-        .to eq("name" => "main", "run_count" => 30, "run_count_capped" => true)
+      expect(rows.fetch("main")).to eq(
+        "name" => "main", "run_count" => 30, "run_count_capped" => true,
+        # The branch's newest run, re-derived from the table rather than from the same Ruby the
+        # serializer read, and ISO8601 UTC on the wire.
+        "last_run_at" => repository.test_runs.where(branch: "main").maximum(:created_at).utc.iso8601
+      )
       expect(rows.fetch("main")["run_count"]).to eq(Repository::TRAJECTORY_LIMIT)
       # The branch that finished counting says so, so `run_count_capped` is a fact about the row
       # rather than a constant the block always carries.
-      expect(rows.fetch("feature/small"))
-        .to eq("name" => "feature/small", "run_count" => 1, "run_count_capped" => false)
+      expect(rows.fetch("feature/small")).to eq(
+        "name" => "feature/small", "run_count" => 1, "run_count_capped" => false,
+        "last_run_at" => repository.test_runs.where(branch: "feature/small").maximum(:created_at).utc.iso8601
+      )
       # No figure anywhere in the block is a rendered string — the caption lives on the dashboard.
       expect(rows.values.flat_map(&:values).grep(String)).to all(satisfy { |v| !v.include?("+") })
     end
@@ -3486,9 +3496,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(get_repository["branches_window"]).to eq(
         "order" => "run_count_desc,last_run_at_desc,name_asc",
-        # The middle ordering key is not a field on a row, so the array's own order is the answer
-        # rather than a rendering of one — the same admission `history_window` makes.
-        "tie_break_served" => false,
+        # The middle ordering key IS a field on every row — each carries `last_run_at`, the value
+        # that ordering term compares — so the whole order is reproducible from what a client
+        # holds. `history_window` below still admits the opposite for itself, and honestly.
+        "tie_break_served" => true,
         "run_count_limit" => 30,
         "walk_limit" => 500,
         "walk_cut" => false,
@@ -3592,8 +3603,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       body = get_repository
 
       expect(repository.test_runs.where(branch: nil).count).to eq(5)
-      expect(body["branches"]).to eq([{ "name" => "main", "run_count" => 1,
-                                        "run_count_capped" => false }])
+      expect(body["branches"]).to eq([{ "name" => "main", "run_count" => 1, "run_count_capped" => false,
+                                        "last_run_at" => repository.test_runs.where(branch: "main")
+                                                                     .maximum(:created_at).utc.iso8601 }])
       expect(body["branches_window"]).to include("returned" => 1)
     end
 

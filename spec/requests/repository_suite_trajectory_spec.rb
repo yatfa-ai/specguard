@@ -680,26 +680,48 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(filter_doc.find("#recent-runs")).to have_text("feat111", normalize_ws: true)
     end
 
-    # @intent: {"entity": "Repository", "action": "list branch run counts", "behavior": "the selector reads main (2 runs) then feature/x (1 run), most history first, with the branch being drawn marked aria-current", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "list branch run counts", "behavior": "the selector reads main (2 runs) · 2 days ago then feature/x (1 run) · 1 minute ago, most history first, with the branch being drawn marked aria-current", "layer": "request"}
     it "names the branches that have runs and how many each has" do
       repository = repository_anchored_on_a_feature_branch
 
       get repository_path(repository)
 
-      expect(branch_choices).to eq(["main (2 runs)", "feature/x (1 run)"])
-      expect(current_choices).to eq(["feature/x (1 run)"])
+      expect(branch_choices).to eq(["main (2 runs) · 2 days ago", "feature/x (1 run) · 1 minute ago"])
+      expect(current_choices).to eq(["feature/x (1 run) · 1 minute ago"])
     end
 
-    # @intent: {"entity": "Repository", "action": "mark drawn branch current", "behavior": "asking ?branch=main marks main (2 runs) as the sole aria-current entry of the selector", "layer": "request"}
+    # The age beside the count is the point of the whole column: ordering is most-history-first, so a
+    # just-pushed PR branch with one run sits BELOW a dormant trunk, and only the age says which of
+    # the two is actually alive. The short "N minutes ago" is a display; the machine-readable value
+    # is the absolute stamp on the item's `time` element (`datetime` and `title`), re-derived from
+    # the table rather than from the same Ruby the view read.
+    # @intent: {"entity": "Repository", "action": "show branch recency", "behavior": "a 1-run branch pushed 1 minute ago carries · 1 minute ago in the menu while a 2-run branch last pushed 2 days ago carries its older · 2 days ago, and each item's time element carries that branch's absolute newest-run stamp in datetime and title", "layer": "request"}
+    it "shows how stale each branch's history is, so a fresh branch reads fresher than a dormant one" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository)
+
+      expect(branch_choices).to eq(["main (2 runs) · 2 days ago", "feature/x (1 run) · 1 minute ago"])
+
+      fresh = branch_menu_links.find { |link| link.text(:all).include?("feature/x") }
+      stale = branch_menu_links.find { |link| link.text(:all).include?("main") }
+      fresh_stamp = repository.test_runs.where(branch: "feature/x").maximum(:created_at).utc.iso8601
+      stale_stamp = repository.test_runs.where(branch: "main").maximum(:created_at).utc.iso8601
+      expect(fresh.all("time", visible: :all).first[:datetime]).to eq(fresh_stamp)
+      expect(fresh.all("time", visible: :all).first[:title]).to eq(fresh_stamp)
+      expect(stale.all("time", visible: :all).first[:datetime]).to eq(stale_stamp)
+    end
+
+    # @intent: {"entity": "Repository", "action": "mark drawn branch current", "behavior": "asking ?branch=main marks main (2 runs) · 2 days ago as the sole aria-current entry of the selector", "layer": "request"}
     it "marks the branch it is reading as the current one" do
       repository = repository_anchored_on_a_feature_branch
 
       get repository_path(repository, branch: "main")
 
-      expect(current_choices).to eq(["main (2 runs)"])
+      expect(current_choices).to eq(["main (2 runs) · 2 days ago"])
     end
 
-    # @intent: {"entity": "Repository", "action": "word over-window count", "behavior": "a branch holding more runs than the window is labelled main (30+ runs) with a basis explaining that means the branch holds more history than the window reaches", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "word over-window count", "behavior": "a branch holding more runs than the window is labelled main (30+ runs) · 10 days ago with a basis explaining that means the branch holds more history than the window reaches", "layer": "request"}
     it "words a history longer than the window it counts as 30+" do
       repository = create_repository(user: @user)
       (Repository::TRAJECTORY_LIMIT + 1).times do |i|
@@ -708,7 +730,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       get repository_path(repository)
 
-      expect(branch_choices).to eq(["main (30+ runs)"])
+      expect(branch_choices).to eq(["main (30+ runs) · 10 days ago"])
       expect(branch_menu.find("#suite-trajectory-branches-basis", visible: :all))
         .to have_text("means the branch holds more history than the window reaches", normalize_ws: true)
     end
@@ -719,24 +741,26 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       get repository_path(repository)
 
-      expect(branch_choices).to match_array(["main (2 runs)", *0.upto(9).map { |i| "feature/#{i} (1 run)" }])
-      expect(branch_choices.first).to eq("main (2 runs)")
+      expect(branch_choices).to match_array(
+        ["main (2 runs) · 29 days ago", *0.upto(9).map { |i| "feature/#{i} (1 run) · #{20 - i} days ago" }]
+      )
+      expect(branch_choices.first).to eq("main (2 runs) · 29 days ago")
       expect(branch_menu_links.map { |link| link[:href] }).to all(include("branch="))
       expect(branch_menu_targets).to match_array(every_branch_in_the_eleven)
     end
 
-    # @intent: {"entity": "Repository", "action": "follow menu link", "behavior": "GETting the href the menu itself rendered for feature/0 returns ok, re-anchors the page to that branch's 1-run state and marks feature/0 (1 run) current", "layer": "request"}
+    # @intent: {"entity": "Repository", "action": "follow menu link", "behavior": "GETting the href the menu itself rendered for feature/0 returns ok, re-anchors the page to that branch's 1-run state and marks feature/0 (1 run) · 20 days ago current", "layer": "request"}
     it "reads a branch from behind the busiest ones by following a link the page itself rendered" do
       repository = repository_with_eleven_branches
 
       get repository_path(repository)
 
-      href = branch_menu_links.find { |link| link.text(:all).squish == "feature/0 (1 run)" }[:href]
+      href = branch_menu_links.find { |link| link.text(:all).squish == "feature/0 (1 run) · 20 days ago" }[:href]
       get href
 
       expect(response).to have_http_status(:ok)
       expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/0 so far", normalize_ws: true)
-      expect(current_choices).to eq(["feature/0 (1 run)"])
+      expect(current_choices).to eq(["feature/0 (1 run) · 20 days ago"])
     end
 
     # @intent: {"entity": "Repository", "action": "open menu without script", "behavior": "the branch menu is a details/summary disclosure whose eleven links are present in the document for a reader with no script", "layer": "request"}
@@ -756,8 +780,8 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       get repository_path(repository, branch: "feature/0")
 
-      expect(current_choices).to eq(["feature/0 (1 run)"])
-      expect(branch_choices).to include("main (2 runs)")
+      expect(current_choices).to eq(["feature/0 (1 run) · 20 days ago"])
+      expect(branch_choices).to include("main (2 runs) · 29 days ago")
       expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/0 so far", normalize_ws: true)
     end
 
@@ -773,8 +797,8 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       get repository_path(repository, branch: "main")
 
-      expect(branch_choices.first).to eq("main (2 runs)")
-      expect(current_choices).to eq(["main (2 runs)"])
+      expect(branch_choices.first).to eq("main (2 runs) · about 1 month ago")
+      expect(current_choices).to eq(["main (2 runs) · about 1 month ago"])
       expect(branch_menu.find("#suite-trajectory-branches-basis", visible: :all)).to have_text(
         "SpecGuard stops after walking 10 branches, so this is an ordering over the ones it walked " \
         "and not over every branch here.", normalize_ws: true
@@ -834,7 +858,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       get repository_path(repository, branch: "main", window: 20, layer: "unit")
 
-      href = branch_menu_links.find { |link| link.text(:all).squish == "feature/3 (1 run)" }[:href]
+      href = branch_menu_links.find { |link| link.text(:all).squish == "feature/3 (1 run) · 17 days ago" }[:href]
       pairs = href.split("#").first.split("?", 2).last.split("&")
 
       expect(pairs).to include("branch=feature%2F3")
@@ -897,7 +921,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       get repository_path(repository)
 
       expect(trajectory_panel).to have_text("No branch to plot a history on", normalize_ws: true)
-      expect(branch_choices).to eq(["main (2 runs)"])
+      expect(branch_choices).to eq(["main (2 runs) · 2 days ago"])
 
       get repository_path(repository, branch: "main")
 

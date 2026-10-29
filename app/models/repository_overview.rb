@@ -1370,16 +1370,16 @@ class RepositoryOverview
   # number for an unrelated reason: that one is a bound this controller CHOOSES between for
   # `history`, and this one is the model's own `runs:` default, which the catalogue takes as given.
   #
-  # `tie_break_served: false`, the same admission `history_window` makes and for the same effect.
-  # The order is `run_count` desc, then the branch's last run desc, then its name — and the middle
-  # key is not a field on a row here. So the ordering is NOT reproducible from what a client holds:
-  # two branches with equal counts carry nothing that says which the server put first. The array's
-  # own order is the answer rather than a rendering of one, which is also why nothing below
-  # re-sorts it.
+  # `tie_break_served: true` — the middle ordering key is now a field on every row. Each row carries
+  # `last_run_at`, the branch's newest run, which is the exact value `last_run_at desc` compares —
+  # so the whole order (`run_count` desc, `last_run_at` desc, `name` asc) is reproducible from what
+  # a client holds, and the array's order is a rendering of it rather than a private answer.
+  # `history_window` above still admits the opposite for itself, and honestly: its tie-break key is
+  # the runs table's own id, which no row carries.
   def serialized_branches_window
     {
       order: "run_count_desc,last_run_at_desc,name_asc",
-      tie_break_served: false,
+      tie_break_served: true,
       run_count_limit: Repository::TRAJECTORY_LIMIT,
       walk_limit: Repository::BRANCH_HISTORY_LIMIT,
       walk_cut: branch_histories.length >= Repository::BRANCH_HISTORY_LIMIT,
@@ -1409,7 +1409,10 @@ class RepositoryOverview
   #
   # SERVED IN THE MODEL'S ORDER, NEVER RE-SORTED. `branch_histories` returns most-history-first with
   # an explicit tie-break, and re-sorting here would make the array's order a rendering rather than
-  # the answer — the mistake `tie_break_served: false` exists to keep this endpoint from making.
+  # the answer. The whole order IS now reproducible from the fields a row carries — `last_run_at` is
+  # the exact value the middle ordering key compares — which is what
+  # `branches_window.tie_break_served: true` states; serving the array in the model's order keeps it
+  # the authoritative reading all the same.
   #
   # NOT CUT TO A DISPLAY SIZE. `RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES` cuts the human
   # selector to eight, and that number is about what a row of links can carry before it stops being
@@ -1432,7 +1435,14 @@ class RepositoryOverview
         # so `run_count: 30, run_count_capped: true` says "at least thirty" without inventing a
         # figure nothing counted to, and `false` says the number is exact.
         run_count: history.run_count,
-        run_count_capped: history.capped?
+        run_count_capped: history.capped?,
+        # The branch's newest run, ISO8601 UTC — the exact value the catalogue's middle ordering key
+        # (`last_run_at` desc) compares, so a client can see WHY two equal-count branches sit in the
+        # order they do, and how stale an idle branch's history is without a second call. Always
+        # present on a served row: the walk admits a branch only when it holds runs
+        # (`WHERE tail.run_count > 0`), and a branch holding runs has a newest one — nil would be
+        # the walk's defensive half, never a live state.
+        last_run_at: history.last_run_at&.utc&.iso8601
       }
     end
   end
