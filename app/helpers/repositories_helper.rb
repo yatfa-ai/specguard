@@ -866,10 +866,17 @@ module RepositoriesHelper
   # history first. NOT cut: the filter bar's menu is the page's only index of branches, and a branch
   # that is not named in it cannot be asked for. (The old Suite growth panel cut a row to eight and
   # backed it with a second, complete menu; with one filter bar there is only the complete one.)
+  #
+  # `last_run_at` rides through so the menu can say WHEN each branch was last pushed — the value
+  # `Repository#branch_histories` already loaded as its recency tie-break, here as a fact a reader
+  # can see rather than only as sort input. Nil renders nothing extra: a branch with no runs never
+  # reaches this list (`WHERE tail.run_count > 0` in `BRANCH_HISTORY_SQL`), so nil is the defensive
+  # half, not a live state.
   def console_branch_items(repository, histories, current_branch)
     histories.map do |history|
       { name: history.name,
         runs: history.capped? ? "#{history.run_count}+ runs" : pluralize(history.run_count, "run"),
+        last_run_at: history.last_run_at,
         href: drill_down_path(repository, branch: history.name, commit_sha: nil, anchor: nil,
                               **DRILL_IN_ASKS.index_with { nil }),
         current: history.name == current_branch }

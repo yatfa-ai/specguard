@@ -24,6 +24,10 @@
             <% branch_items.each do |item| %>
               <%= link_to item[:href], class: "rc-menu-item", aria: { current: item[:current] ? "page" : nil } do %>
                 <span><%= item[:name] %></span> <small>(<%= item[:runs] %>)</small>
+                <% if item[:last_run_at] %>
+                  <small>· <time datetime="<%= item[:last_run_at].utc.iso8601 %>"
+                                  title="<%= item[:last_run_at].utc.iso8601 %>"><%= time_ago_in_words(item[:last_run_at]) %> ago</time></small>
+                <% end %>
               <% end %>
             <% end %>
             <p class="px-2.5 py-1.5 text-xs text-app-content-secondary" id="suite-trajectory-branches-basis">
