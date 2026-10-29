@@ -16,7 +16,7 @@
         <% if @spec_directory_growth.layer_empty? %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No #{@spec_directory_growth.layer}-layer examples in either run",
-                description: "Neither this run nor the previous run on this branch has an example " \
+                description: "Neither this run nor #{run_pair_basis_noun} has an example " \
                              "that declared #{@spec_directory_growth.layer} as its layer, so no area " \
                              "gained or lost any. Both runs recorded per-example detail; the layer " \
                              "is simply absent from both."
@@ -34,8 +34,7 @@
               largest movement first, in both directions
             <% end %>
             — measured between this run and
-            <span class="font-mono"><%= previous_run_link %></span>, the
-            previous run on this branch.
+            <span class="font-mono"><%= previous_run_link %></span>, <%= run_pair_basis_noun %>.
             <% if @spec_directory_growth.any_unmoved? %>
               Where the movement runs out before the list does, areas that did not move are listed
               too, as ±0.
@@ -92,7 +91,7 @@
                   title: "No comparison to draw"
                 ) do |empty| %>
               <% empty.with_description do %>
-                The previous run on this branch
+                <%= run_pair_basis_noun.capitalize %>
                 (<%= previous_run_link %>) reported no tests, so there is nothing to measure
                 this run's areas against. Counting the whole suite as growth would charge a
                 commit for a gap in the reporting.
@@ -115,7 +114,7 @@
                   title: "No comparison to draw"
                 ) do |empty| %>
               <% empty.with_description do %>
-                The previous run on this branch
+                <%= run_pair_basis_noun.capitalize %>
                 (<%= previous_run_link %>) recorded no per-example detail, so it has no
                 areas to compare against — every area of this run would read as new. A run
                 ingested before that detail was stored, or sent by a client that reports only
@@ -126,14 +125,14 @@
             <%= render UI::EmptyStateComponent.new(
                   title: "No comparison to draw",
                   description: "This run recorded no per-example detail, so it has no areas to " \
-                               "compare — every area of the previous run would read as deleted. A " \
+                               "compare — every area of #{RunPairBasis.short_noun(@comparison_baseline_branch)} would read as deleted. A " \
                                "client that reports only totals sends a suite size and none of " \
                                "these rows."
                 ) %>
           <% else %>
             <%= render UI::EmptyStateComponent.new(
                   title: "No comparison to draw",
-                  description: "Neither this run nor the previous run on this branch recorded " \
+                  description: "Neither this run nor #{run_pair_basis_noun} recorded " \
                                "per-example detail, so there are no areas to compare. Suite growth " \
                                "as a whole is on the Summary at the top of this page, which reads the run " \
                                "totals rather than these rows."

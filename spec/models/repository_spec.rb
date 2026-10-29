@@ -601,6 +601,107 @@ RSpec.describe Repository do
     end
   end
 
+  describe "#baseline_test_run_on_branch" do
+    # The explicit cross-branch baseline behind `?compare_to=` (SPGD-1981): the newest run on the
+    # NAMED branch at or before the run being read, and nil wherever that is not a comparison the
+    # page could honestly draw.
+
+    # @intent: { entity: "Repository", action: "return the cross-branch baseline", behavior: "baseline_test_run_on_branch answers the newest run on the named branch at or before the handed run", layer: "unit" }
+    it "returns the newest run on the named branch at or before the handed run" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "oldmain", branch: "main", created_at: 3.days.ago)
+      repository.test_runs.create!(commit_sha: "newmain", branch: "main", created_at: 1.hour.ago)
+      feature = repository.test_runs.create!(commit_sha: "feat00", branch: "feat", created_at: 30.minutes.ago)
+
+      expect(repository.baseline_test_run_on_branch(feature, "main").commit_sha).to eq("newmain")
+    end
+
+    # The `<=` half of the rule, on its own: `previous_test_run_on_branch` is a strict row-value
+    # `<` because it must exclude the RUN ITSELF. This one cannot meet its own run — the
+    # same-branch guard refuses the ask first — so strictness would exclude nothing but a
+    # legitimate answer: a run on the baseline branch ingested in the same instant is exactly the
+    # state of that branch as of this run.
+    # @intent: { entity: "Repository", action: "include a same-instant baseline", behavior: "a run on the baseline branch ingested in the same instant as the handed run is a valid baseline", layer: "unit" }
+    it "answers with a run ingested in the same instant on the other branch" do
+      repository = create_repository
+      at = 1.hour.ago
+      repository.test_runs.create!(commit_sha: "mainnow", branch: "main", created_at: at)
+      feature = repository.test_runs.create!(commit_sha: "feat00", branch: "feat", created_at: at)
+
+      expect(repository.baseline_test_run_on_branch(feature, "main").commit_sha).to eq("mainnow")
+    end
+
+    # @intent: { entity: "Repository", action: "exclude newer baseline runs", behavior: "a branch whose only runs are newer than the handed run answers nil, never a newer run substituted as a baseline", layer: "unit" }
+    it "returns nil when the named branch has no run at or before the handed run" do
+      repository = create_repository
+      feature = repository.test_runs.create!(commit_sha: "feat00", branch: "feat", created_at: 1.hour.ago)
+      repository.test_runs.create!(commit_sha: "newmain", branch: "main", created_at: 1.minute.ago)
+
+      expect(repository.baseline_test_run_on_branch(feature, "main")).to be_nil
+    end
+
+    # The no-op arm: comparing a run against its own branch is the comparison the default page
+    # already makes, so the ask is refused before any query and the caller renders the default.
+    # @intent: { entity: "Repository", action: "refuse a same-branch ask", behavior: "naming the handed run's own branch answers nil without a query, leaving the default same-branch comparison standing", layer: "unit" }
+    it "returns nil for a same-branch ask without issuing a query" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "before", branch: "main", created_at: 2.days.ago)
+      latest = repository.test_runs.create!(commit_sha: "latest", branch: "main", created_at: 1.day.ago)
+
+      expect(count_queries { repository.baseline_test_run_on_branch(latest, "main") }).to eq(0)
+      expect(repository.baseline_test_run_on_branch(latest, "main")).to be_nil
+    end
+
+    # NULL is not a branch anyone can ask for, on the reasoning `latest_test_run_on_branch` gives:
+    # anonymous runs are an ordinary live state, and matching `branch IS NULL` would pool them
+    # into one fictional history.
+    # @intent: { entity: "Repository", action: "refuse a blank branch ask", behavior: "a blank branch name answers nil before any query instead of matching the anonymous runs", layer: "unit" }
+    it "returns nil for a blank branch ask without issuing a query" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "mainrun", branch: "main", created_at: 2.days.ago)
+      feature = repository.test_runs.create!(commit_sha: "feat00", branch: "feat", created_at: 1.hour.ago)
+
+      expect(count_queries { repository.baseline_test_run_on_branch(feature, "") }).to eq(0)
+      expect(repository.baseline_test_run_on_branch(feature, "")).to be_nil
+      expect(repository.baseline_test_run_on_branch(feature, nil)).to be_nil
+      expect(repository.baseline_test_run_on_branch(nil, "main")).to be_nil
+    end
+
+    # Same ordering, tie-break included: two runs of the baseline branch ingested in one instant
+    # resolve by id, which is the ingest sequence — the same answer "the newest run on main"
+    # means everywhere else.
+    # @intent: { entity: "Repository", action: "tie-break by ingest order", behavior: "two same-instant runs on the baseline branch resolve by id desc, the newest-ingested one winning", layer: "unit" }
+    it "tie-breaks same-instant baseline runs by ingest order" do
+      repository = create_repository
+      at = 1.hour.ago
+      repository.test_runs.create!(commit_sha: "main_a", branch: "main", created_at: at)
+      baseline_second = repository.test_runs.create!(commit_sha: "main_b", branch: "main", created_at: at)
+      feature = repository.test_runs.create!(commit_sha: "feat00", branch: "feat", created_at: at + 1.second)
+
+      expect(repository.baseline_test_run_on_branch(feature, "main")).to eq(baseline_second)
+    end
+
+    # @intent: { entity: "Repository", action: "ignore foreign runs", behavior: "another repository's run on the named branch is never returned as this repository's baseline", layer: "unit" }
+    it "ignores another repository's runs on the named branch" do
+      repository = create_repository
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                github_full_name: "acme/ledger")
+      other.test_runs.create!(commit_sha: "foreig", branch: "main", created_at: 2.days.ago)
+      feature = repository.test_runs.create!(commit_sha: "feat00", branch: "feat", created_at: 1.hour.ago)
+
+      expect(repository.baseline_test_run_on_branch(feature, "main")).to be_nil
+    end
+
+    # @intent: { entity: "Repository", action: "cost one query on a hit", behavior: "resolving a cross-branch baseline costs exactly one query with no re-read of the handed-over run", layer: "unit" }
+    it "is one query when there is a baseline to find" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "oldmain", branch: "main", created_at: 3.days.ago)
+      feature = repository.test_runs.create!(commit_sha: "feat00", branch: "feat", created_at: 1.hour.ago)
+
+      expect(count_queries { repository.baseline_test_run_on_branch(feature, "main") }).to eq(1)
+    end
+  end
+
   # One finished test run — the shared fixture of the four sibling describes below, defined once
   # at file level instead of a block-local copy per describe.
   def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)

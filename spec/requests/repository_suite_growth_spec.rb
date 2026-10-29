@@ -157,7 +157,13 @@ RSpec.describe "Repository suite-size growth", type: :request do
     expect(basis_line).to have_text("No earlier run on feature/x", normalize_ws: true)
     # The run it must NOT have reached for. Asserted on the basis line specifically: "main" appears
     # elsewhere on this page in other repositories' fixtures and in the Recent-runs table below.
-    expect(basis_line).to have_no_text("main", normalize_ws: true)
+    # Since SPGD-1981 the line also OFFERS the explicit cross-branch comparison — "Compare against
+    # main", an ask the reader must make, not a comparison the page has made — so the old
+    # no-mention pin is now the no-basis pin: the line names no main run as anything this delta
+    # was measured against, still draws no delta, and links no main run as a basis. The offer is
+    # the line's one link, and it points forward at an ask.
+    expect(basis_line).to have_no_text("measured against", normalize_ws: true)
+    expect(basis_line.all("a").map { |a| a.text.squish }).to eq(["Compare against main"])
     # ...and it must not be reporting the *other* no-delta state instead.
     expect(basis_line).to have_no_text("reported no branch", normalize_ws: true)
   end

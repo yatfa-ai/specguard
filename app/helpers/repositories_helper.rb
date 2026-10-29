@@ -98,6 +98,14 @@ module RepositoriesHelper
     # `?near_duplicate_cluster=` rides the same conditional carry (SPGD-1888): it opens a drawer on
     # the census panel, and following a link elsewhere on the page must not silently close it.
     asks[:near_duplicate_cluster] = @near_duplicate_cluster_request if @near_duplicate_cluster_request
+    # `?compare_to=` rides the same conditional carry (SPGD-1981): it chooses WHAT the page's
+    # run-pair figures are measured against, so a click elsewhere that dropped it would silently
+    # flip every delta on the page back to the same-branch predecessor while the reader was
+    # reading a cross-branch one — the exact class of ask-loss this chain exists to kill. A
+    # default page carries no `compare_to` bytes at all, and an explicit `compare_to: nil`
+    # override (the dead-end offer's clear gesture) beats the carried ask through the ordinary
+    # merge below.
+    asks[:compare_to] = @comparison_baseline_request if @comparison_baseline_request
     # `?run=` rides the same conditional carry (SPGD-1928): the run the reader anchored BY ID — the
     # only handle that names one of two same-sha rows — must survive a click elsewhere on the page,
     # exactly as the sha anchor does. Two precedence rules ride with it, because `run` BEATS
@@ -904,6 +912,54 @@ module RepositoriesHelper
   RunFigures = Struct.new(:run, :previous, :total, :annotated, :readings, :measured, :comparable,
                           :size_delta, :runtime_comparable, :wall_delta, :machine_delta, :sharded,
                           :shards, keyword_init: true)
+
+  # The ONE comparand noun the page's run-pair sentences read (SPGD-1981). The rule lives in
+  # `RunPairBasis`, beside the presenter rows that need it without a view; this wrapper is what
+  # the templates call, on the dashboard's own published ivar — nil on every default page, so
+  # every sentence built from it reads exactly as it did before `?compare_to=` existed. The full
+  # basis naming (linked sha, age, ask disclosure) composes around this noun at the sites that
+  # render it; nothing here re-derives the rule.
+  def run_pair_basis_noun
+    RunPairBasis.noun(@comparison_baseline_branch)
+  end
+
+  # Whether an explicit cross-branch ask is ACTIVE on this page — the ask was made AND a
+  # baseline on the named branch was found, so the run-pair figures are measured against a run
+  # that is not the same-branch predecessor. The views that reword a sentence family read this;
+  # the ones that merely name the comparand read `run_pair_basis_noun` and need no flag.
+  def compare_to_active?
+    @comparison_baseline_branch.present?
+  end
+
+  # The comparand as the BASIS NOTES name it, branch spelled out. Two families of sentence name
+  # the comparand and they have always spelled it differently: the aria readings and the area
+  # panels say "this branch" (`run_pair_basis_noun`), while the notes and the section headers
+  # name the branch itself — "the previous run on main". This is that second family's phrase,
+  # on the same one ivar: the asked branch when an ask is honoured, the run's own branch when
+  # not, and never a sentence that claims same-branch under a cross-branch comparison.
+  def comparison_basis_phrase
+    if compare_to_active?
+      "the newest run on #{@comparison_baseline_branch}"
+    else
+      "the previous run on #{@latest_test_run.branch}"
+    end
+  end
+
+  # The same branch, as the sentences that wrap it in <code> or append "on <branch>" print it —
+  # "Since <sha> on main". Same one ivar, same rule: the asked branch when an ask is honoured,
+  # the run's own branch when not.
+  def comparison_basis_branch
+    compare_to_active? ? @comparison_baseline_branch : @latest_test_run.branch
+  end
+
+  # The two "Since previous run" column headers of the What-changed tables. Under an honoured
+  # cross-branch ask the column's figures are not "since the previous run" of anything on this
+  # branch, and a header saying so would mislabel every cell under it — so the asked branch
+  # takes the header's place, the way the sentences around the tables do. Default render keeps
+  # the header it has always had, byte for byte.
+  def since_column_label
+    compare_to_active? ? "Since #{@comparison_baseline_branch}" : "Since previous run"
+  end
 
   def run_figures(run, previous)
     return nil if run.nil?
