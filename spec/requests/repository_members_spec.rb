@@ -1672,12 +1672,18 @@ RSpec.describe "Repository members", type: :request do
         sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
       end
 
-      # @intent: {"entity": "RepositoryMembership", "action": "disclose self edit no keys", "behavior": "the Edit page on a keys.manage holder who minted nothing and covers no agent keys ends the keys warning at the panel sentence, naming no key count of either kind", "layer": "request"}
+      # @intent: {"entity": "RepositoryMembership", "action": "disclose self edit no keys", "behavior": "the Edit page on a keys.manage holder who minted nothing and covers no agent keys renders the keys warning as exactly the panel sentence, naming no key count of either kind", "layer": "request"}
       it "ends the page warning at the panel sentence, naming no key count" do
         get edit_repository_member_path(repository, own_membership)
 
         expect(response).to have_http_status(:ok)
-        expect(prose).to include("Unticking keys.manage means you lose the API keys panel. Permissions")
+        # The sentence is pinned at its own element rather than by what heading happens to follow
+        # it in the collapsed prose: with no key of either kind the warning is exactly this, and a
+        # trailing space or a "0 API keys" clause is a visible change to what the person reads.
+        panel_warning = Capybara.string(response.body).all("li").map(&:text)
+                              .find { |text| text.include?("API keys panel") }
+        expect(panel_warning).to eq("Unticking keys.manage means you lose the API keys panel.")
+        expect(prose).to include("Unticking keys.manage means you lose the API keys panel.")
         expect(prose).not_to match(/\d+ (API keys?|live agent keys?)/)
       end
 
