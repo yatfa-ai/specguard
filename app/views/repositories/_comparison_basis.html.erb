@@ -20,13 +20,33 @@
 <% previous_run_link = f.previous && link_to(f.previous.commit_sha.first(7),
                         drill_down_path(@repository, commit_sha: f.previous.commit_sha, anchor: "summary"),
                         class: "rc-link") %>
+<%# The dead-end offer (SPGD-1981): one link to the comparison that un-dead-ends this page —
+    the newest run on the most recently pushed OTHER branch, at or before the run being read.
+    @comparison_offer is computed once on the dashboard and is nil everywhere but the dead end,
+    so the link costs this template nothing to decide. The ask rides the same drill_down_path
+    carry every link here uses, and the explicit `compare_to:` beats any carried ask, so
+    following the link keeps the reader's other asks and lands honoured. %>
+<% comparison_offer_link = @comparison_offer && link_to(
+      "Compare against #{@comparison_offer[:branch]}",
+      drill_down_path(@repository, compare_to: @comparison_offer[:branch], anchor: "summary"),
+      class: "rc-link") %>
     <%= render UI::NoteComponent.new(summary: "How the suite-size change is measured", id: "suite-size-basis") do %>
       <% if suite_size_delta %>
         Suite size is measured against
         <span class="font-mono"><%= previous_run_link %></span>,
-        the previous run on <%= @latest_test_run.branch %>,
-        <%= time_ago_in_words(f.previous.created_at) %> ago.
-        Only runs on the same branch are compared<%= ", and only runs assembled from the same #{shard_count} shard #{"report".pluralize(shard_count)}" if shard_count.positive? %>.
+        <%= comparison_basis_phrase %>,
+        <%= time_ago_in_words(f.previous.created_at) %> ago<%= " — a different branch, asked for" if compare_to_active? %>.
+        <% if compare_to_active? %>
+          You asked for this comparison with <code>?compare_to=<%= @comparison_baseline_branch %></code>;
+          by default only runs on the same branch are compared<%= ", and only runs assembled from the same #{shard_count} shard #{"report".pluralize(shard_count)}" if shard_count.positive? %>.
+        <% else %>
+          Only runs on the same branch are compared<%= ", and only runs assembled from the same #{shard_count} shard #{"report".pluralize(shard_count)}" if shard_count.positive? %>.
+        <% end %>
+        <% if @comparison_baseline_missed %>
+          You asked to compare against <%= @comparison_baseline_missed %>, but no run from that
+          branch exists at or before this run, so this delta is still the same-branch one —
+          SpecGuard does not substitute a branch the URL did not name.
+        <% end %>
       <% elsif @latest_test_run.branch.blank? %>
         This run reported no branch, so SpecGuard cannot place it in a history and has no
         earlier run to measure it against. Runs that name no branch are not pooled together —
@@ -36,12 +56,25 @@
         is the first run SpecGuard has from that branch. Runs on other branches are
         deliberately not compared: a suite size from somewhere else is not a change this one
         made.
+        <% if @comparison_baseline_missed %>
+          You asked to compare against <%= @comparison_baseline_missed %>, but no run from that
+          branch exists at or before this run — so there is nothing to measure against and no
+          change is shown. SpecGuard does not substitute a branch the URL did not name.
+        <% end %>
+        <% if comparison_offer_link %>
+          You can ask for the cross-branch comparison explicitly: <%= comparison_offer_link %>.
+        <% end %>
       <% elsif !measured_tests %>
         This run reported no tests, so there is nothing to take a change from. A difference
         measured against a run that reported nothing would describe the report and not the
         suite — which is the same distinction the line above draws.
+        <% if @comparison_baseline_missed %>
+          You asked to compare against <%= @comparison_baseline_missed %>, but no run from that
+          branch exists at or before this run; this basis is the same-branch predecessor, and
+          SpecGuard does not substitute a branch the URL did not name.
+        <% end %>
       <% elsif !comparison_measured %>
-        The previous run on <%= @latest_test_run.branch %>
+        <%= comparison_basis_phrase.capitalize %>
         (<span class="font-mono"><%= previous_run_link %></span>)
         reported no tests, so there is nothing to measure this run's suite size against.
         Counting the whole suite as growth would charge a commit for a gap in the reporting.
@@ -60,8 +93,8 @@
           <%= presented_as_sharded ? "The wall clock" : "The total runtime" %> is
           measured against
           <span class="font-mono"><%= previous_run_link %></span>,
-          the previous run on <%= @latest_test_run.branch %>,
-          <%= time_ago_in_words(f.previous.created_at) %> ago<%= ", and so is the machine time" if machine_time_delta %>.
+          <%= comparison_basis_phrase %>,
+          <%= time_ago_in_words(f.previous.created_at) %> ago<%= " — a different branch, asked for" if compare_to_active? %><%= ", and so is the machine time" if machine_time_delta %>.
           <% if presented_as_sharded %>
             Only runs that timed the same number of shards are compared, and both of these
             timed <%= @latest_test_run.timed_shard_count %> of their
@@ -72,7 +105,7 @@
           which is not the same as a runtime of zero, and the row above says so in those
           words rather than printing a number.
         <% elsif !f.previous.duration_reported? %>
-          The previous run on <%= @latest_test_run.branch %>
+          <%= comparison_basis_phrase.capitalize %>
           (<span class="font-mono"><%= previous_run_link %></span>)
           reported no timing, so there is nothing to measure this run's runtime against.
           Counting the whole wall clock as new cost would charge a commit for a gap in the

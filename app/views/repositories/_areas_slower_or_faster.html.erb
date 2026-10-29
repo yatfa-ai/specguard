@@ -17,7 +17,7 @@
         <% if @spec_directory_runtime_growth.layer_empty? %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No #{@spec_directory_runtime_growth.layer}-layer examples in either run",
-                description: "Neither this run nor the previous run on this branch has an example " \
+                description: "Neither this run nor #{run_pair_basis_noun} has an example " \
                              "that declared #{@spec_directory_runtime_growth.layer} as its layer, so " \
                              "there is no #{@spec_directory_runtime_growth.layer}-layer time to " \
                              "compare area by area. Both runs recorded per-example detail; the layer " \
@@ -36,8 +36,7 @@
               recorded — largest movement first, in both directions
             <% end %>
             — measured between this run and
-            <span class="font-mono"><%= previous_run_link %></span>, the
-            previous run on this branch.
+            <span class="font-mono"><%= previous_run_link %></span>, <%= run_pair_basis_noun %>.
             <% if @spec_directory_runtime_growth.any_unmoved? %>
               Where the movement runs out before the list does, areas whose time did not move are
               listed too, as ±0.
@@ -100,7 +99,7 @@
                   title: "No comparison to draw"
                 ) do |empty| %>
               <% empty.with_description do %>
-                The previous run on this branch
+                <%= run_pair_basis_noun.capitalize %>
                 (<%= previous_run_link %>) reported no tests, so there is nothing to time
                 this run's areas against. Counting the whole suite as new time would charge a
                 commit for a gap in the reporting.
@@ -123,7 +122,7 @@
                   title: "No comparison to draw"
                 ) do |empty| %>
               <% empty.with_description do %>
-                The previous run on this branch
+                <%= run_pair_basis_noun.capitalize %>
                 (<%= previous_run_link %>) recorded no per-example detail, so it has no
                 areas to time against — every area of this run would read as time newly
                 appearing. A run ingested before that detail was stored, or sent by a client
@@ -134,7 +133,7 @@
             <%= render UI::EmptyStateComponent.new(
                   title: "No comparison to draw",
                   description: "This run recorded no per-example detail, so it has no areas to " \
-                               "time — every area of the previous run would read as time " \
+                               "time — every area of #{RunPairBasis.short_noun(@comparison_baseline_branch)} would read as time " \
                                "disappearing. A client that reports only totals sends a suite size " \
                                "and none of these rows."
                 ) %>
@@ -143,7 +142,7 @@
                   title: "No comparison to draw"
                 ) do |empty| %>
               <% empty.with_description do %>
-                The previous run on this branch
+                <%= run_pair_basis_noun.capitalize %>
                 (<%= previous_run_link %>) reported no timings — it recorded
                 <%= number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count) %>
                 <%= @spec_directory_runtime_growth.layer? ? "#{@spec_directory_runtime_growth.layer}-layer " : "" %>
@@ -159,13 +158,13 @@
                                "#{number_with_delimiter(@spec_directory_runtime_growth.latest_recorded_count)} " \
                                "#{@spec_directory_runtime_growth.layer? ? "#{@spec_directory_runtime_growth.layer}-layer " : ""}" \
                                "examples and a duration for none of them — so its areas cannot be " \
-                               "timed. Every area of the previous run would otherwise read as time " \
+                               "timed. Every area of #{RunPairBasis.short_noun(@comparison_baseline_branch)} would otherwise read as time " \
                                "disappearing, which is a reporting gap and not a speedup."
                 ) %>
           <% when :neither_timed %>
             <%= render UI::EmptyStateComponent.new(
                   title: "No comparison to draw",
-                  description: "Neither this run nor the previous run on this branch reported a " \
+                  description: "Neither this run nor #{run_pair_basis_noun} reported a " \
                                "duration for any#{@spec_directory_runtime_growth.layer? ? " #{@spec_directory_runtime_growth.layer}-layer" : ""} example, so there is no time to compare area by " \
                                "area. Both recorded their examples; neither client sent timings " \
                                "with them."
@@ -173,7 +172,7 @@
           <% else %>
             <%= render UI::EmptyStateComponent.new(
                   title: "No comparison to draw",
-                  description: "Neither this run nor the previous run on this branch recorded " \
+                  description: "Neither this run nor #{run_pair_basis_noun} recorded " \
                                "per-example detail, so there are no areas to time. The change in " \
                                "the run's total wall clock is on the Summary at the top of this page, which " \
                                "reads the run totals rather than these rows."

@@ -103,7 +103,15 @@ class SpecDirectoryRuntimeGrowth
   # `TestRun#intent_readings` (memoized, no new query), and the TIMED states fire only on a side that
   # HAS examples of the layer (`TestRun#layer_counts`) and timed none of them — a layer-empty side is a
   # legitimately new or removed area, not an untimed one. See {.from_tuples}.
-  def self.for(test_run, previous_test_run, limit: SpecObservation::RETIMED_DIRECTORIES_LIMIT, layer: nil)
+  # `basis_branch:` (SPGD-1981) names the branch an explicit `?compare_to=` comparison is
+  # measured against. Nil — every caller but that one ask — keeps every sentence this object
+  # builds at the same-branch spelling it has always made, byte for byte, the identity the
+  # `layer:` keyword above already pins for its own widening. The branch reaches the comparable
+  # path's ROWS only, on the same grounds `SpecDirectoryGrowth` states: the empty states are
+  # named in the views, which read the dashboard's own ivar, and the phrase rule lives in one
+  # place (`RunPairBasis`).
+  def self.for(test_run, previous_test_run, limit: SpecObservation::RETIMED_DIRECTORIES_LIMIT, layer: nil,
+               basis_branch: nil)
     layer = layer&.to_s
     return new(state: :latest_unmeasured, layer: layer) unless test_run.suite_size_measured?
     return new(state: :previous_unmeasured, layer: layer) unless previous_test_run.suite_size_measured?
@@ -123,10 +131,9 @@ class SpecDirectoryRuntimeGrowth
 
     from_tuples(
       SpecObservation.directory_runtime_growth_between(test_run, previous_test_run, limit: limit, layer: layer),
-      layer, sides
+      layer, sides, basis_branch
     )
   end
-
   # The five window totals ride on every row and are identical on all of them, so they are read off
   # the first; `to_i` on the nil of an empty read, where zero areas and zero rows on both sides is
   # the honest count. An empty read is exactly the "neither run recorded rows" state — a group
@@ -141,7 +148,7 @@ class SpecDirectoryRuntimeGrowth
   # no timings" is owed the figure that makes it actionable — it recorded 4,102 examples and timed
   # none of them — and the read has already paid for it; withholding it would leave the reader with
   # a sentence they cannot size.
-  def self.from_tuples(tuples, layer = nil, sides = nil)
+  def self.from_tuples(tuples, layer = nil, sides = nil, basis_branch = nil)
     _path, _prev_s, _latest_s, _prev_rec, _latest_rec, _prev_timed, _latest_timed,
       directory_count, previous_recorded, latest_recorded, previous_timed, latest_timed = tuples.first
 
@@ -172,7 +179,8 @@ class SpecDirectoryRuntimeGrowth
     rows = tuples.map do |path, prev_seconds, latest_seconds, prev_rec, latest_rec, prev_t, latest_t, *|
       Row.new(path: path, previous_seconds: prev_seconds, latest_seconds: latest_seconds,
               previous_recorded_count: prev_rec.to_i, latest_recorded_count: latest_rec.to_i,
-              previous_timed_count: prev_t.to_i, latest_timed_count: latest_t.to_i)
+              previous_timed_count: prev_t.to_i, latest_timed_count: latest_t.to_i,
+              basis_branch: basis_branch)
     end
 
     new(state: :comparable, rows: rows, layer: layer, **totals)
@@ -276,10 +284,12 @@ class SpecDirectoryRuntimeGrowth
   def anything_to_show? = any_movement? || any_untimed?
 
   # One directory's movement in seconds between two runs, both operands it was taken across, and
-  # what each operand was summed over.
+  # what each operand was summed over. `basis_branch` is the `?compare_to=` ask the row was built
+  # under, or nil — nil is the default, and every sentence below reads the same with nil as it
+  # did before the member existed.
   Row = Struct.new(:path, :previous_seconds, :latest_seconds, :previous_recorded_count,
                    :latest_recorded_count, :previous_timed_count, :latest_timed_count,
-                   keyword_init: true) do
+                   :basis_branch, keyword_init: true) do
     # This area has a movement at all: both sides summed a real number of seconds. False whenever
     # either side timed nothing here, which is SQL NULL out of the aggregate and stays nil all the
     # way to the cell — a subtraction against it would be arithmetic on a zero that was never a
@@ -360,14 +370,18 @@ class SpecDirectoryRuntimeGrowth
     # precisely because it is not a hyphen — is announced inconsistently across screen readers,
     # from "minus" to nothing at all. So the direction and what it was measured against are spelled
     # out rather than left to the glyph.
+    #
+    # The comparand is `RunPairBasis`'s, not spelled here, on the grounds the count panel's row
+    # states: nil `basis_branch` keeps the same-branch sentences byte for byte, and an explicit
+    # `?compare_to=` names the branch the comparison was asked for.
     def change_reading
       return new_area_reading if new_area?
       return removed_area_reading if removed_area?
       return untimed_reading unless comparable?
-      return "took the same time as it did in the previous run on this branch" unless moved?
+      return "took the same time as it did in #{RunPairBasis.noun(basis_branch)}" unless moved?
 
       "#{SpecObservation.humanized_duration(change.abs)} " \
-        "#{change.negative? ? "faster" : "slower"} than the previous run on this branch"
+        "#{change.negative? ? "faster" : "slower"} than #{RunPairBasis.noun(basis_branch)}"
     end
 
     private
@@ -376,15 +390,15 @@ class SpecDirectoryRuntimeGrowth
     # area can be BOTH new and untimed, and "not reported of examples" is not a sentence — so the
     # two facts are said as two facts rather than run through one template.
     def new_area_reading
-      return "an area the previous run did not record, and this run reported no timing for it" if latest_seconds.nil?
+      return "an area #{RunPairBasis.short_noun(basis_branch)} did not record, and this run reported no timing for it" if latest_seconds.nil?
 
-      "#{latest_label} of examples, an area the previous run did not record"
+      "#{latest_label} of examples, an area #{RunPairBasis.short_noun(basis_branch)} did not record"
     end
 
     def removed_area_reading
-      return "an area this run does not have, and the previous run reported no timing for it" if previous_seconds.nil?
+      return "an area this run does not have, and #{RunPairBasis.short_noun(basis_branch)} reported no timing for it" if previous_seconds.nil?
 
-      "#{previous_label} of examples in the previous run and none now"
+      "#{previous_label} of examples in #{RunPairBasis.short_noun(basis_branch)} and none now"
     end
 
     # Which side went quiet, said as a fact about the REPORTING and never about the code. This is
@@ -394,7 +408,7 @@ class SpecDirectoryRuntimeGrowth
       return "neither run reported a timing for this area" if previous_seconds.nil? && latest_seconds.nil?
       return "this run reported no timing for this area, so there is nothing to compare" if latest_seconds.nil?
 
-      "the previous run on this branch reported no timing for this area, so there is nothing to compare"
+      "#{RunPairBasis.noun(basis_branch)} reported no timing for this area, so there is nothing to compare"
     end
   end
 end

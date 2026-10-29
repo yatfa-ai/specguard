@@ -18,7 +18,7 @@
             difference between two of these test counts is not a change in the suite.
           <% end %>
           Suite growth is
-          measured in What changed, and only against the previous run on the same branch.
+          measured in What changed, <%= compare_to_active? ? "and — by your ask — against the newest run on #{@comparison_baseline_branch}" : "and only against the previous run on the same branch" %>.
           Every commit below opens this page on its own run.
           <%= recent_runs_anchor_note(@run_anchor_run, @recent_test_runs) %>
         <% end %>

@@ -98,13 +98,18 @@ class SpecDirectoryFileGrowth
   # this same pair of runs. It is passed rather than rebuilt so the two panels cannot disagree about
   # whether these runs are comparable, and so this costs no second gate — see the class comment for
   # why the last two of its six states are not re-derivable at this grain in any case.
+  #
+  # `basis_branch:` (SPGD-1981) rides the same ask the parent panel was built under, so the
+  # drill-in's row readings name the same comparand its parent's do — a drill-in whose rows said
+  # "the previous run on this branch" under an ask the parent names would be the one panel on the
+  # page still making the false claim. Nil keeps every sentence byte-identical.
   def self.for(test_run, previous_test_run, path, growth:,
-               limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT, layer: nil)
+               limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT, layer: nil, basis_branch: nil)
     layer = layer&.to_s
     return new(path: path, state: growth.state, layer: layer) unless growth.comparable?
 
     from_tuples(path, SpecObservation.file_growth_between(test_run, previous_test_run, path,
-                                                          limit: limit, layer: layer), layer)
+                                                          limit: limit, layer: layer), layer, basis_branch)
   end
 
   # The three window totals ride on every row and are identical on all of them, so they are read off
@@ -113,9 +118,9 @@ class SpecDirectoryFileGrowth
   # state — a group exists here if and only if a row exists — so it needs no separate count to
   # detect, and it is `#recorded?` rather than a state of its own: the six states are about the RUNS
   # and this is about the AREA.
-  def self.from_tuples(path, tuples, layer = nil)
+  def self.from_tuples(path, tuples, layer = nil, basis_branch = nil)
     rows = tuples.map do |file_path, previous, latest, *|
-      Row.new(path: file_path, previous_count: previous.to_i, latest_count: latest.to_i)
+      Row.new(path: file_path, previous_count: previous.to_i, latest_count: latest.to_i, basis_branch: basis_branch)
     end
 
     _path, _previous, _latest, file_count, previous_recorded, latest_recorded = tuples.first
@@ -207,7 +212,13 @@ class SpecDirectoryFileGrowth
   # sentence template standing where two plain sentences were, and the next grain to want a third
   # noun makes it three. The two structs are the same shape and not the same claim, which is the
   # disposition this codebase takes on its other near-identical row mappers.
-  Row = Struct.new(:path, :previous_count, :latest_count, keyword_init: true) do
+  #
+  # `basis_branch` is the `?compare_to=` ask the row was built under, or nil — nil is the
+  # default, and every sentence below reads the same with nil as it did before the member
+  # existed. The drill-in's rows must name the same comparand their parent panel's do: a
+  # drill-in still saying "the previous run on this branch" under an ask the parent names would
+  # be the one panel on the page still making the false claim.
+  Row = Struct.new(:path, :previous_count, :latest_count, :basis_branch, keyword_init: true) do
     # Signed, and the sign carries the whole meaning: a file that gained 47 examples and one that
     # lost 47 are opposite facts — and side by side in one area they are the two halves of the
     # rename this panel exists to make visible.
@@ -256,12 +267,12 @@ class SpecDirectoryFileGrowth
     # to nothing at all. So the direction and what it was measured against are spelled out rather
     # than left to the glyph.
     def change_reading
-      return "#{example_phrase(latest_count)}, a file the previous run did not record" if new_file?
-      return "#{example_phrase(previous_count)} in the previous run and none now" if removed_file?
-      return "unchanged since the previous run on this branch" unless moved?
+      return "#{example_phrase(latest_count)}, a file #{RunPairBasis.short_noun(basis_branch)} did not record" if new_file?
+      return "#{example_phrase(previous_count)} in #{RunPairBasis.short_noun(basis_branch)} and none now" if removed_file?
+      return "unchanged since #{RunPairBasis.noun(basis_branch)}" unless moved?
 
       "#{example_phrase(change.abs)} #{change.negative? ? "fewer" : "more"} " \
-        "than the previous run on this branch"
+        "than #{RunPairBasis.noun(basis_branch)}"
     end
 
     # An operand, rendered. Delimited here rather than in the template so both counts and the change

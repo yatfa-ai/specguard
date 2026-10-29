@@ -5,7 +5,14 @@
 <section class="rc-section" id="changes" aria-labelledby="changes-h">
   <div class="rc-section-head">
     <h2 class="text-app-h2" id="changes-h">What changed</h2>
-    <p>Against the previous run on <code><%= @latest_test_run.branch.presence || "this branch" %></code>, and across the last <%= @window_size %> runs.</p>
+    <%# The comparand names itself two ways (SPGD-1981): the run's own branch when the run pair
+        is the default one, the asked branch — with the ask said — when `?compare_to=` is
+        honoured. Same-branch render byte-identical. %>
+    <% if compare_to_active? %>
+      <p>Against the newest run on <code><%= @comparison_baseline_branch %></code> — a different branch, asked for — and across the last <%= @window_size %> runs.</p>
+    <% else %>
+      <p>Against the previous run on <code><%= @latest_test_run.branch.presence || "this branch" %></code>, and across the last <%= @window_size %> runs.</p>
+    <% end %>
   </div>
 
   <%= render "repositories/suite_growth" -%>
@@ -26,7 +33,7 @@
             <p class="text-xs text-app-muted" id="layer-pyramid-share"><%= pyramid_share %></p>
           <% end %>
           <%= render UI::TableComponent.new(
-                columns: ["Layer", { label: "Tests", end: true }, { label: "Since previous run", end: true },
+                columns: ["Layer", { label: "Tests", end: true }, { label: since_column_label, end: true },
                           { label: "Across the window", end: true }],
                 sortable: true) do %>
             <% SpecObservation::DECLARED_LAYER_KEYS.each do |layer| %>
@@ -48,7 +55,7 @@
           <% end %>
           <% if @layer_run_growth&.comparable? %>
             <p class="text-xs text-app-content-secondary" id="layer-run-growth">Since <span class="font-mono"><%= link_to @previous_test_run.commit_sha.first(7),
-                        drill_down_path(@repository, commit_sha: @previous_test_run.commit_sha, anchor: "summary"), class: "rc-link" %></span> on <%= @latest_test_run.branch %>: <%= @layer_run_growth.label %><%# The PREVIOUS run's share, as a second labeled level — the same seam on the other run, never a
+                        drill_down_path(@repository, commit_sha: @previous_test_run.commit_sha, anchor: "summary"), class: "rc-link" %></span> on <%= comparison_basis_branch %><%= " (asked for)" if compare_to_active? %>: <%= @layer_run_growth.label %><%# The PREVIOUS run's share, as a second labeled level — the same seam on the other run, never a
                 subtraction. It lives inside the comparable gate on purpose: `LayerRunGrowth.for` reads
                 `previous.layer_counts` only once that gate passes, so this operand is already memoized
                 (+0 queries) and an incomparable pair states one level, not two. Nil previous mix or
@@ -77,7 +84,7 @@
           <div id="layer-durations">
           <%= render UI::TableComponent.new(
                 columns: ["Layer", { label: "Machine time", end: true }, { label: "Timed", end: true },
-                          { label: "Since previous run", end: true }],
+                          { label: since_column_label, end: true }],
                 sortable: true) do %>
             <% parts = SpecDirectoryDurations.layer_durations_parts(@latest_test_run.layer_durations, @latest_test_run.layer_counts) %>
             <% parts.each do |layer, _figures| %>
@@ -119,7 +126,7 @@
           <% end %>
           <% if @layer_runtime_growth&.comparable? %>
             <p class="text-xs text-app-content-secondary" id="layer-runtime-growth">Since <span class="font-mono"><%= link_to @previous_test_run.commit_sha.first(7),
-                        drill_down_path(@repository, commit_sha: @previous_test_run.commit_sha, anchor: "summary"), class: "rc-link" %></span> on <%= @latest_test_run.branch %>: <%= @layer_runtime_growth.label %></p>
+                        drill_down_path(@repository, commit_sha: @previous_test_run.commit_sha, anchor: "summary"), class: "rc-link" %></span> on <%= comparison_basis_branch %><%= " (asked for)" if compare_to_active? %>: <%= @layer_runtime_growth.label %></p>
           <% end %>
           <% if @layer_window_runtime_growth&.comparable? %>
             <p class="text-xs text-app-content-secondary" id="layer-window-runtime-growth">

@@ -357,11 +357,11 @@ module ApplicationHelper
   # announced inconsistently across screen readers, from "minus" to nothing at all. So the sign and
   # the basis are both spelled out here rather than left to the glyph.
   def suite_size_change_reading(delta)
-    return "unchanged since the previous run on this branch" if delta.zero?
+    return "unchanged since #{run_pair_basis_noun}" if delta.zero?
 
     direction = delta.negative? ? "fewer" : "more"
     "#{number_with_delimiter(delta.abs)} #{"test".pluralize(delta.abs)} #{direction} " \
-      "than the previous run on this branch"
+      "than #{run_pair_basis_noun}"
   end
 
   # The cost change on the Overview panel, on exactly the rule `suite_size_change` above sets for
@@ -409,11 +409,13 @@ module ApplicationHelper
   # Unchanged on the same predicate the visible figure uses, so the two cannot answer the question
   # differently — a cell reading `+0.0s` announced as "0.0s slower" is a sentence that contradicts
   # itself, and a cell reading `±0` announced as "0.0s slower" is worse.
+  #
+  # The comparand is `RunPairBasis`'s, on the same terms `suite_size_change_reading` above states.
   def wall_clock_change_reading(delta)
-    return "wall clock unchanged since the previous run on this branch" if TestRun.seconds_unchanged?(delta)
+    return "wall clock unchanged since #{run_pair_basis_noun}" if TestRun.seconds_unchanged?(delta)
 
     direction = delta.negative? ? "faster" : "slower"
-    "#{TestRun.humanized_seconds(delta.abs)} #{direction} than the previous run on this branch"
+    "#{TestRun.humanized_seconds(delta.abs)} #{direction} than #{run_pair_basis_noun}"
   end
 
   # The machine-time change in words. Its own reading rather than a flag on the one above, because
@@ -421,10 +423,10 @@ module ApplicationHelper
   # waited, and calling a bigger bill "slower" would describe a four-shard split that got wider —
   # more machine time, less wall clock — with the wrong word in both halves.
   def machine_time_change_reading(delta)
-    return "machine time unchanged since the previous run on this branch" if TestRun.seconds_unchanged?(delta)
+    return "machine time unchanged since #{run_pair_basis_noun}" if TestRun.seconds_unchanged?(delta)
 
     direction = delta.negative? ? "less" : "more"
-    "#{TestRun.humanized_seconds(delta.abs)} #{direction} machine time than the previous run on this branch"
+    "#{TestRun.humanized_seconds(delta.abs)} #{direction} machine time than #{run_pair_basis_noun}"
   end
 
   # The one rendering of how a run was assembled, and of what that means for the count sitting

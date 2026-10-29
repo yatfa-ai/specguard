@@ -331,6 +331,49 @@ class Repository < ApplicationRecord
              .first
   end
 
+  # The run an EXPLICIT cross-branch comparison measures against (SPGD-1981): the newest run on
+  # the NAMED branch at or before `run` itself. `nil` — never a fallback row — when there is none.
+  #
+  # This is the explicit half of the rule `previous_test_run_on_branch` holds for the implicit
+  # one. That method is branch-scoped because an UNASKED-FOR comparison must never silently pair
+  # two branches — a difference against a neighbouring row of an interleaved history reports a
+  # suite-size change no commit made. This method exists because a reader CAN ask: a PR branch
+  # whose CI has reported once has no same-branch predecessor, so every "since the previous run"
+  # figure dead-ends, and the one thing that un-dead-ends it is naming the branch to measure
+  # against. When the ask is explicit, the branch boundary is a labelled choice and not a lie —
+  # the caller (`RepositoryDashboard`) names the asked branch on the page wherever the same-branch
+  # sentence would otherwise stand.
+  #
+  # "At or before `run`" is `created_at <= run.created_at`, and that is deliberate where
+  # `previous_test_run_on_branch` is a strict row-value `<`: that one excludes the RUN ITSELF,
+  # which a row-value pair makes precise because the predecessor is on the run's own branch. Here
+  # the anchored run cannot match at all — the `branch == run.branch` guard below makes its row
+  # unreachable — so the strictness would exclude nothing but a legitimate answer: a run on the
+  # baseline branch ingested in the same instant is exactly the state of that branch "as of this
+  # run", and it is a baseline. The tie-break is this ordering's own (`created_at desc, id desc`,
+  # the one `latest_test_run_on_branch` and `previous_test_run_on_branch` share), so "the newest
+  # run on main" means the same row here as it does everywhere else.
+  #
+  # `nil` for a same-branch ask, and no query at all: asking to compare the run against its own
+  # branch is the comparison the page already makes by default, so the ask is a no-op and the
+  # caller renders exactly what an absent parameter renders. A nil `branch` is nil for the reason
+  # `latest_test_run_on_branch` gives — NULL is not a branch anyone can ask for — and a nil `run`
+  # has nothing to be at-or-before.
+  #
+  # `nil` too when the named branch has no run at or before `run`: a branch whose only runs are
+  # NEWER than the run being read has no state to measure against, and substituting a newer run
+  # would answer "did my PR change the suite versus main [now]" for a question asked about [then].
+  # The caller states the miss rather than falling back — the whole point of the explicit ask is
+  # that the page says what it measured against.
+  def baseline_test_run_on_branch(run, branch)
+    return nil if run.nil? || branch.blank? || branch == run.branch
+
+    test_runs.where(branch: branch)
+             .where("test_runs.created_at <= ?", run.created_at)
+             .order(created_at: :desc, id: :desc)
+             .first
+  end
+
   # How many runs back the suite-size trajectory reaches.
   #
   # Bounded by ROWS rather than by a date window, the same choice `recent_test_runs` makes and for

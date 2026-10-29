@@ -59,7 +59,11 @@
           <span><%= delta_tag(suite_size_change(f.size_delta), tone: f.size_delta.zero? ? :flat : :info,
                               label: suite_size_change_reading(f.size_delta), id: "suite-size-delta") %></span>
         <% end %>
-        <span class="rc-stat-sub"><%= f.size_delta ? "vs the previous run" : "no earlier run to compare" %></span>
+        <%# The comparand is `RunPairBasis`'s (SPGD-1981): "vs the newest run on main" under an
+            honoured `?compare_to=` ask, byte-identical "vs the previous run" everywhere else.
+            "No earlier run to compare" stays true under a MISSED ask too — no delta is shown —
+            and the basis note directly below says which of the two absences this is. %>
+        <span class="rc-stat-sub"><%= f.size_delta ? "vs #{run_pair_basis_noun}" : "no earlier run to compare" %></span>
       <% else %>
         <%# The count still renders — "the run measured nothing" is a fact worth stating, and it is not
             the same as "no run has reported" — but muted, and captioned, because a zero here describes
@@ -95,7 +99,7 @@
                               tone: delta_tone_for(TestRun.seconds_unchanged?(f.wall_delta) ? 0 : f.wall_delta, bigger_is_worse: true),
                               label: wall_clock_change_reading(f.wall_delta), id: "runtime-delta") %></span>
         <% end %>
-        <span class="rc-stat-sub"><%= f.sharded ? "slowest shard · #{run.wall_clock_coverage}" : (f.wall_delta ? "vs the previous run" : "no earlier run to compare") %></span>
+        <span class="rc-stat-sub"><%= f.sharded ? "slowest shard · #{run.wall_clock_coverage}" : (f.wall_delta ? "vs #{run_pair_basis_noun}" : "no earlier run to compare") %></span>
       <% else %>
         <span class="rc-stat-value text-app-content-secondary">—</span>
         <span class="rc-stat-sub">This run reported no timing at all.</span>

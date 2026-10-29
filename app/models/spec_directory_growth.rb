@@ -87,7 +87,16 @@ class SpecDirectoryGrowth
   # as the three gates above do. A layer empty in the previous run only is `comparable` with every
   # area `new_area?`; empty in the latest only, every area `removed_area?`; empty in BOTH is
   # `comparable` with no rows ({#layer_empty?}) — a defined answer, not `neither_recorded`.
-  def self.for(test_run, previous_test_run, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT, layer: nil)
+  #
+  # `basis_branch:` (SPGD-1981) names the branch an explicit `?compare_to=` comparison is measured
+  # against, when the caller swapped the same-branch predecessor for `Repository#baseline_test_run_on_branch`'s
+  # row. Nil — every caller but that one ask — keeps every sentence this object builds at the
+  # same-branch spelling it has always made, byte for byte. The branch reaches the ROWS and no
+  # further: only a comparable object holds rows, and the empty-state sentences that name the
+  # comparand are built in the views, which read the dashboard's own `@comparison_baseline_branch`.
+  # The phrase rule lives in one place (`RunPairBasis`), not in the rows.
+  def self.for(test_run, previous_test_run, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT, layer: nil,
+               basis_branch: nil)
     layer = layer&.to_s
     return new(state: :latest_unmeasured, layer: layer) unless test_run.suite_size_measured?
     return new(state: :previous_unmeasured, layer: layer) unless previous_test_run.suite_size_measured?
@@ -102,7 +111,7 @@ class SpecDirectoryGrowth
     end
 
     from_tuples(SpecObservation.directory_growth_between(test_run, previous_test_run, limit: limit, layer: layer),
-                layer)
+                layer, basis_branch)
   end
 
   # The three window totals ride on every row and are identical on all of them, so they are read
@@ -112,7 +121,7 @@ class SpecDirectoryGrowth
   # that inference is not available (an empty read is then "neither run has examples of the
   # layer"), which is why {.for} has already decided the recorded states at run grain and this
   # reads only the comparable answer.
-  def self.from_tuples(tuples, layer = nil)
+  def self.from_tuples(tuples, layer = nil, basis_branch = nil)
     _path, _previous, _latest, directory_count, previous_recorded, latest_recorded = tuples.first
     unless layer
       return new(state: :neither_recorded) if previous_recorded.to_i.zero? && latest_recorded.to_i.zero?
@@ -121,7 +130,7 @@ class SpecDirectoryGrowth
     end
 
     rows = tuples.map do |path, previous, latest, *|
-      Row.new(path: path, previous_count: previous.to_i, latest_count: latest.to_i)
+      Row.new(path: path, previous_count: previous.to_i, latest_count: latest.to_i, basis_branch: basis_branch)
     end
 
     new(state: :comparable, rows: rows, directory_count: directory_count.to_i,
@@ -202,7 +211,13 @@ class SpecDirectoryGrowth
   def any_unmoved? = rows.any? { |row| !row.moved? }
 
   # One directory's movement between two runs, and both operands it was taken across.
-  Row = Struct.new(:path, :previous_count, :latest_count, keyword_init: true) do
+  #
+  # `basis_branch` is the `?compare_to=` ask the row was built under, or nil — nil is the
+  # default, and every sentence below reads the same with nil as it did before the member
+  # existed. The window row one subclass over does NOT read it: its override names the window's
+  # own baseline end, and an explicit cross-branch ask reaches those panels never — the window
+  # pair is deliberately not re-anchored by `?compare_to=` (SPGD-1981's out-of-scope list).
+  Row = Struct.new(:path, :previous_count, :latest_count, :basis_branch, keyword_init: true) do
     # Signed, and the sign carries the whole meaning: an area that gained 47 examples and one that
     # lost 47 are opposite facts.
     def change = latest_count - previous_count
@@ -252,13 +267,18 @@ class SpecDirectoryGrowth
     # U+2212 — chosen above precisely because it is not a hyphen — is announced inconsistently
     # across screen readers, from "minus" to nothing at all. So the direction and what it was
     # measured against are spelled out rather than left to the glyph.
+    #
+    # The comparand is `RunPairBasis`'s, not spelled here: nil `basis_branch` keeps the
+    # same-branch sentences byte for byte, and an explicit `?compare_to=` names the branch the
+    # comparison was asked for — the register the window row one subclass over set when its
+    # "previous run" became false of the figure it labelled.
     def change_reading
-      return "#{example_phrase(latest_count)}, an area the previous run did not record" if new_area?
-      return "#{example_phrase(previous_count)} in the previous run and none now" if removed_area?
-      return "unchanged since the previous run on this branch" unless moved?
+      return "#{example_phrase(latest_count)}, an area #{RunPairBasis.short_noun(basis_branch)} did not record" if new_area?
+      return "#{example_phrase(previous_count)} in #{RunPairBasis.short_noun(basis_branch)} and none now" if removed_area?
+      return "unchanged since #{RunPairBasis.noun(basis_branch)}" unless moved?
 
       "#{example_phrase(change.abs)} #{change.negative? ? "fewer" : "more"} " \
-        "than the previous run on this branch"
+        "than #{RunPairBasis.noun(basis_branch)}"
     end
 
     # An operand, rendered. Delimited here rather than in the template so both counts and the

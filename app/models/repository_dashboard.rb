@@ -154,6 +154,12 @@ class RepositoryDashboard
   # by id. `RequestedRunIdParam` carries the guard and the naming argument in full.
   include RequestedRunIdParam
 
+  # `?compare_to=` read as a branch name the page's run-pair figures are explicitly measured
+  # against (SPGD-1981). Its own parameter and its own guard, on the reasoning every sibling
+  # carries: it COMPOSES with `?branch=` (which picks the Suite-growth series) rather than
+  # widening it, and its malformed shapes are answered by `RequestedCompareToParam` in full.
+  include RequestedCompareToParam
+
   # Never published back to the action by {#publish}: the constructor's inputs — `@repository`,
   # which the action set itself, `@params`, and the `keys_manage` decision — the memoized
   # `requested_*` reads the included `Requested*Param` concerns keep on this object, and the two
@@ -166,7 +172,7 @@ class RepositoryDashboard
     @requested_branch @requested_spec_file @requested_spec_directory @requested_commit_sha
     @requested_unstable_test @requested_unstable_test_origin @requested_limit
     @requested_repeated_description @requested_layer @requested_near_duplicate_cluster
-    @requested_runs @requested_runs_branch @requested_run_id
+    @requested_runs @requested_runs_branch @requested_run_id @requested_compare_to
   ].freeze
 
   attr_reader :repository, :params, :can_manage_keys
@@ -471,6 +477,50 @@ class RepositoryDashboard
     # recorded so far and differencing an in-flight sharded run against a complete one reports a
     # deletion no commit made. See `TestRun#suite_size_measured?` / `#assembled_like?`.
     @previous_test_run = @repository.previous_test_run_on_branch(@latest_test_run)
+    # The EXPLICIT baseline (SPGD-1981): a `?compare_to=<branch>` ask swaps that row for the
+    # newest run on the NAMED branch at or before the anchored run, so a branch whose CI has
+    # reported once — no same-branch predecessor, every "since the previous run" figure dead —
+    # can be read against main by asking. Three states, and the page must keep them apart:
+    #
+    # * no ask, or an ask naming the run's OWN branch (that is the comparison the default already
+    #   makes, so the ask is a no-op by definition — `baseline_test_run_on_branch` refuses it) —
+    #   the render above stands byte for byte;
+    # * an ask that RESOLVES — the row is swapped and `@comparison_baseline_branch` names the
+    #   branch, which every sentence that would have said "the previous run on this branch" reads
+    #   (`RunPairBasis`), so the page cannot claim a same-branch delta it is not making;
+    # * an ask that finds NOTHING at or before this run on that branch — recorded in
+    #   `@comparison_baseline_missed`, stated by the basis note, and never fallen back from:
+    #   silently measuring against a different branch than the URL names is the one falsehood
+    #   this ask must never produce. The way `@trajectory_branch_request` keeps its own raw ask
+    #   so the panel can say the fallback happened. The raw ask also rides every
+    #   `drill_down_path` link as `@comparison_baseline_request`, so a missed ask survives a
+    #   click elsewhere exactly as an honoured one does.
+    #
+    # The swap is the ONLY place the baseline changes. Every run-pair panel below reads
+    # `@previous_test_run` already, so an honoured ask re-points all of them at once and an
+    # unasked page touches none of them — the same one-choke-point property the ticket verified
+    # before promising the default path would stay identical.
+    #
+    # A same-branch ask is absorbed COMPLETELY — `@comparison_baseline_request` stays nil, so no
+    # link on the page carries the parameter either. The ask names the comparison the default
+    # already makes, and a URL whose every link echoed a parameter that changed nothing would
+    # ride those bytes forward forever; dropping them is what "no-op" means here, and it is what
+    # makes the same-branch render byte-for-byte the default render rather than merely
+    # content-equal to it.
+    @comparison_baseline_request = requested_compare_to
+    @comparison_baseline_request = nil if @comparison_baseline_request && @latest_test_run &&
+                                          @comparison_baseline_request == @latest_test_run.branch
+    @comparison_baseline_branch = nil
+    @comparison_baseline_missed = nil
+    if @comparison_baseline_request && @latest_test_run
+      baseline = @repository.baseline_test_run_on_branch(@latest_test_run, @comparison_baseline_request)
+      if baseline
+        @previous_test_run = baseline
+        @comparison_baseline_branch = @comparison_baseline_request
+      else
+        @comparison_baseline_missed = @comparison_baseline_request
+      end
+    end
     # The tail of that same append-only history for the "Recent runs" panel. Bounded at ten rows by
     # the model, so this stays O(1) no matter how long CI has been reporting.
     #
@@ -569,6 +619,34 @@ class RepositoryDashboard
     # the drawn branch covers the branch ASKED for as well: a requested branch that has runs is the
     # branch drawn, and one that has none is not a choice this list may offer.
     @trajectory_branches = @repository.branch_histories(pinned: [@trajectory_run&.branch])
+    # The dead-end offer (SPGD-1981): ONE other branch with a run the explicit comparison could
+    # actually measure against, so the "no earlier run on this branch" state ends in the gesture
+    # that answers it instead of in prose alone. Loaded, not rendered, here; the basis note's
+    # dead-end arm is the one place the link is drawn.
+    #
+    # WHICH branch: the other branch whose newest run is the most recent, read off the history
+    # this page already loaded above — SPGD-1979's `last_run_at`, so the offer names the branch a
+    # reader would pick from the menu and costs no second read of it. The repository holds no
+    # default-branch fact of its own (that is GitHub metadata SpecGuard does not ingest), so
+    # "most recently pushed other branch" is the honest pick the ticket's
+    # "<default-or-most-recent-other-branch>" resolves to here.
+    #
+    # WHETHER it is offered at all: only when `baseline_test_run_on_branch` finds a run at or
+    # before the anchored run on it. A branch whose only runs are newer has no state to measure
+    # against, and a link to a refused comparison is a dead end offering a second dead end.
+    # Gated on the dead end itself — `@previous_test_run` nil — so a page with a same-branch
+    # predecessor to compare against offers nothing, and a page whose ask RESOLVED offers nothing
+    # either: the comparison the offer exists to reach is already on it. One extra query, and
+    # only on the dead-end page; every other render buys nothing.
+    @comparison_offer = nil
+    if @latest_test_run&.branch.present? && @previous_test_run.nil? && @trajectory_branches
+      other = @trajectory_branches.reject { |history| history.name == @latest_test_run.branch }
+                                  .max_by(&:last_run_at)
+      if other
+        offer_run = @repository.baseline_test_run_on_branch(@latest_test_run, other.name)
+        @comparison_offer = { branch: other.name, run: offer_run } if offer_run
+      end
+    end
     # The same branch history the delta above reads one row of, read as a series — what the suite
     # has done over the last thirty runs rather than since the last one. ONE query, and it stays
     # one: the shard count each point needs to answer `TestRun#assembled_like?` is folded into that
@@ -875,7 +953,8 @@ class RepositoryDashboard
     # ONE query when there is a comparison to make, none when there is not, and neither grows with
     # the size of the suite: see `SpecDirectoryGrowth`.
     if @latest_test_run && @previous_test_run
-      @spec_directory_growth = SpecDirectoryGrowth.for(@latest_test_run, @previous_test_run, layer: @layer_request)
+      @spec_directory_growth = SpecDirectoryGrowth.for(@latest_test_run, @previous_test_run, layer: @layer_request,
+                                                       basis_branch: @comparison_baseline_branch)
       # The declared-layer MIX against the same previous run — the "Declared layers" row's delta
       # line. The gate is `LayerRunGrowth`'s own and runs before any read of the previous run's mix.
       @layer_run_growth = LayerRunGrowth.for(@latest_test_run, @previous_test_run)
@@ -906,7 +985,7 @@ class RepositoryDashboard
       if @spec_directory_request
         @spec_directory_file_growth = SpecDirectoryFileGrowth.for(
           @latest_test_run, @previous_test_run, @spec_directory_request,
-          growth: @spec_directory_growth, layer: @layer_request
+          growth: @spec_directory_growth, layer: @layer_request, basis_branch: @comparison_baseline_branch
         )
       end
       # The same two runs and the same areas, ranked by an INDEPENDENT quantity: not which area
@@ -928,7 +1007,8 @@ class RepositoryDashboard
       # ONE query when there is a comparison to make, none when there is not, and neither grows
       # with the size of the suite: see `SpecDirectoryRuntimeGrowth`.
       @spec_directory_runtime_growth =
-        SpecDirectoryRuntimeGrowth.for(@latest_test_run, @previous_test_run, layer: @layer_request)
+        SpecDirectoryRuntimeGrowth.for(@latest_test_run, @previous_test_run, layer: @layer_request,
+                                       basis_branch: @comparison_baseline_branch)
     end
     # The first question this page asks that MATCHES A TEST TO ITSELF across runs: which tests
     # changed their outcome over the window the "Suite growth" panel above is already drawn on.
