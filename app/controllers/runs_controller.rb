@@ -14,6 +14,9 @@ class RunsController < ApplicationController
   include RequestedRunsParam
   include RequestedRunsBranchParam
   include RequestedRunsBeforeParam
+  include RequestedRunIdParam
+  include RequestedCommitShaParam
+  include RequestedCompareToParam
 
   before_action :require_authentication
 
@@ -69,10 +72,37 @@ class RunsController < ApplicationController
     # anyway. The resolution itself stays on the page (`RunsController` does not re-read the run
     # table for the cursor); a well-formed id matching nothing is carried and answered by the
     # default window, exactly as a well-formed unknown branch is.
+    #
+    # SPGD-1988: the page's own asks — which run the page DESCRIBES (`?run=` SPGD-1928 and
+    # `?commit_sha=` SPGD-544/677) and what it MEASURES against (`?compare_to=` SPGD-1981) — ride
+    # the same round trip. A reader on an anchored page who deletes a junk row lands back on the
+    # page they were reading, instead of on the newest run's page while the notice says success.
+    # Two rules, mirroring what the page itself already does:
+    #
+    # * Run-over-sha precedence, verbatim from `drill_down_path` (`repositories_helper.rb`): the
+    #   read side resolves a run ask first and falls to the sha ask only when there is none, so a
+    #   redirect carrying both would name two rows where the target honours one. `commit_sha`
+    #   therefore rides only when NO run ask exists at all — written against the ask, not against
+    #   the carried value, so a run ask that dies because the deleted row WAS the anchored run
+    #   does not resurrect the sha: an id ask names its row completely, and a sha ask is how you
+    #   leave it.
+    # * The one exception, the cursor-drop shape above: deleting the row the `?run=` ask names
+    #   drops the anchor. The run is gone; landing on the newest run is already the right outcome
+    #   and this makes it explicit rather than incidental. The sha ask needs no exception: a sha
+    #   whose newest holder was just deleted still names its surviving same-sha rows, so
+    #   re-resolution to the older sibling is the sha ask's own defined semantics
+    #   (`Repository#latest_test_run_for_commit`), not a dead ask. `compare_to=` needs no
+    #   exception either: it is independent of the deleted row.
+    #
+    # No ask leaves the path exactly as it was; `.compact` keeps a no-ask redirect free of every
+    # parameter's bytes, exactly as the window asks above already kept it.
     redirect_to repository_path(repository, **{
       runs: requested_runs,
       runs_branch: requested_runs_branch,
-      runs_before: (requested_runs_before unless requested_runs_before == test_run.id)
+      runs_before: (requested_runs_before unless requested_runs_before == test_run.id),
+      run: (requested_run_id unless requested_run_id == test_run.id),
+      commit_sha: (requested_commit_sha unless requested_run_id),
+      compare_to: requested_compare_to
     }.compact),
                 notice: notice
   end

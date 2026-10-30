@@ -109,18 +109,25 @@
               <% if repository_policy.can?(:repo_delete) %>
                 <td class="end" data-no-drawer>
                   <%# The delete carries every ask the panel was rendered under (SPGD-1916 for the
-                      window, SPGD-1922 for the branch narrowing, SPGD-1984 for the keyset cursor)
-                      so removing a row lands back on that same window rather than collapsing it.
+                      window, SPGD-1922 for the branch narrowing, SPGD-1984 for the keyset cursor,
+                      SPGD-1988 for the run/sha anchors and the comparison baseline) so removing a
+                      row lands back on the page it was rendered from rather than collapsing a
+                      window or silently re-pointing the page's subject at the newest run.
                       `.compact` keeps the no-ask form byte-identical: no hidden input for a
                       parameter nobody asked. The cursor has one exception of its own: a row that
                       IS the carried cursor drops it, because the redirect would otherwise carry a
                       cursor pointing at the row that no longer exists — the followed page would
                       resolve nothing and fall back anyway, and the dead id would be bytes saying a
-                      position was asked when the position is gone. %>
+                      position was asked when the position is gone. The `run` anchor's own exception
+                      lives on the controller (`RunsController#destroy`), because it names the row
+                      being deleted and the controller is the only side that knows which one that
+                      was; the form sends the raw asks. %>
                   <%= button_to "Delete", repository_run_path(@repository, test_run), method: :delete,
                                 class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
                                 params: { runs: @runs_request, runs_branch: @runs_branch_request,
-                                          runs_before: (@runs_before_request unless test_run.id == @runs_before_request) }.compact,
+                                          runs_before: (@runs_before_request unless test_run.id == @runs_before_request),
+                                          run: @run_request, commit_sha: @run_anchor_request,
+                                          compare_to: @comparison_baseline_request }.compact,
                                 form: { data: { turbo_confirm: delete_run_confirmation(test_run, newest: test_run.id == @newest_test_run_id, successor: @test_runs_total.to_i > 1) } } %>
                 </td>
               <% end %>
