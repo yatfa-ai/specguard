@@ -457,6 +457,99 @@ RSpec.describe "Deleting a test run", type: :request do
     end
   end
 
+  describe "the keyset cursor on the delete round trip" do
+    let(:max_runs) { RequestedRunsParam::MAX_RUNS }
+
+    def seed_runs(count)
+      Array.new(count) { |i| create_test_run(repository: repository, commit_sha: format("pgd%04d", i), branch: "main", created_at: (i + 1).minutes.ago) }
+    end
+
+    def page_two_href
+      get repository_path(repository, runs: max_runs)
+      Capybara.string(response.body).find_link("Older runs")[:href].split("#").first
+    end
+
+    # @intent: {"entity": "RecentRunsPanel", "action": "carry the cursor in the delete form", "behavior": "every Delete form on a paged page carries a hidden runs_before field with the asked cursor, and the newest page at the ceiling carries none", "layer": "request"}
+    it "renders the cursor in the Delete form only on a paged panel" do
+      runs = seed_runs(55)
+      get page_two_href
+      cursor_id = runs[49].id
+
+      inputs = Capybara.string(response.body).all("#recent-runs form input[name='runs_before']", visible: :all)
+      expect(inputs.size).to eq(5)
+      expect(inputs.map { |i| i[:value] }.uniq).to eq([cursor_id.to_s])
+
+      get repository_path(repository, runs: max_runs)
+      expect(Capybara.string(response.body)).to have_no_css("#recent-runs form input[name='runs_before']")
+    end
+
+    # @intent: {"entity": "RunsController", "action": "carry the asked cursor", "behavior": "deleting a non-cursor row from a paged page redirects with runs and runs_before, and the followed page still reads Runs older than the newest 50 runs with the deleted row gone", "layer": "request"}
+    it "redirects back to the paged window and the followed page keeps it" do
+      runs = seed_runs(55)
+      cursor_id = runs[49].id
+      victim = runs[52]
+
+      delete repository_run_path(repository, victim), params: { runs: "50", runs_before: cursor_id }
+
+      expect(response).to redirect_to(repository_path(repository, runs: 50, runs_before: cursor_id))
+      follow_redirect!
+      page = Capybara.string(response.body)
+      expect(page.find("#recent-runs table").all("tbody tr").size).to eq(4)
+      expect(page.find("#recent-runs-window")).to have_text("Runs older than the newest 50 runs.")
+      expect(page.find("#recent-runs")).to have_no_text(victim.commit_sha)
+    end
+
+    # @intent: {"entity": "RunsController", "action": "drop the cursor when the deleted row is the cursor", "behavior": "deleting the row the carried cursor names redirects with runs but without runs_before, and the followed page is the newest window rather than a page into the void", "layer": "request"}
+    it "drops the cursor when the deleted row is the row the cursor names" do
+      runs = seed_runs(55)
+      cursor_row = runs[49]
+
+      delete repository_run_path(repository, cursor_row), params: { runs: "50", runs_before: cursor_row.id }
+
+      expect(response).to redirect_to(repository_path(repository, runs: 50))
+      expect(response.location).not_to include("runs_before")
+      follow_redirect!
+      page = Capybara.string(response.body)
+      expect(page.find("#recent-runs-window")).to have_text("Showing the newest 50 of 54 runs.")
+      expect(page.find_link("Older runs")[:href]).to include("runs_before=#{runs[50].id}")
+    end
+
+    [
+      ["an array", "runs_before[]=5"],
+      ["a negative integer", "runs_before=-3"],
+      ["a blank string", "runs_before="],
+      ["a string carrying a NUL", "runs_before=5%006"]
+    ].each do |shape, query|
+      # @intent: {"entity": "RunsController", "action": "ignore a hostile runs_before ask", "behavior": "a runs_before parameter that is not a plain positive integer string redirects without any runs_before bytes, exactly as a delete with no cursor ask", "layer": "request"}
+      it "redirects without cursor bytes when runs_before arrives as #{shape}" do
+        run = create_test_run(repository: repository)
+
+        delete "#{repository_run_path(repository, run)}?#{query}"
+
+        expect(response).to redirect_to(repository_path(repository))
+        expect(response.location).not_to include("runs_before")
+      end
+    end
+
+    # @intent: {"entity": "RunsController", "action": "round-trip a dead cursor", "behavior": "a well-formed runs_before id matching no row is carried through the redirect, and the followed page answers with the plain default newest window and no cursor bytes on its links", "layer": "request"}
+    it "round-trips a well-formed unknown cursor, which the followed page answers with the default window" do
+      seed_runs(25)
+      victim = repository.test_runs.order(:created_at).last
+
+      delete repository_run_path(repository, victim), params: { runs: "50", runs_before: 9_000_000_000_000 }
+
+      expect(response).to redirect_to(repository_path(repository, runs: 50, runs_before: 9_000_000_000_000))
+      follow_redirect!
+      page = Capybara.string(response.body)
+      # The carried widening is honoured; the dead cursor falls back to the NEWEST window, so
+      # every run is listed and no window caption applies.
+      expect(page.find("#recent-runs table").all("tbody tr").size).to eq(24)
+      expect(page).to have_no_css("#recent-runs-window")
+      hrefs = page.all("a[href*='commit_sha=']", visible: :all, minimum: 1).map { |a| a[:href] }
+      expect(hrefs).to all(satisfy { |href| !href.include?("runs_before") })
+    end
+  end
+
   describe "the control" do
     # @intent: {"entity": "TestRun", "action": "render delete control", "behavior": "a viewer with repo_delete sees a Delete button whose dialog names removing the run's shards and per-example observations and that it cannot be undone", "layer": "request"}
     it "renders a Delete button with a dialog naming the consequence, for a viewer with repo_delete" do

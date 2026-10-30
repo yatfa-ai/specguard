@@ -13,6 +13,7 @@
 class RunsController < ApplicationController
   include RequestedRunsParam
   include RequestedRunsBranchParam
+  include RequestedRunsBeforeParam
 
   before_action :require_authentication
 
@@ -60,7 +61,19 @@ class RunsController < ApplicationController
     # (`RequestedRunsBranchParam`) — deleting a row from a panel narrowed to one branch lands back
     # on that same narrowed panel, and a malformed `runs_branch` on the delete is ignored exactly
     # as it is on the page. `.compact` keeps a no-ask redirect free of both parameters' bytes.
-    redirect_to repository_path(repository, **{ runs: requested_runs, runs_branch: requested_runs_branch }.compact),
+    #
+    # SPGD-1984: the keyset cursor rides the same round trip, so deleting a row from page two
+    # lands back on page two. One exception, the same one the Delete form in the view applies: a
+    # deleted row that IS the carried cursor drops it — the redirect would otherwise name a
+    # position that no longer exists, and the followed page would fall back to the newest window
+    # anyway. The resolution itself stays on the page (`RunsController` does not re-read the run
+    # table for the cursor); a well-formed id matching nothing is carried and answered by the
+    # default window, exactly as a well-formed unknown branch is.
+    redirect_to repository_path(repository, **{
+      runs: requested_runs,
+      runs_branch: requested_runs_branch,
+      runs_before: (requested_runs_before unless requested_runs_before == test_run.id)
+    }.compact),
                 notice: notice
   end
 end

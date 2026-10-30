@@ -160,6 +160,13 @@ class RepositoryDashboard
   # widening it, and its malformed shapes are answered by `RequestedCompareToParam` in full.
   include RequestedCompareToParam
 
+  # `?runs_before=` read as a TestRun id naming the keyset cursor the "Recent runs" panel pages
+  # from (SPGD-1984). Its own parameter and not an overload of `?run=` above, even though both
+  # are row ids under the same shape guard: `?run=` re-anchors the page, `?runs_before=` positions
+  # one panel's window. See `RequestedRunsBeforeParam` for the guard and the naming argument in
+  # full.
+  include RequestedRunsBeforeParam
+
   # Never published back to the action by {#publish}: the constructor's inputs — `@repository`,
   # which the action set itself, `@params`, and the `keys_manage` decision — the memoized
   # `requested_*` reads the included `Requested*Param` concerns keep on this object, and the two
@@ -173,6 +180,7 @@ class RepositoryDashboard
     @requested_unstable_test @requested_unstable_test_origin @requested_limit
     @requested_repeated_description @requested_layer @requested_near_duplicate_cluster
     @requested_runs @requested_runs_branch @requested_run_id @requested_compare_to
+    @requested_runs_before
   ].freeze
 
   attr_reader :repository, :params, :can_manage_keys
@@ -557,17 +565,40 @@ class RepositoryDashboard
     # second count: the branch total is priced by the reader who asked for the narrowing alone.
     @runs_branch_request = requested_runs_branch
     @runs_branch_total = @repository.test_runs.where(branch: @runs_branch_request).count if @runs_branch_request
-    @recent_test_runs = preload_shard_counts(
-      @repository.recent_test_runs(limit: @runs_request || RequestedRunsParam::DEFAULT_RUNS,
-                                   branch: @runs_branch_request).to_a
-    )
-    # Only on a narrowed, non-empty window (SPGD-1940): the ids that a sha link would open — the
-    # NEWEST run per sha in the whole repository, which is what
-    # `Repository#latest_test_run_for_commit` resolves. A narrowed window is not the repository's
-    # newest-N, so a row's sha can be unique inside it while a newer run on another branch holds the
-    # same sha; the view addresses every row outside this set by run id. One statement over the
-    # window's shas. Left nil on an un-narrowed page, where the window-local walk is exact.
-    @sha_link_run_ids = if @runs_branch_request && @recent_test_runs.any?
+    # The keyset cursor (`?runs_before=`, SPGD-1984): the raw ask is resolved through
+    # `@repository.test_runs`, and a well-formed id matching no row here is NO ASK — the guard's
+    # documented posture (`RequestedRunIdParam`'s, one shape over). The page then renders the
+    # default newest window and says nothing, which is why what gets published under
+    # `@runs_before_request` is the RESOLVED cursor's id and not the raw ask: every downstream
+    # reader — the `drill_down_path` carry, the Delete form, the caption — reads this ivar, so a
+    # dead cursor (deleted run, foreign id) leaves no cursor bytes anywhere on the page. The
+    # resolution costs its one query only when an ask was made, the same pricing rule
+    # `@runs_branch_total` above follows; the default page buys nothing.
+    runs_before_cursor = @repository.test_runs.find_by(id: requested_runs_before) if requested_runs_before
+    @runs_before_request = runs_before_cursor&.id
+    # The window is fetched ONE ROW PAST the ask, and the extra row is the has-next answer:
+    # `@older_runs_available` says whether a page follows this one, and the probe row is dropped
+    # BEFORE the shard counts are primed and before the view sees it, so the tbody renders exactly
+    # the asked number of rows and every downstream reader (shard preload, sha-link set, row walk)
+    # is handed the same window it always was. The fetch is one statement either way, so the
+    # default page and the widened page keep their pinned query budgets unchanged — the "Older
+    # runs" answer costs no count query, which is the whole point of the probe.
+    page_size = @runs_request || RequestedRunsParam::DEFAULT_RUNS
+    window_rows = @repository.recent_test_runs(limit: page_size + 1, branch: @runs_branch_request,
+                                               before: runs_before_cursor).to_a
+    @older_runs_available = window_rows.size > page_size
+    window_rows.pop if @older_runs_available
+    @recent_test_runs = preload_shard_counts(window_rows)
+    # Only on a window that is not the repository's newest-N (SPGD-1940, extended to paged windows
+    # by SPGD-1984): the ids that a sha link would open — the NEWEST run per sha in the whole
+    # repository, which is what `Repository#latest_test_run_for_commit` resolves. Neither kind of
+    # window is the repository's newest-N: on a narrowed window a row's sha can be unique inside it
+    # while a newer run on another branch holds the same sha, and on a paged window while a newer
+    # run ABOVE THE CURSOR holds it — a page-2 row whose sha's newest holder sits on page 1, where
+    # the view's own newest-first walk cannot see it. The view addresses every row outside this set
+    # by run id. One statement over the window's shas. Left nil on an un-paged, un-narrowed page,
+    # where the window-local walk is exact.
+    @sha_link_run_ids = if (@runs_branch_request || @runs_before_request) && @recent_test_runs.any?
       @repository.test_runs
                  .where(commit_sha: @recent_test_runs.map(&:commit_sha).uniq)
                  .reorder(:commit_sha, created_at: :desc, id: :desc)

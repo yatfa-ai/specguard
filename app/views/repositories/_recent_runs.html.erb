@@ -76,9 +76,14 @@
                     pooling every anonymous run into one selectable series is exactly the fictional
                     history `Repository#recent_test_runs` refuses to serve. The branch cells are the
                     one deliberate byte change a default page carries: the text is the same either
-                    way, so the existing assertions on the cell keep reading it. %>
+                    way, so the existing assertions on the cell keep reading it. The cell re-aims
+                    the panel at another branch's series, so it also drops the keyset cursor
+                    (SPGD-1984): the cursor is a position in the window the reader is LEAVING, and
+                    carrying it into a different branch's series would strand that window at a
+                    foreign position — often an empty one, rendered as a false "No runs on" state.
+                    A narrowing starts at its own series' newest page, as this cell always has. %>
                 <% if test_run.branch.present? %>
-                  <%= link_to test_run.branch, drill_down_path(@repository, runs_branch: test_run.branch, anchor: "recent-runs"), class: "rc-link" %>
+                  <%= link_to test_run.branch, drill_down_path(@repository, runs_branch: test_run.branch, runs_before: nil, anchor: "recent-runs"), class: "rc-link" %>
                 <% else %>
                   <%= tag.span("not reported", class: "text-app-content-secondary") %>
                 <% end %>
@@ -104,12 +109,18 @@
               <% if repository_policy.can?(:repo_delete) %>
                 <td class="end" data-no-drawer>
                   <%# The delete carries every ask the panel was rendered under (SPGD-1916 for the
-                      window, SPGD-1922 for the branch narrowing) so removing a row lands back on
-                      that same narrowed window rather than collapsing it. `.compact` keeps the
-                      no-ask form byte-identical: no hidden input for a parameter nobody asked. %>
+                      window, SPGD-1922 for the branch narrowing, SPGD-1984 for the keyset cursor)
+                      so removing a row lands back on that same window rather than collapsing it.
+                      `.compact` keeps the no-ask form byte-identical: no hidden input for a
+                      parameter nobody asked. The cursor has one exception of its own: a row that
+                      IS the carried cursor drops it, because the redirect would otherwise carry a
+                      cursor pointing at the row that no longer exists — the followed page would
+                      resolve nothing and fall back anyway, and the dead id would be bytes saying a
+                      position was asked when the position is gone. %>
                   <%= button_to "Delete", repository_run_path(@repository, test_run), method: :delete,
                                 class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                                params: { runs: @runs_request, runs_branch: @runs_branch_request }.compact,
+                                params: { runs: @runs_request, runs_branch: @runs_branch_request,
+                                          runs_before: (@runs_before_request unless test_run.id == @runs_before_request) }.compact,
                                 form: { data: { turbo_confirm: delete_run_confirmation(test_run, newest: test_run.id == @newest_test_run_id, successor: @test_runs_total.to_i > 1) } } %>
                 </td>
               <% end %>
@@ -123,7 +134,17 @@
             (`@runs_branch_total`) and the caption says which branch the window is over — the
             repository-wide total would name runs this panel deliberately does not list. `shown`
             is the row count either way, and the un-narrowed caption line renders exactly the
-            text it always did. %>
+            text it always did.
+
+            A PAGED window (`?runs_before=`, SPGD-1984) is a different kind of not-the-whole, and
+            it gets its own caption rather than this one: "the newest N of M" would be false of
+            rows that are deliberately not the newest. The sentence names the newest page's size —
+            the same N the "Back to the newest N" link names — and every page the panel itself
+            links to sits strictly beyond that newest page, so there it is exact. A hand-typed
+            cursor can land mid-window, where the sentence names the newest page rather than the
+            exact rank; the cursor's id in the URL stays the exact position, and stating the rank
+            would cost the count query the slice priced out. The "Newest runs" link is the way
+            back. %>
         <% shown = @recent_test_runs.size %>
         <% window_total = @runs_branch_request ? @runs_branch_total : @test_runs_total %>
         <% if @runs_branch_request %>
@@ -132,7 +153,22 @@
             <%= link_to "All branches", drill_down_path(@repository, runs_branch: nil, anchor: "recent-runs"), class: "rc-link" %>
           </p>
         <% end %>
-        <% if window_total > shown %>
+        <% if @runs_before_request %>
+          <p class="text-xs mt-2" id="recent-runs-window">
+            Runs older than the newest <%= number_with_delimiter(@runs_request || RequestedRunsParam::DEFAULT_RUNS) %> runs.
+          </p>
+          <p class="text-xs mt-2">
+            <%= link_to "Newest runs", drill_down_path(@repository, runs_before: nil, anchor: "recent-runs"), class: "rc-link" %>
+          </p>
+          <% if @older_runs_available %>
+            <p class="text-xs mt-2">
+              <%# The next page starts strictly after the OLDEST row this one lists — `.last` on
+                  the newest-first window, no query, the same handle the newest page's own
+                  "Older runs" link passes. %>
+              <%= link_to "Older runs", drill_down_path(@repository, runs_before: @recent_test_runs.last.id, anchor: "recent-runs"), class: "rc-link" %>
+            </p>
+          <% end %>
+        <% elsif window_total > shown %>
           <p class="text-xs mt-2" id="recent-runs-window">
             Showing the newest <%= number_with_delimiter(shown) %> of <%= number_with_delimiter(window_total) %> runs<%= " on #{@runs_branch_request}" if @runs_branch_request %>.
           </p>
@@ -142,12 +178,23 @@
                           drill_down_path(@repository, runs: RequestedRunsParam::MAX_RUNS, anchor: "recent-runs"),
                           class: "rc-link" %>
             </p>
+          <% else %>
+            <%# The cap is where the widen link is suppressed and the panel used to dead-end
+                (SPGD-1984): "Older runs" appears exactly where the widen link would have, naming
+                the oldest listed row as the cursor, and the following page is the next
+                `page_size` rows in the same ordering — zero overlap, zero gap. %>
+            <p class="text-xs mt-2">
+              <%= link_to "Older runs", drill_down_path(@repository, runs_before: @recent_test_runs.last.id, anchor: "recent-runs"), class: "rc-link" %>
+            </p>
           <% end %>
         <% end %>
         <% if @runs_request %>
           <p class="text-xs mt-2">
+            <%# The widening's way back. It also drops the cursor: the link's promise is "the
+                newest 10", and a carried cursor would land on anything but that — the same
+                re-anchor-supersedes rule the helper documents for its overriding gestures. %>
             <%= link_to "Back to the newest #{RequestedRunsParam::DEFAULT_RUNS}",
-                        drill_down_path(@repository, runs: nil, anchor: "recent-runs"),
+                        drill_down_path(@repository, runs: nil, runs_before: nil, anchor: "recent-runs"),
                         class: "rc-link" %>
           </p>
         <% end %>
@@ -164,6 +211,21 @@
               ) do |empty| %>
             <% empty.with_action do %>
               <%= link_to "All branches", drill_down_path(@repository, runs_branch: nil, anchor: "recent-runs"), class: "rc-link" %>
+            <% end %>
+          <% end %>
+        <% elsif @runs_before_request %>
+          <%# SPGD-1984: a cursor whose position is at or past the oldest run — the ordinary way in
+              is a hand-edited URL, since an "Older runs" link only ever renders when a row follows
+              — answers zero rows, and the no-ask empty state would be false here: runs HAVE been
+              reported, all of them newer than the position named. The state says what is true and
+              offers the way back; it never falls back to the newest rows as if they were the
+              answer to this ask. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No runs older than that",
+                description: "Every run this repository holds is newer than the run the URL named."
+              ) do |empty| %>
+            <% empty.with_action do %>
+              <%= link_to "Newest runs", drill_down_path(@repository, runs_before: nil, anchor: "recent-runs"), class: "rc-link" %>
             <% end %>
           <% end %>
         <% else %>
