@@ -249,13 +249,14 @@ module MembershipsHelper
   private
 
   # What happens to the editor's keys when they lose `keys.manage`; empty when they hold none.
-  # `tense` is "would" on the page (before the click) and "is" in the flash (after it) and only
-  # chooses the lead-in; the key facts and the levers are the same sentence in both places.
+  # `tense` is "would" on the page (before the click) and "is" in the flash (after it): "would"
+  # pins the number-invariant "will keep", while "is" takes the verb `minted_keys_agreement`
+  # agreed for the count. The key facts and the levers are the same sentence in both places.
   def self_edit_keys_clause(keys_minted, agent_keys, tense)
     sentences = []
     unless keys_minted.zero?
-      keys, _verb, object = minted_keys_agreement(keys_minted)
-      sentences << "The #{keys} you minted #{tense == 'would' ? 'will keep' : 'keep'} authenticating until " \
+      keys, _copula, object, verb = minted_keys_agreement(keys_minted)
+      sentences << "The #{keys} you minted #{tense == 'would' ? 'will keep' : verb} authenticating until " \
                    "an owner or another keys.manage holder revokes #{object}."
     end
     unless agent_keys.zero?
@@ -268,11 +269,15 @@ module MembershipsHelper
 
   # The one place number agreement is decided for both sentences above. `pluralize` covers the noun
   # phrase; the verb and the pronoun have no such helper, and hand-rolling those per call site is
-  # how two surfaces quoting the same count drift into disagreeing about it.
+  # how two surfaces quoting the same count drift into disagreeing about it. The second element is
+  # the copula the state sentences use ("…they minted is still live"); the fourth element is the
+  # present-tense action verb (the "keeps/keep authenticating" clauses), so a call site that needs
+  # one takes it from here rather than hard-coding a number-invariant form.
   def minted_keys_agreement(count)
     singular = count == 1
 
-    [pluralize(count, "API key"), singular ? "is" : "are", singular ? "it" : "them"]
+    [pluralize(count, "API key"), singular ? "is" : "are", singular ? "it" : "them",
+     singular ? "keeps" : "keep"]
   end
 
   # The agent-key sibling of `minted_keys_agreement`, so number agreement for BOTH counts is decided

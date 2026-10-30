@@ -1664,8 +1664,10 @@ RSpec.describe "Repository members", type: :request do
     # pinned in its own context — "no keys" must end the disclosure at the panel sentence (never a
     # "0 API keys" count), an agent-only holder must not read "also" with nothing before it, and a
     # minted-only holder must not read an agent-key sentence about a key they do not have. The
-    # minted count is 2 on purpose: the singular flash copy is a separate copy defect, and pinning
-    # "The 1 API key you minted keep authenticating" here would lock the wrong grammar.
+    # minted count is 2 so the plural family stays pinned here; the singular one is its own
+    # sibling context below — the flash verb now agrees with the minted count (SPGD-1986), so
+    # "The 1 API key you minted keeps authenticating" is the correct singular shape and is pinned
+    # as such rather than deferred.
     context "holding 'members.manage' and 'keys.manage', with no keys of either kind" do
       before do
         create_membership(repository: repository, user: colleague, permissions: %w[view members.manage keys.manage])
@@ -1756,6 +1758,25 @@ RSpec.describe "Repository members", type: :request do
         expect(flash[:notice]).to eq(
           "You now hold: view and members.manage. The API keys panel is gone for you. The 2 API keys you " \
           "minted keep authenticating until an owner or another keys.manage holder revokes them."
+        )
+      end
+    end
+
+    context "holding 'members.manage' and 'keys.manage', with one minted key" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage keys.manage])
+        repository.api_keys.create!(name: "CI", created_by_user: colleague)
+        sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      end
+
+      # @intent: {"entity": "RepositoryMembership", "action": "flash self edit one minted key", "behavior": "a self-save dropping keys.manage with exactly one minted key flashes the singular sentence, the verb agreeing with the minted count (keeps, not keep)", "layer": "request"}
+      it "flashes the singular minted-keys sentence, verb agreeing with the count" do
+        patch_permissions(own_membership, %w[view members.manage])
+
+        expect(response).to redirect_to(repository_members_path(repository))
+        expect(flash[:notice]).to eq(
+          "You now hold: view and members.manage. The API keys panel is gone for you. The 1 API key you " \
+          "minted keeps authenticating until an owner or another keys.manage holder revokes it."
         )
       end
     end
