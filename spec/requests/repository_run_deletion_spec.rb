@@ -550,6 +550,228 @@ RSpec.describe "Deleting a test run", type: :request do
     end
   end
 
+  describe "the run, sha and comparison anchors on the delete round trip" do
+    def page = Capybara.string(response.body)
+
+    # `nil` rather than a raise when the page said nothing about its anchor, so a no-ask example
+    # can assert the ABSENCE — the same helper `repository_run_anchor_spec.rb` defines for the
+    # same element.
+    def anchor_notice = page.all("#run-anchor-notice").first&.text&.squish
+
+    def recent_runs_caption = page.find("#recent-runs-basis").text.squish
+
+    # Runs for the comparison example, written through the recorder the What-changed panels read
+    # through — the rule `repository_compare_to_baseline_spec.rb` states for the same panels.
+    def ingest_run(commit_sha:, branch:, at:, total: 3)
+      specs = Array.new(total) { |i| unannotated_spec(file_path: "spec/models/a_spec.rb", line_number: i + 1, duration: 1.0) }
+      run = Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: commit_sha, branch: branch, total_specs_count: total,
+          annotated_specs_count: 0, duration_seconds: 60.0 },
+        specs: specs.map(&:deep_stringify_keys)
+      )
+      run.update!(created_at: at)
+      run
+    end
+
+    # @intent: {"entity": "RunsController", "action": "carry the run anchor", "behavior": "deleting a row the run ask does not name redirects with the runs and run params, and the followed page still reads the anchored run with its anchor notice", "layer": "request"}
+    it "carries a run ask the deleted row does not name, and the followed page still reads it" do
+      anchored = create_test_run(repository: repository, commit_sha: "anch0000000001", branch: "main", created_at: 3.days.ago)
+      victim = create_test_run(repository: repository, commit_sha: "vict0000000001", branch: "main", created_at: 1.hour.ago)
+
+      delete repository_run_path(repository, victim), params: { runs: "25", run: anchored.id }
+
+      expect(response).to redirect_to(repository_path(repository, runs: 25, run: anchored.id))
+      follow_redirect!
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{anchored.commit_sha.first(7)}")
+      expect(anchor_notice).to include("run ##{anchored.id}")
+    end
+
+    # @intent: {"entity": "RunsController", "action": "drop the run anchor on its own row", "behavior": "deleting the row the run ask names redirects to the bare repository path with no run bytes, the notice still names the deleted run, and the followed page reads the surviving newest run with no anchor notice", "layer": "request"}
+    it "drops the run anchor when the deleted row is the one the anchor names" do
+      anchored = create_test_run(repository: repository, commit_sha: "anch0000000001", branch: "main", created_at: 2.days.ago)
+      survivor = create_test_run(repository: repository, commit_sha: "surb0000000001", branch: "main", created_at: 1.hour.ago)
+
+      delete repository_run_path(repository, anchored), params: { run: anchored.id }
+
+      expect(response).to redirect_to(repository_path(repository))
+      expect(response.location).not_to include("run=")
+      expect(flash[:notice]).to include("Deleted run #{anchored.commit_sha.first(7)} (main)")
+      follow_redirect!
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{survivor.commit_sha.first(7)}")
+      expect(anchor_notice).to be_nil
+    end
+
+    # @intent: {"entity": "RunsController", "action": "carry the sha anchor", "behavior": "deleting from a commit_sha-anchored page with no run ask redirects with the sha param, and the followed page still reads the anchored run", "layer": "request"}
+    it "carries a sha ask when no run ask exists" do
+      anchored = create_test_run(repository: repository, commit_sha: "anch0000000001", branch: "main", created_at: 2.days.ago)
+      victim = create_test_run(repository: repository, commit_sha: "vict0000000001", branch: "main", created_at: 1.hour.ago)
+
+      delete repository_run_path(repository, victim), params: { commit_sha: anchored.commit_sha }
+
+      expect(response).to redirect_to(repository_path(repository, commit_sha: anchored.commit_sha))
+      follow_redirect!
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{anchored.commit_sha.first(7)}")
+      expect(anchor_notice).to include("This page is anchored on #{anchored.commit_sha.first(7)}")
+    end
+
+    # @intent: {"entity": "RunsController", "action": "prefer the run anchor", "behavior": "a delete carrying both run and commit_sha redirects with the run and no commit_sha bytes, matching the read side's run-over-sha precedence", "layer": "request"}
+    it "carries the run ask and leaves no sha bytes when both arrive" do
+      anchored = create_test_run(repository: repository, commit_sha: "anch0000000001", branch: "main", created_at: 2.days.ago)
+      victim = create_test_run(repository: repository, commit_sha: "vict0000000001", branch: "main", created_at: 1.hour.ago)
+
+      delete repository_run_path(repository, victim), params: { run: anchored.id, commit_sha: anchored.commit_sha }
+
+      expect(response).to redirect_to(repository_path(repository, run: anchored.id))
+      expect(response.location).not_to include("commit_sha=")
+    end
+
+    # The precedence rule's second half: the run ask still wins when it DIES — the deleted row was
+    # the one it named — and the sha does not resurrect. An id ask names its row completely.
+    # @intent: {"entity": "RunsController", "action": "never resurrect the sha", "behavior": "deleting the row the run ask names while a sha ask also rides redirects to the bare repository path with neither anchor's bytes", "layer": "request"}
+    it "does not resurrect the sha ask when the deleted row was the run ask's row" do
+      anchored = create_test_run(repository: repository, commit_sha: "anch0000000001", branch: "main", created_at: 2.days.ago)
+      survivor = create_test_run(repository: repository, commit_sha: "surb0000000001", branch: "main", created_at: 1.hour.ago)
+
+      delete repository_run_path(repository, anchored), params: { run: anchored.id, commit_sha: anchored.commit_sha }
+
+      expect(response).to redirect_to(repository_path(repository))
+      expect(response.location).not_to include("run=")
+      expect(response.location).not_to include("commit_sha=")
+      expect(TestRun.exists?(survivor.id)).to be true
+    end
+
+    # @intent: {"entity": "RunsController", "action": "carry the comparison ask", "behavior": "deleting from a compare_to=main page redirects with compare_to=main, and the followed page still names the asked branch as its What-changed basis", "layer": "request"}
+    it "carries the comparison ask, and the followed page keeps measuring against the asked branch" do
+      ingest_run(commit_sha: "main0000000001", branch: "main", at: 3.days.ago)
+      survivor = ingest_run(commit_sha: "feat0000000001", branch: "feature", at: 2.days.ago)
+      victim = ingest_run(commit_sha: "feat0000000002", branch: "feature", at: 1.hour.ago)
+
+      delete repository_run_path(repository, victim), params: { compare_to: "main" }
+
+      expect(response).to redirect_to(repository_path(repository, compare_to: "main"))
+      follow_redirect!
+      expect(TestRun.exists?(survivor.id)).to be true
+      expect(recent_runs_caption).to include("by your ask — against the newest run on main")
+      expect(page.find("#changes .rc-section-head p").text.squish).to include("a different branch, asked for")
+    end
+
+    # @intent: {"entity": "RunsController", "action": "carry run and comparison together", "behavior": "a delete carrying both run and compare_to redirects with both params", "layer": "request"}
+    it "carries the run anchor and the comparison ask together" do
+      anchored = create_test_run(repository: repository, commit_sha: "anch0000000001", branch: "main", created_at: 3.days.ago)
+      victim = create_test_run(repository: repository, commit_sha: "vict0000000001", branch: "main", created_at: 1.hour.ago)
+
+      delete repository_run_path(repository, victim), params: { run: anchored.id, compare_to: "main" }
+
+      expect(response).to redirect_to(repository_path(repository, run: anchored.id, compare_to: "main"))
+    end
+
+    # @intent: {"entity": "RunsController", "action": "round-trip a dead run anchor", "behavior": "a well-formed run id matching no row is carried through the redirect, and the followed page answers with the newest run, a fallback notice naming the ask, and no anchored caption in the Recent runs panel", "layer": "request"}
+    it "round-trips a well-formed unknown run id, which the followed page answers with the default window" do
+      survivor = create_test_run(repository: repository, commit_sha: "solo0000000001", branch: "main", created_at: 1.hour.ago)
+      victim = create_test_run(repository: repository, commit_sha: "vict0000000001", branch: "main", created_at: 30.minutes.ago)
+
+      delete repository_run_path(repository, victim), params: { run: 424_242 }
+
+      expect(response).to redirect_to(repository_path(repository, run: 424_242))
+      follow_redirect!
+      expect(page.find(".rc-run").text.squish).to include("Reading run #{survivor.commit_sha.first(7)}")
+      expect(anchor_notice).to include("no run for run #424242")
+      # The panel makes no second statement about an anchor that resolved to nothing — the
+      # Overview's fallback sentence already named it.
+      expect(recent_runs_caption).not_to include("This page is anchored")
+    end
+
+    # @intent: {"entity": "RunsController", "action": "keep no-ask redirect identical", "behavior": "a delete with no asks redirects byte-identically to the bare repository URL with no query string", "layer": "request"}
+    it "keeps a no-ask delete byte-identical to the bare repository path" do
+      run = create_test_run(repository: repository, commit_sha: "solo0000000001", branch: "main")
+
+      delete repository_run_path(repository, run)
+
+      expect(response.location).to eq(repository_url(repository))
+      expect(response.location).not_to include("?")
+    end
+
+    # @intent: {"entity": "RecentRunsPanel", "action": "omit anchor bytes from a no-ask form", "behavior": "a no-ask page's Delete forms carry no hidden run, commit_sha or compare_to inputs", "layer": "request"}
+    it "renders no anchor bytes in a no-ask Delete form" do
+      create_test_run(repository: repository, commit_sha: "anch0000000001", branch: "main")
+
+      get repository_path(repository)
+      body = Capybara.string(response.body)
+      expect(body).to have_no_css("#recent-runs form input[name='run']")
+      expect(body).to have_no_css("#recent-runs form input[name='commit_sha']")
+      expect(body).to have_no_css("#recent-runs form input[name='compare_to']")
+    end
+
+    # @intent: {"entity": "RecentRunsPanel", "action": "carry the asked anchors in the form", "behavior": "a sha-anchored page's Delete forms each carry the asked commit_sha value, an id-anchored page's forms carry the asked run id and no sha bytes, and a run-plus-comparison page's forms carry both asks", "layer": "request"}
+    it "renders the asked anchors in the Delete forms" do
+      anchored = create_test_run(repository: repository, commit_sha: "anch0000000001", branch: "main", created_at: 2.hours.ago)
+      other = create_test_run(repository: repository, commit_sha: "othr0000000001", branch: "main", created_at: 1.hour.ago)
+
+      get repository_path(repository, commit_sha: anchored.commit_sha)
+      sha_inputs = Capybara.string(response.body).all("#recent-runs form input[name='commit_sha']", visible: :all)
+      expect(sha_inputs.size).to eq(2)
+      expect(sha_inputs.map { |i| i[:value] }.uniq).to eq([anchored.commit_sha])
+
+      get repository_path(repository, run: anchored.id)
+      body = Capybara.string(response.body)
+      run_inputs = body.all("#recent-runs form input[name='run']", visible: :all)
+      expect(run_inputs.size).to eq(2)
+      expect(run_inputs.map { |i| i[:value] }.uniq).to eq([anchored.id.to_s])
+      expect(body).to have_no_css("#recent-runs form input[name='commit_sha']")
+
+      feat = create_test_run(repository: repository, commit_sha: "feat0000000001", branch: "feature", created_at: 30.minutes.ago)
+      get repository_path(repository, run: feat.id, compare_to: "main")
+      body = Capybara.string(response.body)
+      expect(body.all("#recent-runs form input[name='run']", visible: :all).map { |i| i[:value] }.uniq).to eq([feat.id.to_s])
+      expect(body.all("#recent-runs form input[name='compare_to']", visible: :all).map { |i| i[:value] }.uniq).to eq(["main"])
+    end
+
+    # The shapes a `?run=` query string can legally parse into that are not a run id are listed
+    # ONCE in `spec/support/shared_examples/malformed_run_id_param.rb`, against the guard they all
+    # land on (`RequestedRunIdParam#requested_run_id`). What is local to this surface is how the
+    # delete says it dropped the ask: the bare repository redirect, with no `run` bytes — the same
+    # answer a delete with no ask gives, and the SPGD-1916 precedent's own shape.
+    describe "a run-id parameter that is not a run id" do
+      def expect_run_param_treated_as_no_ask(query)
+        run = create_test_run(repository: repository)
+
+        delete repository_run_path(repository, run), params: query
+
+        expect(response).to redirect_to(repository_path(repository))
+        expect(response.location).not_to include("run=")
+      end
+
+      it_behaves_like "a surface that treats a malformed run-id parameter as no ask"
+    end
+
+    describe "a commit-sha parameter that is not a sha" do
+      def expect_commit_sha_param_treated_as_no_ask(query)
+        run = create_test_run(repository: repository)
+
+        delete repository_run_path(repository, run), params: query
+
+        expect(response).to redirect_to(repository_path(repository))
+        expect(response.location).not_to include("commit_sha=")
+      end
+
+      it_behaves_like "a surface that treats a malformed commit-sha parameter as no ask"
+    end
+
+    describe "a compare_to parameter that is not a branch" do
+      def expect_compare_to_param_treated_as_no_ask(query)
+        run = create_test_run(repository: repository)
+
+        delete repository_run_path(repository, run), params: query
+
+        expect(response).to redirect_to(repository_path(repository))
+        expect(response.location).not_to include("compare_to=")
+      end
+
+      it_behaves_like "a surface that treats a malformed compare_to parameter as no ask"
+    end
+  end
+
   describe "the control" do
     # @intent: {"entity": "TestRun", "action": "render delete control", "behavior": "a viewer with repo_delete sees a Delete button whose dialog names removing the run's shards and per-example observations and that it cannot be undone", "layer": "request"}
     it "renders a Delete button with a dialog naming the consequence, for a viewer with repo_delete" do
