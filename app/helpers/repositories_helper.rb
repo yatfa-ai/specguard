@@ -89,6 +89,16 @@ module RepositoriesHelper
     # branch) beats the carried ask through the ordinary merge below, which is what lets one row's
     # cell point at its own branch on a page already narrowed to another one.
     asks[:runs_branch] = @runs_branch_request if @runs_branch_request
+    # `?runs_before=` rides the same conditional carry (SPGD-1984): the keyset cursor survives a
+    # click elsewhere on the page, exactly as the narrowing and the widening do — paging to a run's
+    # own page must not silently snap the panel back to its newest window. The ivar is the RESOLVED
+    # cursor's id (`RepositoryDashboard`'s cursor read), so a well-formed ask that matched no row
+    # carries no bytes at all — the dead-cursor page is the default page in its links too. An
+    # EXPLICIT `runs_before: nil` override (the panel's "Newest runs" link, the Branch cells, the
+    # "Back to the newest N" link) beats the carried cursor through the ordinary merge below:
+    # each of those gestures re-aims the panel's window, and a window that restarts must not drag
+    # the old position with it.
+    asks[:runs_before] = @runs_before_request if @runs_before_request
     asks[:window] = @window_request if @window_request
     # `?layer=` rides the same conditional carry for the same reason (which panels it narrows is
     # listed in the `RequestedLayerParam` header): opening a file or an area must not silently drop

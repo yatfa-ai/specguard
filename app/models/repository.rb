@@ -665,9 +665,34 @@ class Repository < ApplicationRecord
   # That is the honest answer and the only safe one for a caller that asked for a named series:
   # substituting another branch's rows would hand back a growth curve for the wrong branch, with
   # nothing in the result to say so.
-  def recent_test_runs(limit: 10, branch: nil)
+  #
+  # == `before:` — the keyset cursor (SPGD-1984)
+  #
+  # `?runs_before=` names a run whose POSITION in this ordering the window starts strictly after,
+  # so the panel can page past `RequestedRunsParam::MAX_RUNS` — the widening's cap, where the
+  # widen link is suppressed and the reader would otherwise dead-end. The comparison is a
+  # ROW-VALUE comparison over exactly the key the window sorts by,
+  # `(created_at, id) < (before.created_at, before.id)` — the same discipline
+  # `previous_test_run_on_branch` argues for, and both halves matter here for the reason paging
+  # makes acute: a bare `created_at <` would SKIP every run sharing the cursor's instant (the
+  # page boundary is exactly where ties land — two runs ingested in the same second, one ending
+  # page one and one beginning page two), and a bare `id <` would ignore `created_at` entirely
+  # and walk ingestion order rather than display order. The pair neither repeats the cursor row
+  # nor skips its same-instant neighbour, so consecutive pages have zero overlap and zero gap
+  # whatever the ties.
+  #
+  # `before` is the cursor RUN, not a bare id, so the predicate needs no second read — the
+  # caller already resolved the id through `@repository.test_runs` (a miss is NO ASK: the caller
+  # passes nil and this method issues exactly the query it always issued). The cursor row itself
+  # is excluded by the strict `<`, so it never re-appears at the top of the next page. `before`
+  # composes with `branch:` freely — the branch filter rides WITH the keyset, so
+  # `?runs_branch=&runs_before=` pages one branch's series past its own cap.
+  def recent_test_runs(limit: 10, branch: nil, before: nil)
     scope = test_runs
     scope = scope.where(branch: branch) if branch.present?
+    if before
+      scope = scope.where("(test_runs.created_at, test_runs.id) < (?, ?)", before.created_at, before.id)
+    end
     scope.order(created_at: :desc, id: :desc).limit(limit)
   end
 
