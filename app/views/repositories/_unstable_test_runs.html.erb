@@ -53,6 +53,9 @@
             <span class="text-app-content-secondary"><%= @unstable_test_runs.name %></span>
             — <%= unstable_test_runs_scope_sentence(@unstable_test_runs) %>
             <%= unstable_test_runs_reading_sentence(@unstable_test_runs) %>
+            <% if unstable_test_runs_duration_step_shown? %>
+              <%= unstable_test_runs_runtime_reading_sentence %>
+            <% end %>
             <%= unstable_test_runs_silence_clause(@unstable_test_runs) %>
             A run that recorded nothing under this description contributes no row, and a description
             carried by more than one example in a run contributes one row per example — so the
@@ -125,6 +128,75 @@
                 <% end %>
                 <%= unstable_test_runs_onset_range_caveat %>
               </p>
+            <% end %>
+          <% end %>
+          <%# THE DURATION STEP-UP LINE — the pace reading, computed. The onset line above reads
+              outcomes and withholds `:newest_not_failed` on exactly the test this one exists for:
+              the green test that steadily passes and got slow, which is the ordinary row of the
+              slowest-tests rankings this panel is opened from with
+              `?unstable_test_from=slowest-examples`. `UnstableTestRunDurationStep` names the
+              largest run-over-run rise between consecutive timed runs over the rows already
+              loaded, so the reader does not scan the sortable Duration column by eye and build a
+              GitHub range by hand — and where the shape refuses, it says WHICH arm refused, on
+              the same never-a-silent-absence rule the onset line follows.
+
+              RENDERED ONLY FOR THIS ORIGIN. The gate is the helper's
+              `#unstable_test_runs_duration_step_shown?`, read off the honoured
+              `@unstable_test_origin_request`, so every other entry point's page — the flakiness
+              ranking's included — carries none of this line's bytes. The claim stays
+              SPGD-1994-narrow: two observed runs, a candidate range between them, never a verdict
+              on one commit; the caveat is the onset's own hedge, reached by name so the two lines
+              cannot drift apart in what they admit about the range.
+
+              PURE. No query, no I/O: rows, counts and shas are already on the page, and the run
+              grain this line reduces to (the sum of a run's timed rows, stated in the basis
+              note's pace sentence) is arithmetic over them. The grain and budget pins in
+              spec/requests/repository_unstable_test_runs_spec.rb hold unchanged. %>
+          <% if unstable_test_runs_duration_step_shown? %>
+            <% step = UnstableTestRunDurationStep.for(@unstable_test_runs) %>
+            <% if step.offered? %>
+              <%# The same pairing the onset line and every row's Commit cell keep — the sha out
+                  to GitHub, "read run" back into the page's own run anchor — one pair per
+                  boundary run, then the compare range beside them, shown only when the two shas
+                  differ (they always do when the step is offered — a shared sha on the boundary
+                  is the same-commit withhold — but the guard is the view's sentence to make, as
+                  it is for the onset's pair). %>
+              <%= render UI::AlertComponent.new(tone: :info, id: "unstable-test-runs-duration-step", class: "mb-3") do %>
+                <p class="mt-1">
+                  Largest step up:
+                  <%= SpecObservation.humanized_duration(step.from_seconds) %> in
+                  <%= link_to step.from_row.commit_sha.first(7),
+                              @repository.github_commit_url(step.from_row.commit_sha),
+                              class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
+                  <%= link_to "read run",
+                              drill_down_path(@repository, commit_sha: step.from_row.commit_sha, anchor: "summary"),
+                              class: "rc-link" %>
+                  →
+                  <%= SpecObservation.humanized_duration(step.to_seconds) %> in
+                  <%= link_to step.to_row.commit_sha.first(7),
+                              @repository.github_commit_url(step.to_row.commit_sha),
+                              class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
+                  <%= link_to "read run",
+                              drill_down_path(@repository, commit_sha: step.to_row.commit_sha, anchor: "summary"),
+                              class: "rc-link" %>.
+                  <% if step.from_row.commit_sha != step.to_row.commit_sha %>
+                    <%= link_to "Commits between these two runs",
+                                @repository.github_compare_url(step.from_row.commit_sha, step.to_row.commit_sha),
+                                class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
+                    is where to look.
+                  <% end %>
+                  <%= unstable_test_runs_onset_range_caveat %>
+                  Across this window's timed runs: fastest
+                  <%= SpecObservation.humanized_duration(step.fastest_seconds) %>, median
+                  <%= SpecObservation.humanized_duration(step.median_seconds) %>, newest
+                  <%= SpecObservation.humanized_duration(step.newest_seconds) %>, slowest
+                  <%= SpecObservation.humanized_duration(step.slowest_seconds) %>.
+                </p>
+              <% end %>
+            <% else %>
+              <%= render UI::AlertComponent.new(tone: :neutral, id: "unstable-test-runs-duration-step", class: "mb-3") do %>
+                <p class="mt-1"><%= unstable_test_runs_duration_step_withheld_sentence(step.reason) %></p>
+              <% end %>
             <% end %>
           <% end %>
           <%= render UI::TableComponent.new(
