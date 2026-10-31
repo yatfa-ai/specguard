@@ -550,6 +550,26 @@ RSpec.describe "Repository unannotated examples", type: :request do
       expect(row_names).to eq(["Journal#posts records the entry", "Ledger#locks closes the period"])
     end
 
+    # AC3, on the ask this table's own links build: `spec_file` AND `spec_directory` together —
+    # the page every row link in the table opens, and the ONLY shape the gate's `!@spec_file_request`
+    # term governs: a file-asked page without a directory ask is excluded by the
+    # `@spec_directory_request` term alone, so the example above reaches only the gate's first arm
+    # and cannot see the second. Both halves of the gate are pinned on this ask: the table is
+    # absent from the page, and the read behind it was not taken either — matched on the same
+    # HAVING fingerprint the read-gate example below matches on — against the worklist the
+    # intersection narrowed, which still carries the file's own rows.
+    # @intent: {"entity": "GET /repositories/:id", "action": "gate table on combined ask", "behavior": "a page asked spec_file and spec_directory together renders no unannotated-files table, issues the debt-file read zero times, and keeps the intersection's worklist rows", "layer": "request"}
+    it "renders no files table and takes no file read on a combined file-and-directory ask" do
+      repository = files_debt_run
+      combined_ask = queries_against("unannotated') > 0") do
+        get repository_path(repository, spec_file: "spec/models/ledger_spec.rb", spec_directory: area)
+      end
+
+      expect(combined_ask).to be_empty
+      expect(files_table?).to be(false)
+      expect(row_names).to eq(["Journal#posts records the entry", "Ledger#locks closes the period"])
+    end
+
     # AC3, second half, and the one that matters: the READ is not taken either. Matched on the
     # read's HAVING — `COUNT(*) FILTER (WHERE status = 'unannotated') > 0`, which no other read
     # of this table emits — so an assertion of zero cannot be satisfied by a page that simply
