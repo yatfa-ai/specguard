@@ -489,6 +489,73 @@ module UnstableTestsHelper
       "linear history."
   end
 
+  # == The duration step-up line's prose
+  #
+  # The sibling of the onset section above, and kept beside it for the same drift argument: the
+  # claims of one panel are kept in one place so they cannot disagree. The line renders only for a
+  # test opened from a slowest-tests ranking, and both halves of that visibility — this reading
+  # sentence in the basis note and the line above the table — branch on the ONE predicate below.
+
+  # WHETHER the panel reads pace at all — the origin gate both duration-step sentences hang off.
+  # A test opened from a slowest-tests ranking (`?unstable_test_from=slowest-examples`) is the
+  # reader this line exists for: they came hunting slowness, and the onset line answers the
+  # question they did not ask. Read off `@unstable_test_origin_request` — the HONOURED value the
+  # controller's allow-list already narrowed — and never off the raw param, so an unrecognised
+  # origin string costs the fallback, which is the page that shipped before this line existed.
+  # Single-sourced here rather than spelled at both call sites in the partial, because two
+  # spellings of one gate are two places for the line and its reading sentence to disagree about
+  # whether they are on the page.
+  def unstable_test_runs_duration_step_shown?
+    @unstable_test_origin_request == "slowest-examples"
+  end
+
+  # THE READING RULE for the Duration column, said in the basis note and only for the origin the
+  # step-up line renders for. What a reader arriving from a slowest-tests ranking needs beyond
+  # the outcome reading: that this panel also reads pace, and by WHICH rule a run's figure here is
+  # built — the one decision this line makes that the column itself does not state.
+  #
+  # The reduction rule is stated in full, because it is the one place the line's figures and the
+  # table's can appear to disagree: a run carried under several examples contributes the SUM of
+  # its timed rows, while the Duration column beside it stays per-row. Left unstated, a reader
+  # meeting "8.40s" in the step line above rows reading "4.20s" would conclude one of the two is
+  # wrong; stated, the disagreement is the rule working.
+  def unstable_test_runs_runtime_reading_sentence
+    "Run time is read for pace too: the line above the table names the largest step up between " \
+      "consecutive timed runs when this sequence's shape supports one, with the reason it " \
+      "withholds when it does not. A run carried under more than one example contributes the sum " \
+      "of its timed rows — the time the description cost that run, not one example's measurement, " \
+      "which is why its figure here may differ from the per-row Duration column beside it — and a " \
+      "run none of whose rows carry a duration is not part of that sequence."
+  end
+
+  # WHY the pace reading refused this window, one sentence per arm — never a silent absence, on
+  # exactly the rule the onset's withhold sentences state: the keys are
+  # `UnstableTestRunDurationStep::REASONS`, and the case falls through to an explicit error so an
+  # arm added to the presenter without a sentence here fails loudly at render time instead of
+  # quietly rendering no line at all.
+  def unstable_test_runs_duration_step_withheld_sentence(reason)
+    case reason
+    when :capped
+      "The step-up reading is withheld: the cap kept this window's oldest rows (see the alert " \
+        "above), so the newest end the pace is read from is not on the page."
+    when :too_few_timed_runs
+      "No step is offered: fewer than three runs of this window timed this description, so there " \
+        "is no pace to step up from — a single interval between two runs cannot be told apart " \
+        "from the test simply being that slow."
+    when :no_rise
+      "No step is offered: no consecutive pair of timed runs rose, so the duration never stepped " \
+        "up anywhere in this window."
+    when :untimed_between
+      "No step is offered: a run between the two ends of the largest rise carried no duration " \
+        "for this description, so the rise cannot be pinned to one run-to-run transition."
+    when :same_commit
+      "No step is offered: both ends of the largest rise are runs of the same commit, so there " \
+        "is no candidate range to name — that is one commit measured twice, not a transition."
+    else
+      raise ArgumentError, "no duration-step withhold sentence for #{reason.inspect}"
+    end
+  end
+
   # Rows this window recorded under the description that said NOTHING about how it ended, counted
   # and stated — the silence the sequence would otherwise read as a gap in the story.
   #

@@ -1193,6 +1193,239 @@ RSpec.describe "Repository unstable test runs", type: :request do
     end
   end
 
+  # THE DURATION STEP-UP LINE — the pace reading, computed, rendered above the table for a test
+  # opened from a slowest-tests ranking (`?unstable_test_from=slowest-examples`). Every fixture
+  # here is green: outcomes are not this line's input, and the test it exists for is the steadily
+  # passing one that got slow — the ordinary row of the ranking it is opened from. Each shape pins
+  # what the line says for it, and every withhold arm renders its reason, on the same
+  # never-a-silent-absence rule the onset block above pins.
+  describe "naming the largest duration step" do
+    def duration_step_line? = panel.has_css?("#unstable-test-runs-duration-step")
+
+    def duration_step_line = panel.find("#unstable-test-runs-duration-step")
+
+    def duration_step_hrefs = duration_step_line.all("a").map { |link| link[:href] }
+
+    def duration_step_read_run_hrefs = duration_step_line.all("a.rc-link").map { |link| link[:href] }
+
+    # The onset line beside this one, reached by its own id — the sibling block's `onset_line`
+    # helper is scoped to that example group, so this block reaches the element directly.
+    def onset_alert = panel.find("#unstable-test-runs-onset")
+
+    # One repository whose window holds one timed run per entry of `durations_per_run`, every run
+    # passing. Durations are per-run, so the line's run-grain figures are readable straight off
+    # the fixture; the second, always-passing example is there so every assertion about "this
+    # description's rows" has other rows to be wrong about.
+    def repository_with_durations(durations_per_run, shas: nil, name: flaky,
+                                  github_full_name: "acme/slowed")
+      repository = create_repository(user: @user, github_full_name: github_full_name)
+      durations_per_run.each_with_index do |duration, index|
+        ingest(repository,
+               [example_spec(name: name, outcome: "passed", line_number: 1, duration: duration),
+                example_spec(name: stable, outcome: "passed", line_number: 2,
+                             file_path: "spec/models/user_spec.rb")],
+               commit_sha: shas ? shas[index] : sha_for(index), at: (30 - index).days.ago)
+      end
+      repository
+    end
+
+    # Criterion 1 — the answer the line exists for: a green, steadily passing test whose pace
+    # jumped from one second to four. The step names run 3 → run 4 with both totals, links each
+    # end out to its commit and back into its own run, ranges between the two on GitHub, and
+    # carries the pace figures beside it — while the onset line above it still renders its own
+    # withhold, because the two lines answer different questions about the same window.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "render step line", "behavior": "a passing test with durations 1.0 1.1 1.0 4.2 4.3 opened from slowest-examples names 1.00s and 4.20s with both read-run links, the compare href for those two shas and the pace figures, beside the onset line's own withhold", "layer": "request"}
+    it "names the largest step up with both ends linked, ranged, and the pace beside it" do
+      repository = repository_with_durations([1.0, 1.1, 1.0, 4.2, 4.3])
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "slowest-examples")
+
+      expect(duration_step_line?).to be(true)
+      expect(duration_step_line).to have_text("Largest step up", normalize_ws: true)
+      expect(duration_step_line).to have_text("1.00s", normalize_ws: true)
+      expect(duration_step_line).to have_text("4.20s", normalize_ws: true)
+      expect(duration_step_line).to have_text("02c0ffe", normalize_ws: true)
+      expect(duration_step_line).to have_text("03c0ffe", normalize_ws: true)
+      expect(duration_step_hrefs).to include(repository.github_commit_url(sha_for(2)),
+                                             repository.github_commit_url(sha_for(3)))
+      expect(duration_step_hrefs).to include(repository.github_compare_url(sha_for(2), sha_for(3)))
+      expect(duration_step_read_run_hrefs.size).to eq(2)
+      expect(duration_step_read_run_hrefs.first).to include("commit_sha=#{sha_for(2)}")
+      expect(duration_step_read_run_hrefs.last).to include("commit_sha=#{sha_for(3)}")
+      expect(duration_step_read_run_hrefs).to all(end_with("#summary"))
+      expect(duration_step_line).to have_text("fastest 1.00s", normalize_ws: true)
+      expect(duration_step_line).to have_text("median 1.10s", normalize_ws: true)
+      expect(duration_step_line).to have_text("newest 4.30s", normalize_ws: true)
+      expect(duration_step_line).to have_text("slowest 4.30s", normalize_ws: true)
+      expect(onset_alert).to have_text("does not end in a failure to trace back", normalize_ws: true)
+    end
+
+    # The claim the line makes is the onset's narrow one, borrowed wholesale: two observed runs, a
+    # candidate set between them, never a verdict on one commit — and the hedge is reached by
+    # name (`unstable_test_runs_onset_range_caveat`) so the two lines cannot drift apart in what
+    # they admit about the range they point at.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "state the claim narrowly", "behavior": "the offered step line says candidate set and never a verdict on any one commit and carries the rebased-or-force-pushed caveat", "layer": "request"}
+    it "states the claim narrowly and carries the linear-history caveat" do
+      repository = repository_with_durations([1.0, 1.1, 1.0, 4.2, 4.3])
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "slowest-examples")
+
+      expect(duration_step_line).to have_text("candidate set", normalize_ws: true)
+      expect(duration_step_line).to have_text("never a verdict on any one commit", normalize_ws: true)
+      expect(duration_step_line).to have_text("rebased or force-pushed", normalize_ws: true)
+    end
+
+    # The reading rule arrives with the line: the basis note says how a run's figure here is
+    # built — the sum of its timed rows, never one example's measurement — because the step
+    # line's figures and the per-row Duration column beside it are ALLOWED to disagree, and a
+    # reader meeting both without the rule would conclude one of the two is wrong.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "state the reduction rule", "behavior": "the basis line says the line names the largest step up between consecutive timed runs and that a multi-example run contributes the sum of its timed rows", "layer": "request"}
+    it "states the run-grain reading rule in the basis note" do
+      repository = repository_with_durations([1.0, 1.1, 1.0, 4.2, 4.3])
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "slowest-examples")
+
+      expect(basis_line).to have_text("largest step up between consecutive timed runs",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text("sum of its timed rows", normalize_ws: true)
+    end
+
+    # Criterion 2 — THE GATE. A test opened WITHOUT the origin (the flakiness ranking's entry
+    # point, and every bookmark written before the origin existed) carries none of this line's
+    # bytes: not the alert, not its wording, and not the basis note's pace sentence either — the
+    # two halves of the visibility hang off the one gate, so a page missing one must miss both.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "gate on origin", "behavior": "the same window opened without unstable_test_from renders no duration-step element, no step wording and no pace reading sentence in the basis note", "layer": "request"}
+    it "puts no duration-step bytes on a page opened without the origin" do
+      repository = repository_with_durations([1.0, 1.1, 1.0, 4.2, 4.3])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(duration_step_line?).to be(false)
+      expect(response.body).not_to include("unstable-test-runs-duration-step")
+      expect(response.body).not_to include("Largest step up")
+      expect(basis_line).to have_no_text("largest step up between consecutive timed runs",
+                                         normalize_ws: true)
+    end
+
+    # The gate's other arms: the flakiness ranking's OWN origin opens the panel without the pace
+    # reading, and an origin string the allow-list does not honour costs the fallback — the page
+    # that shipped before this line existed. Both are the same honoured-ivar miss, and neither
+    # may smuggle the line onto the page.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "gate on honoured origin", "behavior": "unstable_test_from=unstable-tests and an unrecognised origin value both render no duration-step element", "layer": "request"}
+    it "renders the line only for the slowest-examples origin" do
+      repository = repository_with_durations([1.0, 1.1, 1.0, 4.2, 4.3])
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "unstable-tests")
+      expect(duration_step_line?).to be(false)
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "somewhere-else")
+      expect(duration_step_line?).to be(false)
+    end
+
+    # Criterion 3, arm one — THE CAP. The list kept its oldest rows, so the newest end the pace is
+    # read from is not on the page; the line refuses for the same reason the alert above it
+    # states, so the two cannot disagree about whether the cap bit. The fixture carries a real
+    # rise (per-row 0.1s to 5.0s, summed per run) so the refusal is the cap's and not the pace's.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "withhold when capped", "behavior": "202 rows capped to the limit render a withheld step line citing the cap, beside the cap alert and despite a real rise", "layer": "request"}
+    it "withholds the step, citing the cap, when the cap took the window's newest rows" do
+      repository = create_repository(user: @user, github_full_name: "acme/capped-step")
+      [0.1, 5.0].each_with_index do |duration, index|
+        specs = (1..101).map { |i| example_spec(name: flaky, outcome: "passed", line_number: i,
+                                                duration: duration) }
+        ingest(repository, specs, commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "slowest-examples")
+
+      expect(cap_alert?).to be(true)
+      expect(duration_step_line?).to be(true)
+      expect(duration_step_line).to have_text("withheld", normalize_ws: true)
+      expect(duration_step_line).to have_text("cap", normalize_ws: true)
+      expect(duration_step_hrefs.join).not_to include("/compare/")
+    end
+
+    # Criterion 3, arm two — TOO FEW TIMED RUNS. A genuine fourfold rise across only two timed
+    # runs still refuses: one interval cannot be told apart from the test simply being that slow.
+    # The fixture reaches the arm WITH the rise in place, so what fires is the count.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "withhold on few runs", "behavior": "a genuine 1.0s to 4.2s rise across two timed runs renders a withheld step line naming the missing pace", "layer": "request"}
+    it "withholds the step when only two timed runs exist, rise and all" do
+      repository = repository_with_durations([1.0, 4.2], github_full_name: "acme/two-runs")
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "slowest-examples")
+
+      expect(duration_step_line?).to be(true)
+      expect(duration_step_line).to have_text("No step is offered", normalize_ws: true)
+      expect(duration_step_line).to have_text("no pace to step up from", normalize_ws: true)
+      expect(duration_step_hrefs.join).not_to include("/compare/")
+    end
+
+    # Criterion 3, arm three — NO RISE. The window got faster the whole way through; there is no
+    # step up to name, whatever the totals are.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "withhold on no rise", "behavior": "a steadily falling 4.3 4.2 4.1 sequence renders a withheld step line saying no pair rose", "layer": "request"}
+    it "withholds the step when no consecutive pair rose" do
+      repository = repository_with_durations([4.3, 4.2, 4.1], github_full_name: "acme/speeding-up")
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "slowest-examples")
+
+      expect(duration_step_line?).to be(true)
+      expect(duration_step_line).to have_text("No step is offered", normalize_ws: true)
+      expect(duration_step_line).to have_text("never stepped up", normalize_ws: true)
+      expect(duration_step_hrefs.join).not_to include("/compare/")
+    end
+
+    # Criterion 3, arm four — THE UNTIMED GAP. The largest rise spans run 1 → run 3, consecutive
+    # among timed runs, but run 2 sits between them in the window recording the description
+    # untimed — so the rise cannot be pinned to one observed transition, and the line refuses
+    # rather than bridging the gap.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "withhold on untimed gap", "behavior": "an untimed run between the two ends of the largest rise renders a withheld step line refusing to pin the transition, with no compare href", "layer": "request"}
+    it "withholds rather than bridging when an untimed run sits inside the largest rise" do
+      repository = repository_with_durations([1.0, nil, 4.2, 4.3, 4.2],
+                                             github_full_name: "acme/untimed-gap")
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "slowest-examples")
+
+      expect(duration_step_line?).to be(true)
+      expect(duration_step_line).to have_text("No step is offered", normalize_ws: true)
+      expect(duration_step_line).to have_text("cannot be pinned to one run-to-run transition",
+                                              normalize_ws: true)
+      expect(duration_step_hrefs.join).not_to include("/compare/")
+    end
+
+    # Criterion 3, arm five — ONE COMMIT MEASURED TWICE. The largest rise's two ends are runs of
+    # the same sha — a re-run, not a transition — and a compare range between a commit and itself
+    # is an empty diff, so the line names the shape instead of naming a range.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "withhold on same commit", "behavior": "the largest rise whose two ends share one commit sha renders a withheld step line naming the re-run shape, with no compare href", "layer": "request"}
+    it "withholds the step when the boundary ends are runs of one commit" do
+      repository = repository_with_durations([1.0, 4.2, 4.3],
+                                             shas: ["aabbccddeeff", "aabbccddeeff", sha_for(2)],
+                                             github_full_name: "acme/rerun-slower")
+
+      get repository_path(repository, unstable_test: flaky, unstable_test_from: "slowest-examples")
+
+      expect(duration_step_line?).to be(true)
+      expect(duration_step_line).to have_text("No step is offered", normalize_ws: true)
+      expect(duration_step_line).to have_text("same commit", normalize_ws: true)
+      expect(duration_step_line).to have_text("one commit measured twice", normalize_ws: true)
+      expect(duration_step_hrefs.join).not_to include("/compare/")
+    end
+
+    # Criterion 4 — THE COST. The line is pure: it reads rows, counts and shas already on the
+    # page and composes strings, so a page whose step line renders costs exactly the drill-in's
+    # own single read of its grain and nothing for the line — the origin ask is view-side and
+    # adds no read of its own.
+    # @intent: {"entity": "UnstableTestRunDurationStep", "action": "cost nothing", "behavior": "a page whose step line renders still issues exactly one read of the drill-in grain", "layer": "request"}
+    it "costs no query of its own" do
+      repository = repository_with_durations([1.0, 1.1, 1.0, 4.2, 4.3])
+
+      grain_reads = unstable_test_runs_grain_reads do
+        get repository_path(repository, unstable_test: flaky, unstable_test_from: "slowest-examples")
+      end
+
+      expect(duration_step_line?).to be(true)
+      expect(grain_reads.length).to eq(1)
+    end
+  end
+
   # Criterion 6 — ONE added read when asked and none when not, bounded by ONE DESCRIPTION'S rows over
   # the window rather than by the suite.
   #
