@@ -219,7 +219,9 @@ class Repository < ApplicationRecord
   # about what came before it. A `/compare/<a>...<b>` link would need two refs, and the second one
   # would have to come from row adjacency on whatever list is rendering — which is not the same as
   # commit adjacency in the repository (see `UnstableTestRuns`' note on naming a culprit). Naming
-  # the wrong range is worse than naming none, so this method cannot be asked to.
+  # the wrong range is worse than naming none, so this method cannot be asked to; the one surface
+  # that ranges at all does it through `#github_compare_url` below, whose two refs are two runs
+  # the platform observed and whose copy carries the caveats that range deserves.
   #
   # NO EXISTENCE CLAIM, for the reasons `#github_blob_url` gives in full: this composes a URL and
   # asks GitHub nothing. An unpushed sha 404s, and that is GitHub telling the truth about a commit
@@ -234,6 +236,36 @@ class Repository < ApplicationRecord
   #   THAT row's, not a page-level one, on the same rule the `ref` argument above states.
   def github_commit_url(ref)
     "#{github_url}/commit/#{escape_path_segments(ref)}"
+  end
+
+  # THE COMMITS BETWEEN TWO REFS on GitHub — the peer `#github_commit_url` refused to be, offered
+  # now that a caller exists whose two refs are two things the platform OBSERVED rather than two
+  # adjacent rows of a list. `/compare/<base>...<head>` answers "what landed between these two
+  # points", which is exactly the question the regression-onset line on the unstable-test drill-in
+  # (`UnstableTestRunOnset`) has when it has it: its two endpoints are the last run that passed and
+  # the first that failed, two runs this window saw.
+  #
+  # A RANGE, AND ONLY FROM TWO OBSERVED RUNS. The reason `#github_commit_url` refuses ranges stands
+  # unchanged: row adjacency is not commit adjacency, and a range composed from whatever list
+  # happens to be rendering names the wrong candidate set — which is worse than naming none. What
+  # makes this method answerable at all is that its callers do not reach for it from row adjacency
+  # alone: the onset line ranges between two runs whose OUTCOMES it has read, and its copy states
+  # the claim narrowly — a candidate set between two observed runs, never "this commit broke it" —
+  # with the linear-history caveat beside it, because on a rebased or force-pushed branch the range
+  # is not a linear history at all. A new caller here inherits that discipline or does not call.
+  #
+  # NO EXISTENCE CLAIM, for the reasons `#github_blob_url` gives in full: this composes a URL and
+  # asks GitHub nothing. An unpushed sha 404s, and that is GitHub telling the truth about a commit
+  # rather than something to probe for.
+  #
+  # Escaped SEGMENT-WISE for the same reason as every ref above, and the `...` separator stays
+  # OUTSIDE the escaping — it is URL structure, the one part of the path that must survive
+  # unescaped for GitHub to read the range as a range.
+  #
+  # @param base [String] the OLDER endpoint — the run that passed, for the onset line
+  # @param head [String] the NEWER endpoint — the run that failed, for the onset line
+  def github_compare_url(base, head)
+    "#{github_url}/compare/#{escape_path_segments(base)}...#{escape_path_segments(head)}"
   end
 
   # Ties broken by id so two runs ingested in the same instant still order deterministically.

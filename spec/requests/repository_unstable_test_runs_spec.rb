@@ -1021,6 +1021,178 @@ RSpec.describe "Repository unstable test runs", type: :request do
     end
   end
 
+  # THE ONSET LINE — the reading rule computed, rendered above the table. Every fixture in this
+  # block is a shape the reading sentence describes, and each one pins what the line says for it:
+  # the two boundary runs, linked out to GitHub and back into the page and ranged on GitHub, when
+  # the shape supports an onset — and the specific arm of the rule that refused, when it does not.
+  # An onset this panel refuses silently would be the same full-looking absence the cap alert
+  # exists to prevent, so every arm renders its reason and the withhold arms are pinned as texts,
+  # not as absences.
+  describe "naming the regression onset" do
+    def onset_line? = panel.has_css?("#unstable-test-runs-onset")
+
+    def onset_line = panel.find("#unstable-test-runs-onset")
+
+    def onset_hrefs = onset_line.all("a").map { |link| link[:href] }
+
+    def onset_read_run_hrefs = onset_line.all("a.rc-link").map { |link| link[:href] }
+
+    # Criterion 1 — the textbook regression: twenty-six passes then four failures at the end of a
+    # full thirty-run window names run 26 and run 27 (the window's oldest-first indices 25 and 26),
+    # links each out to its commit and back into its own run, and ranges between the two on GitHub.
+    # The range is asserted at the FULL shas, on the same rule the commit cell's hrefs are pinned —
+    # the link travels at full length and prints the abbreviation.
+    # @intent: {"entity": "UnstableTestRunOnset", "action": "render onset line", "behavior": "26 passes then 4 failures renders an onset line naming 25c0ffe and 26c0ffe with read-run links and a compare href of compare/25c0ffee0000...26c0ffee0000", "layer": "request"}
+    it "names the last passing and first failing run, linked out, back, and ranged on GitHub" do
+      repository = repository_with(%w[passed] * 26 + %w[failed] * 4)
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(onset_line?).to be(true)
+      expect(onset_line).to have_text("Regression onset", normalize_ws: true)
+      expect(onset_line).to have_text("25c0ffe", normalize_ws: true)
+      expect(onset_line).to have_text("26c0ffe", normalize_ws: true)
+      expect(onset_hrefs).to include(repository.github_commit_url(sha_for(25)),
+                                     repository.github_commit_url(sha_for(26)))
+      expect(onset_hrefs).to include(repository.github_compare_url(sha_for(25), sha_for(26)))
+      expect(onset_read_run_hrefs.size).to eq(2)
+      expect(onset_read_run_hrefs.first).to include("commit_sha=#{sha_for(25)}")
+      expect(onset_read_run_hrefs.last).to include("commit_sha=#{sha_for(26)}")
+      expect(onset_read_run_hrefs).to all(end_with("#summary"))
+    end
+
+    # The claim the line makes is NARROW, and the wording is the pin: a candidate set between two
+    # observed runs, never "this commit broke it", with the linear-history caveat beside the range
+    # — on a rebased or force-pushed branch the range is not a linear history at all, and a line
+    # that named a culprit on such a branch would name a commit that no longer exists where the
+    # range says it does.
+    # @intent: {"entity": "UnstableTestRunOnset", "action": "state the claim narrowly", "behavior": "the offered onset line says candidate set and never a verdict on any one commit and carries the rebased-or-force-pushed caveat", "layer": "request"}
+    it "states the claim narrowly and carries the linear-history caveat" do
+      repository = repository_with(%w[passed] * 26 + %w[failed] * 4)
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(onset_line).to have_text("candidate set", normalize_ws: true)
+      expect(onset_line).to have_text("never a verdict on any one commit", normalize_ws: true)
+      expect(onset_line).to have_text("rebased or force-pushed", normalize_ws: true)
+    end
+
+    # Criterion 2 — THE FLAKINESS SHAPE. Failures at runs 3, 11, 19 and 26 of a 26-run window: the
+    # newest run failed, the trailing block and its boundary are perfectly clean, and the onset is
+    # still refused — a failure older than the last pass means the failures are scattered, and the
+    # newest failure of a scattered window is the latest one, not the first one. The line says so
+    # in the reading sentence's own words and offers no range.
+    # @intent: {"entity": "UnstableTestRunOnset", "action": "withhold on scattered", "behavior": "failures at runs 3 11 19 26 render a withheld line saying the failures are not a single trailing block with no compare href", "layer": "request"}
+    it "says the failures are not a single trailing block when they are scattered" do
+      outcomes = Array.new(26) { "passed" }
+      [2, 10, 18, 25].each { |index| outcomes[index] = "failed" }
+      repository = repository_with(outcomes)
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(onset_line?).to be(true)
+      expect(onset_line).to have_text("not a single trailing block", normalize_ws: true)
+      expect(onset_hrefs.join).not_to include("/compare/")
+    end
+
+    # Criterion 3 — DIRECT FLAKE EVIDENCE: the same commit both passed and failed this test in this
+    # window. No candidate range exists between two runs of one commit, and the line says what the
+    # evidence is rather than offering an onset it just disproved.
+    # @intent: {"entity": "UnstableTestRunOnset", "action": "withhold on same commit", "behavior": "the same sha ingested twice, passed then failed, renders a withheld line naming the flake evidence with no compare href", "layer": "request"}
+    it "withholds with the same-commit reason when one sha both passed and failed" do
+      repository = create_repository(user: @user, github_full_name: "acme/same-sha")
+      ingest(repository, [example_spec(name: flaky, outcome: "passed")],
+             commit_sha: "aabbccddeeff", at: 2.days.ago)
+      ingest(repository, [example_spec(name: flaky, outcome: "failed")],
+             commit_sha: "aabbccddeeff", at: 1.day.ago)
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(onset_line?).to be(true)
+      expect(onset_line).to have_text("withheld", normalize_ws: true)
+      expect(onset_line).to have_text("direct flake evidence", normalize_ws: true)
+      expect(onset_hrefs.join).not_to include("/compare/")
+    end
+
+    # Criterion 4 — THE CAP. The list kept its oldest rows, so the newest end an onset is read from
+    # is not on the page; the line refuses for the same reason the alert above it states, so the
+    # two cannot disagree about whether the cap bit. The fixture is a textbook regression two runs
+    # wide — the shape an onset would be offered for if the cap had not taken the failing end.
+    # @intent: {"entity": "UnstableTestRunOnset", "action": "withhold when capped", "behavior": "202 rows capped to the limit render a withheld onset line citing the cap, beside the cap alert", "layer": "request"}
+    it "withholds the onset, citing the cap, when the cap took the window's newest rows" do
+      repository = create_repository(user: @user, github_full_name: "acme/capped-onset")
+      %w[passed failed].each_with_index do |outcome, index|
+        specs = (1..101).map { |i| example_spec(name: flaky, outcome: outcome, line_number: i) }
+        ingest(repository, specs, commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(cap_alert?).to be(true)
+      expect(onset_line?).to be(true)
+      expect(onset_line).to have_text("withheld", normalize_ws: true)
+      expect(onset_line).to have_text("cap", normalize_ws: true)
+      expect(onset_hrefs.join).not_to include("/compare/")
+    end
+
+    # Criterion 5 — THE WINDOW OPENS INSIDE THE REGRESSION: every run that reported an outcome
+    # failed, so the last pass this window saw is none. Offered as its own answer rather than
+    # withheld, and carrying no range, because a range needs a passing run on this side of the
+    # window and there is none to range from.
+    # @intent: {"entity": "UnstableTestRunOnset", "action": "answer predates window", "behavior": "a window whose every reported row failed renders an onset line saying the onset predates this window with no compare href", "layer": "request"}
+    it "says the onset predates the window when every reported row failed" do
+      repository = repository_with(%w[failed failed failed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(onset_line?).to be(true)
+      expect(onset_line).to have_text("predates this window", normalize_ws: true)
+      expect(onset_hrefs.join).not_to include("/compare/")
+    end
+
+    # Criterion 6 — THE TABLE-DRIVEN SHAPE: one run carried this description under two examples and
+    # its rows disagreed, so no single outcome describes that run and no run-grain reading of the
+    # window stands.
+    # @intent: {"entity": "UnstableTestRunOnset", "action": "withhold on mixed run", "behavior": "a description carried twice in one run with disagreeing rows renders a withheld onset line naming the table-driven partial failure", "layer": "request"}
+    it "withholds when a run carried the description twice and its rows disagreed" do
+      repository = create_repository(user: @user, github_full_name: "acme/mixed-run")
+      ingest(repository, [example_spec(name: flaky, outcome: "passed", line_number: 1),
+                          example_spec(name: flaky, outcome: "failed", line_number: 2)],
+             commit_sha: sha_for(0), at: 2.days.ago)
+      ingest(repository, [example_spec(name: flaky, outcome: "failed", line_number: 1)],
+             commit_sha: sha_for(1), at: 1.day.ago)
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(onset_line?).to be(true)
+      expect(onset_line).to have_text("withheld", normalize_ws: true)
+      expect(onset_line).to have_text("table-driven partial failure", normalize_ws: true)
+    end
+
+    # Criterion 7 — THE COST. The line is pure: it reads rows, recorded_count and shas already on
+    # the page and composes strings, so a page whose onset line renders costs exactly the drill-in's
+    # own single read of its grain and nothing for the line. And a page that did not ask for a test
+    # carries none of the line's bytes at all — the onset markup exists only inside the ask, which
+    # is what keeps the unasked page byte-identical to what it was.
+    # @intent: {"entity": "UnstableTestRunOnset", "action": "cost nothing", "behavior": "a page whose onset line renders still issues exactly one read of the drill-in grain, and a page without the ask carries no onset bytes", "layer": "request"}
+    it "costs no query of its own and puts no bytes on a page that did not ask" do
+      repository = repository_with(%w[passed] * 26 + %w[failed] * 4)
+
+      grain_reads = unstable_test_runs_grain_reads do
+        get repository_path(repository, unstable_test: flaky)
+      end
+
+      expect(onset_line?).to be(true)
+      expect(grain_reads.length).to eq(1)
+
+      get repository_path(repository)
+
+      expect(panel?).to be(false)
+      expect(response.body).not_to include("unstable-test-runs-onset")
+      expect(response.body).not_to include("Regression onset")
+    end
+  end
+
   # Criterion 6 — ONE added read when asked and none when not, bounded by ONE DESCRIPTION'S rows over
   # the window rather than by the suite.
   #
