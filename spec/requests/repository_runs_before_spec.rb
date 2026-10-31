@@ -117,7 +117,7 @@ RSpec.describe "Repository recent runs keyset paging", type: :request do
   end
 
   describe "composition with the other panel asks" do
-    # @intent: {"entity": "RecentRunsPanel", "action": "page one branch's series", "behavior": "runs_branch, runs and runs_before compose, the followed page holding exactly that branch's next rows, and All branches un-narrows while keeping the reader paged", "layer": "request"}
+    # @intent: {"entity": "RecentRunsPanel", "action": "page one branch's series", "behavior": "runs_branch, runs and runs_before compose, the followed page holding exactly that branch's next rows with a basis note naming the paged population rather than the newest runs, and All branches un-narrows while keeping the reader paged, its un-narrowed note unchanged", "layer": "request"}
     it "pages a narrowed series and lets All branches un-narrow without dropping the position" do
       seed_runs(55, branch: "main")
       5.times { |i| create_test_run(repository: repository, commit_sha: format("feat%04d", i),
@@ -129,6 +129,12 @@ RSpec.describe "Repository recent runs keyset paging", type: :request do
 
       expect(runs_rows.size).to eq(5)
       expect(page.find("#recent-runs")).to have_no_text("feat0004")
+      # SPGD-1991: the followed page is a paged NARROWED window — the rows are the branch's
+      # runs older than the cursor — so the basis note names that population and cannot open
+      # with the newest-runs claim the branch's own newest page carries.
+      basis = page.find("#recent-runs-basis")
+      expect(basis).to have_text("Runs CI reported from the main branch, older than the newest #{max_runs} runs, newest first.")
+      expect(basis).to have_no_text("The newest runs CI reported from")
       all_branches = page.find_link("All branches")
       expect(all_branches[:href]).not_to include("runs_branch")
       expect(all_branches[:href]).to include("runs_before=")
@@ -137,6 +143,10 @@ RSpec.describe "Repository recent runs keyset paging", type: :request do
 
       expect(runs_rows.size).to eq(5)
       expect(page.find("#recent-runs-window")).to have_text("Runs older than the newest #{max_runs} runs.")
+      # SPGD-1991: paging alone leaves the un-narrowed note untouched — the pooled history is
+      # interleaved on every page of it, the cursor only moves where the page sits.
+      expect(page.find("#recent-runs-basis"))
+        .to have_text("One history across every branch CI reports from, interleaved, newest first")
     end
 
     # @intent: {"entity": "RecentRunsPanel", "action": "clear the asks from a paged page", "behavior": "Newest runs keeps the carried widening and drops only the cursor, Back to the newest 10 drops both and lands on the default newest page, and a Branch cell narrows to its own branch at its newest page with no cursor bytes", "layer": "request"}
