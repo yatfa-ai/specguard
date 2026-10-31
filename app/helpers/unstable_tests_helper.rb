@@ -331,10 +331,10 @@ module UnstableTestsHelper
     return unstable_test_runs_capped_reading_sentence if unstable_test_runs_capped?(sequence)
 
     "Read down the sequence rather than across the counts. Failures bunched at the END of this " \
-      "list — its newest runs — are a regression, and the commit to look at is the one on the " \
-      "first failing row after the last row that passed; failures scattered through the list are " \
-      "flakiness, where there is no culprit commit to find and the work is quarantine or shared " \
-      "state."
+      "list — its newest runs — are a regression, and the line above the table names the last run " \
+      "that passed and the first that failed when this sequence's shape supports one, with the " \
+      "reason it withholds when it does not; failures scattered through the list are flakiness, " \
+      "where there is no culprit commit to find and the work is quarantine or shared state."
   end
 
   # The reading rule with the regression branch withheld, for a list the cap stopped short of the
@@ -417,6 +417,76 @@ module UnstableTestsHelper
       "the window it stops. For the other end of the same sequence, read `unstable_test` over " \
       "`GET /api/v1/repository`: its window runs newest first, so its cap sheds the oldest rows and " \
       "keeps the ones missing here."
+  end
+
+  # == The onset line's prose
+  #
+  # The two computed answers and the withhold reasons — `UnstableTestRunOnset` decides WHICH answer
+  # this window earns and serves keys; these methods are the sentences. They live here and not in
+  # the presenter for the reason every other caption of this panel lives here: a sentence is a
+  # claim, and the claims of one panel are kept in one place so they cannot drift apart. The
+  # offered-onset line itself is composed in the partial, because its two shas and its compare
+  # range are links rather than words — but its framing words and its caveat are prose, and the
+  # caveat is kept here beside the reasons for the same drift argument.
+
+  # Every run that said anything said failed — so the last pass this window saw is none, and any
+  # onset this test has predates the window. An answer, not a refusal: it tells the reader to look
+  # further back, which is more than any withhold reason could. No compare range rides it, because
+  # a range needs a passing run on this side of the window and there is none to range from.
+  def unstable_test_runs_onset_since_window_start_sentence
+    "Regression onset predates this window: every run here that reported an outcome failed, so " \
+      "the last pass this window saw is none. No compare range is offered — a range needs a " \
+      "passing run on this side of the window, and there is none to range from."
+  end
+
+  # WHY the reading rule refused this window, one sentence per arm — never a silent absence. The
+  # keys are `UnstableTestRunOnset::REASONS`; the case falls through to an explicit error rather
+  # than to empty prose, so an arm added to the presenter without a sentence here fails loudly at
+  # render time instead of quietly rendering no line at all.
+  #
+  # The arms are worded to send the reader somewhere, and that somewhere differs: the cap arm
+  # points at the alert above it, the mixed arm names the table-driven shape, the same-commit arm
+  # names the flake evidence, and the scattered arm names the flakiness shape the reading sentence
+  # describes — including its "not a single trailing block" wording, which is the phrase a reader
+  # arriving from that sentence is matching against.
+  def unstable_test_runs_onset_withheld_sentence(reason)
+    case reason
+    when :capped
+      "The onset is withheld: the cap kept this window's oldest rows (see the alert above), so " \
+        "the newest end an onset is read from is not on the page."
+    when :mixed_run
+      "The onset is withheld: at least one run carried this description under more than one " \
+        "example and its rows did not agree, so no single outcome describes that run — a " \
+        "table-driven partial failure, not one test that flipped."
+    when :same_commit
+      "The onset is withheld: the same commit appears with both a passed and a failed row " \
+        "somewhere in this window — direct flake evidence, so there is no candidate range to name."
+    when :nothing_reported
+      "No onset is offered: no run in this window reported an outcome for this description."
+    when :newest_not_failed
+      "No onset is offered: the newest run that reported an outcome passed, so this window does " \
+        "not end in a failure to trace back."
+    when :scattered
+      "No onset is offered: the failures in this window are not a single trailing block — they " \
+        "are scattered across it, which is the flakiness shape. There is no culprit commit to " \
+        "find, and the work is quarantine or shared state."
+    when :ambiguous_boundary
+      "No onset is offered: the pass→fail boundary is not cleanly observed — a run at the " \
+        "boundary reported nothing, or one of the two runs around the flip carries rows that did " \
+        "not all agree."
+    else
+      raise ArgumentError, "no onset withhold sentence for #{reason.inspect}"
+    end
+  end
+
+  # The linear-history caveat the offered line carries beside its compare range — the one hedge
+  # `Repository#github_compare_url`'s contract demands of every caller, stated here so the claim
+  # the line makes stays as narrow as the evidence behind it: two observed runs, a candidate set
+  # between them, and a range that is a linear history only on a branch that has not been rewritten.
+  def unstable_test_runs_onset_range_caveat
+    "Both ends are runs this window observed — a candidate set between them, never a verdict on " \
+      "any one commit — and on a branch that has been rebased or force-pushed the range is not a " \
+      "linear history."
   end
 
   # Rows this window recorded under the description that said NOTHING about how it ended, counted

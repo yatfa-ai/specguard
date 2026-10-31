@@ -65,6 +65,68 @@
             links against its own run's commit, so two rows pointing at two different files can both
             be right.
           <% end %>
+          <%# THE ONSET LINE — the reading rule above, computed. The basis note has always told the
+              reader to find "the first failing row after the last row that passed"; until now
+              nothing did, and the scan over up to 200 rows plus the GitHub range were the reader's
+              own work. `UnstableTestRunOnset` mechanizes exactly that reading over the rows already
+              loaded — and nothing more: where the shape supports the two runs it names them, where
+              it does not it says WHICH arm of the rule refused, and the line renders for every
+              answer rather than only for the flattering one, because an onset this panel refuses
+              silently is the same full-looking absence the cap alert exists to prevent.
+
+              THE CLAIM IS NARROW ON PURPOSE. Two observed runs: one whose rows all passed, the next
+              whose rows all failed. The compare range is a candidate set between them — never "this
+              commit broke it" — and the caveat beside it names the linear-history hedge, because a
+              rebased or force-pushed branch makes the range between two runs not a linear history
+              at all. `Repository#github_compare_url` documents that discipline as its own contract;
+              this is the one surface that satisfies it.
+
+              PURE. The presenter reads rows, `recorded_count` and shas already on the page and
+              composes strings, so this line adds no query — the grain and budget pins in
+              spec/requests/repository_unstable_test_runs_spec.rb hold unchanged — and it renders
+              only here, inside the `rows.any?` ask, so a page without the ask is byte-identical to
+              what it was. %>
+          <% onset = UnstableTestRunOnset.for(@unstable_test_runs) %>
+          <% if onset.failing_since_window_start? %>
+            <%= render UI::AlertComponent.new(tone: :info, id: "unstable-test-runs-onset", class: "mb-3") do %>
+              <p class="mt-1"><%= unstable_test_runs_onset_since_window_start_sentence %></p>
+            <% end %>
+          <% elsif onset.withheld? %>
+            <%= render UI::AlertComponent.new(tone: :neutral, id: "unstable-test-runs-onset", class: "mb-3") do %>
+              <p class="mt-1"><%= unstable_test_runs_onset_withheld_sentence(onset.reason) %></p>
+            <% end %>
+          <% elsif onset.onset? %>
+            <%# The same pairing the Commit cell of every row keeps — the sha out to GitHub, "read
+                run" back into the page's own run anchor — one pair per boundary run, then the
+                compare range beside them, shown only when the two shas differ (they always do when
+                the onset is offered — a shared sha with both outcomes is the same-commit withhold —
+                but the guard is the view's sentence to make, so it is made here). %>
+            <%= render UI::AlertComponent.new(tone: :info, id: "unstable-test-runs-onset", class: "mb-3") do %>
+              <p class="mt-1">
+                Regression onset: passed in
+                <%= link_to onset.last_pass_row.commit_sha.first(7),
+                            @repository.github_commit_url(onset.last_pass_row.commit_sha),
+                            class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
+                <%= link_to "read run",
+                            drill_down_path(@repository, commit_sha: onset.last_pass_row.commit_sha, anchor: "summary"),
+                            class: "rc-link" %>,
+                first failed in
+                <%= link_to onset.first_fail_row.commit_sha.first(7),
+                            @repository.github_commit_url(onset.first_fail_row.commit_sha),
+                            class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
+                <%= link_to "read run",
+                            drill_down_path(@repository, commit_sha: onset.first_fail_row.commit_sha, anchor: "summary"),
+                            class: "rc-link" %>.
+                <% if onset.last_pass_row.commit_sha != onset.first_fail_row.commit_sha %>
+                  <%= link_to "Commits between these two runs",
+                              @repository.github_compare_url(onset.last_pass_row.commit_sha, onset.first_fail_row.commit_sha),
+                              class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
+                  is where to look.
+                <% end %>
+                <%= unstable_test_runs_onset_range_caveat %>
+              </p>
+            <% end %>
+          <% end %>
           <%= render UI::TableComponent.new(
                 columns: ["Commit", "Definition site", "Branch", "Ingested", { label: "Duration", end: true }, "Outcome"],
                 describedby: "unstable-test-runs-basis", sortable: true) do %>
