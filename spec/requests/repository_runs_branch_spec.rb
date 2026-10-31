@@ -224,6 +224,23 @@ RSpec.describe "Repository recent runs branch narrowing", type: :request do
     end
   end
 
+  describe "the basis note" do
+    # SPGD-1991: the narrowed branch of `#recent-runs-basis` claims these rows are the branch's
+    # newest runs — true on the narrowing's own newest page, false the moment a `runs_before=`
+    # cursor is carried into the same ask, where the rows are the runs older than the cursor.
+    # The un-paged sentence is pinned here; the paged shape is pinned where the cursor lives
+    # (repository_runs_before_spec.rb, the composition example).
+    # @intent: {"entity": "RecentRunsPanel", "action": "say the narrowed basis", "behavior": "a narrowed un-paged panel's basis note opens with The newest runs CI reported from the main branch, newest first, naming one branch's series rather than the pooled history", "layer": "request"}
+    it "names the branch's newest runs on the narrowing's own newest page" do
+      3.times { |i| seed_run(commit_sha: format("bas%04d", i), branch: "main", created_at: (i + 1).hours.ago) }
+
+      get repository_path(repository, runs_branch: "main")
+
+      expect(page.find("#recent-runs-basis"))
+        .to have_text("The newest runs CI reported from the main branch, newest first.")
+    end
+  end
+
   describe "the Delete control on a narrowed panel" do
     # @intent: {"entity": "RecentRunsPanel", "action": "carry the narrowing in the delete form", "behavior": "a narrowed panel's Delete forms each carry a hidden runs_branch field with the asked value, and the default panel's forms carry none", "layer": "request"}
     it "renders the narrowing in the Delete form only when the panel was narrowed" do

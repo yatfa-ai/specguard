@@ -6,8 +6,23 @@
             <%# Narrowed (`?runs_branch=`, SPGD-1922): the rows are one branch's series, and the
                 all-branches wording would now be false in both halves — these rows are not
                 interleaved, and the difference between two of their test counts is closer to a
-                change than it is across branches, but still not one unless the shard counts match. %>
+                change than it is across branches, but still not one unless the shard counts match.
+                (SPGD-1991) The first sentence is cursor-shaped: on a paged narrowed page
+                (`?runs_before=`, SPGD-1984) the rows listed are precisely the runs OLDER than the
+                cursor, so "newest" would name a population this window deliberately does not
+                hold. There the sentence switches to the caption's phrase family — runs older
+                than the newest N, with N the newest page's size the caption already publishes.
+                Every page this panel itself links to sits strictly beyond that newest page, so
+                there N is exact; a hand-typed cursor can land mid-window, where N names the
+                newest page rather than the exact rank — the caption's comment below owns that
+                caveat, and the sentence reuses its N expression verbatim so the two can never
+                disagree. Without a cursor no ask changed the population, and the branch's
+                newest page IS the newest runs, so the original sentence stands byte-identical. %>
+            <% if @runs_before_request %>
+            Runs CI reported from the <%= @runs_branch_request %> branch, older than the newest <%= number_with_delimiter(@runs_request || RequestedRunsParam::DEFAULT_RUNS) %> runs, newest first.
+            <% else %>
             The newest runs CI reported from the <%= @runs_branch_request %> branch, newest first.
+            <% end %>
             This is one branch's series and not the repository's history: the runs every other
             branch holds are deliberately not pooled into it. It is still not a growth measure
             unless the runs' shard counts match — a run whose shards never all arrived reads at a
