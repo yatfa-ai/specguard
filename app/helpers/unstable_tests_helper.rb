@@ -539,9 +539,9 @@ module UnstableTestsHelper
       "The step-up reading is withheld: the cap kept this window's oldest rows (see the alert " \
         "above), so the newest end the pace is read from is not on the page."
     when :too_few_timed_runs
-      "No step is offered: fewer than three runs of this window timed this description, so there " \
-        "is no pace to step up from — a single interval between two runs cannot be told apart " \
-        "from the test simply being that slow."
+      "No step is offered: fewer than #{UnstableTestRunDurationStep::MIN_TIMED_RUNS} runs of " \
+        "this window timed this description, so there is no pace to step up from — one " \
+        "interval, or none, cannot be told apart from the test simply being that slow."
     when :no_rise
       "No step is offered: no consecutive pair of timed runs rose, so the duration never stepped " \
         "up anywhere in this window."

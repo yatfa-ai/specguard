@@ -22,11 +22,16 @@ require "rails_helper"
 # suite_size_trajectory` — the direction the "Suite growth" chart is plotted in and the scope
 # sentence on the page states). "Newest" means the LAST timed run under that orientation. A
 # fixture in the other orientation would test a window this presenter is never rendered beside.
+#
+# The stand-ins carry the STEP prefix rather than the sibling onset spec's bare `Run` /
+# `Observation`, and the reason is a Ruby scoping fact rather than style: a constant assigned
+# inside a `describe` block lands on the file's top-level namespace, so a second same-named pair
+# would redefine the sibling's fixtures mid-suite and warn while doing it.
 RSpec.describe UnstableTestRunDurationStep do
-  Run = Struct.new(:id, :commit_sha, :branch, :created_at, keyword_init: true)
-  Observation = Struct.new(:test_run_id, :outcome, :duration_seconds, :spec_file_path,
-                           :line_number, :unstable_test_recorded_count,
-                           :unstable_test_reported_outcome_count, keyword_init: true)
+  StepRun = Struct.new(:id, :commit_sha, :branch, :created_at, keyword_init: true)
+  StepObservation = Struct.new(:test_run_id, :outcome, :duration_seconds, :spec_file_path,
+                               :line_number, :unstable_test_recorded_count,
+                               :unstable_test_reported_outcome_count, keyword_init: true)
 
   def sha_for(index) = "#{format("%02d", index)}c0ffee0000"
 
@@ -40,14 +45,14 @@ RSpec.describe UnstableTestRunDurationStep do
   def sequence_for(durations_per_run, shas: nil, recorded_count: nil)
     shas ||= durations_per_run.each_index.map { |index| sha_for(index) }
     runs = durations_per_run.each_index.map do |index|
-      Run.new(id: index + 1, commit_sha: shas[index], branch: "main", created_at: Time.current)
+      StepRun.new(id: index + 1, commit_sha: shas[index], branch: "main", created_at: Time.current)
     end
     total = durations_per_run.sum { |per_run| per_run.is_a?(Array) ? per_run.size : 1 }
 
     observations = runs.each_with_index.flat_map do |run, index|
       durations = durations_per_run[index].is_a?(Array) ? durations_per_run[index] : [durations_per_run[index]]
       durations.map do |duration|
-        Observation.new(test_run_id: run.id, outcome: "passed", duration_seconds: duration,
+        StepObservation.new(test_run_id: run.id, outcome: "passed", duration_seconds: duration,
                         spec_file_path: "spec/models/invoice_spec.rb", line_number: 1,
                         unstable_test_recorded_count: recorded_count || total,
                         unstable_test_reported_outcome_count: total)
