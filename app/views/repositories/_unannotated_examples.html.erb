@@ -7,6 +7,13 @@
         an API key — a route off the product, for the reader the product had just handed a worklist
         to.
 
+        An area picked from the ranking then had its own gap, the same one one rung up had: the
+        worklist below is a capped hundred ordered file-navigably, so a file whose rows fall past
+        the hundredth was named nowhere on the page. The "Files in this area holding unannotated
+        tests" table at the top of this panel is that rung — every row a `?spec_file=` away from a
+        worklist that starts at that file's own rows — and it renders only for a directory ask,
+        the only ask it means anything under.
+
         SPGD-711 then corrected what may be said ABOUT these rows without changing which rows they
         are. Every example here lacks an authored `@intent` — exact, and the same predicate the
         Overview subtracts. Most of them SpecGuard nonetheless READS, from the description the client
@@ -49,6 +56,89 @@
           </p>
         <% end %>
         <% if @unannotated_examples.rows.any? %>
+          <% if @unannotated_files %>
+            <%# == The files of this area that hold the work
+                    The rung between the by-area ranking above and the worklist below, and the one
+                    the worklist's own cap kept out of reach: a capped hundred ordered
+                    file-navigably names the files whose rows fit on the page and nowhere else, so
+                    an area carrying more debt than the cap was a reader who already knew the path
+                    away from finding the rest of its work. Each row here is a `?spec_file=` away
+                    from a worklist that starts at that file's own rows.
+
+                    Rendered only when the worklist below has rows — which is also why there is no
+                    empty state here: a row on the worklist is an unannotated example in the area,
+                    so at least one of its files carries debt and this table cannot have come back
+                    empty. Zero-debt files are omitted by the read's HAVING, on the argument its
+                    comment holds — this is a worklist of work, not an inventory of the area.
+
+                    Operands only, no verdict, like every list on this page. %>
+            <% worklist_truncated = @unannotated_examples.recorded_count > @unannotated_examples.rows.size %>
+            <%= render UI::NoteComponent.new(summary: "How to read this", id: "unannotated-files-basis") do %>
+              <span class="font-mono text-app-content-secondary"><%= @unannotated_files.spec_directory %></span>
+              —
+              <% if @unannotated_files.truncated? %>
+                The <%= number_with_delimiter(@unannotated_files.rows.size) %> files holding the
+                most unannotated tests, of the
+                <%= number_with_delimiter(@unannotated_files.file_count) %> in this area that hold
+                any — most unreadable tests first, then most unannotated, the same ranking the
+                by-area table above uses.
+              <% else %>
+                All <%= number_with_delimiter(@unannotated_files.file_count) %>
+                <%= "spec file".pluralize(@unannotated_files.file_count) %> in this area that hold
+                at least one unannotated test — most unreadable tests first, then most unannotated,
+                the same ranking the by-area table above uses.
+              <% end %>
+              A file with none is not listed: this is where this area's work sits, not an inventory
+              of it — “Spec files in this directory”, open on the same ask, names what the run
+              recorded there.
+              Operands, never a percentage: a file at 40 of 40 unannotated is equally a file nobody
+              has annotated yet and a file of generated specs nobody intends to, and nothing on
+              this page decides which.
+              <% if worklist_truncated %>
+                <%# Which of the files LISTED HERE the worklist's hundred rows actually carry —
+                    the overlap, not the count of files on the page: "reaches 100" next to a
+                    ten-row table would be arithmetic without a subject. A listed file outside
+                    the overlap is the whole reason this rung exists, so the sentence ends by
+                    saying where its rows are. %>
+                <% worklist_paths = @unannotated_examples.rows.map(&:spec_file_path) %>
+                <% reached = @unannotated_files.rows.count { |file| worklist_paths.include?(file.path) } %>
+                The worklist below is capped at
+                <%= number_with_delimiter(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT) %> rows and
+                carries the tests of <%= number_with_delimiter(reached) %> of these
+                <%= number_with_delimiter(@unannotated_files.rows.size) %>
+                <%= "file".pluralize(@unannotated_files.rows.size) %> — a file whose tests fall
+                past that cap is still listed here, and its link opens a worklist that starts at
+                its own rows.
+              <% end %>
+              With a <code>?layer=</code> ask on the URL these counts ignore it, exactly as the
+              worklist below and the by-area ranking above do.
+              Counted off the per-example rows this run reported, which is a different population
+              from the suite size on the Summary at the top of this page and may legitimately
+              differ from it.
+            <% end %>
+            <%= render UI::TableComponent.new(
+                  columns: ["Spec file", { label: "Unannotated", end: true }, { label: "Unreadable", end: true },
+                            { label: "Recorded", end: true }],
+                  describedby: "unannotated-files-basis", sortable: true, table_id: "unannotated-files") do %>
+              <% @unannotated_files.rows.each do |file| %>
+                <tr>
+                  <td class="font-mono text-xs [overflow-wrap:anywhere]">
+                    <%# The link carries BOTH asks explicitly, the resolved value from the row's
+                        own panel object rather than the carried request ivar — the rule the
+                        area-files table states for the same gesture. %>
+                    <%= link_to file.path,
+                                drill_down_path(@repository, spec_file: file.path,
+                                                spec_directory: @unannotated_files.spec_directory,
+                                                anchor: "unannotated-examples"),
+                                class: "rc-link" %>
+                  </td>
+                  <td class="num mute" data-sort="<%= file.unannotated_count %>"><%= number_with_delimiter(file.unannotated_count) %></td>
+                  <td class="num" data-sort="<%= file.unreadable_count %>"><%= number_with_delimiter(file.unreadable_count) %></td>
+                  <td class="num mute" data-sort="<%= file.recorded_count %>"><%= number_with_delimiter(file.recorded_count) %></td>
+                </tr>
+              <% end %>
+            <% end %>
+          <% end %>
           <% truncated = @unannotated_examples.recorded_count > @unannotated_examples.rows.size %>
           <% derived_on_page = @unannotated_examples.rows.count { |observation| observation.derived_intent } %>
           <% derived_past_cap = @unannotated_examples.derived_count - derived_on_page %>

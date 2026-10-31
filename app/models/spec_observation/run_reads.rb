@@ -1,10 +1,11 @@
 # frozen_string_literal: true
 
-# THE ONE-RUN READS OF `SpecObservation`, MOVED OUT WHOLE — the thirteen class methods that answer
+# THE ONE-RUN READS OF `SpecObservation`, MOVED OUT WHOLE — the fourteen class methods that answer
 # a question about ONE run's rows and nothing else: `slowest_in`, `in_declared_layer`, `coverage_in`,
 # `file_durations_in`, `in_file`, `with_description`, `unannotated_in`, `unannotated_directories_in`,
-# `reading_counts_in`, `directory_durations_in`, `files_in_directory`, `repeated_descriptions_in`
-# and `description_presence_in`. `SpecObservation` `extend`s this module, so every caller keeps
+# `unannotated_files_in`, `reading_counts_in`, `directory_durations_in`, `files_in_directory`,
+# `repeated_descriptions_in` and `description_presence_in`. `SpecObservation` `extend`s this module,
+# so every caller keeps
 # spelling them `SpecObservation.<method>` and the receiver is still the model class (`where`,
 # `sanitize_sql_array`, `connection` and the constants resolve as before).
 #
@@ -19,7 +20,8 @@
 # unqualified `SLOWEST_LIMIT`, `HEAVIEST_FILES_LIMIT`, `HEAVIEST_DIRECTORIES_LIMIT`,
 # `FILE_EXAMPLES_LIMIT`, `SPEC_DIRECTORY_FILES_LIMIT`, `COVERAGE_COUNTS`, `REPEATED_DESCRIPTIONS_LIMIT`,
 # `REPEATED_DESCRIPTION_EXAMPLES_LIMIT`, `UNANNOTATED_EXAMPLES_LIMIT`, `UNANNOTATED_DIRECTORIES_LIMIT`,
-# `UNANNOTATED_POPULATION_COUNTS`, `FILE_POPULATION_COUNTS`, `DESCRIPTION_POPULATION_COUNTS`,
+# `UNANNOTATED_FILES_LIMIT`, `UNANNOTATED_POPULATION_COUNTS`, `FILE_POPULATION_COUNTS`,
+# `DESCRIPTION_POPULATION_COUNTS`,
 # `READING_COUNTS`, `READINGS`, `READING_EXPRESSION` and `DIRECTORY_EXPRESSION` resolve exactly as
 # they did, and a `stub_const("SpecObservation::...")` in a spec still bites because the lookup
 # happens at call time. Some moved bodies also call `declared_layer_predicate`,
@@ -571,6 +573,107 @@ class SpecObservation < ApplicationRecord
                Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
         .limit(limit)
         .pluck(Arel.sql(DIRECTORY_EXPRESSION),
+               Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated')"),
+               Arel.sql("COUNT(*)"),
+               Arel.sql("COUNT(*) OVER ()"),
+               *READINGS.map { |reading| Arel.sql(READING_COUNTS[reading]) })
+    end
+
+    # WHERE ONE AREA'S ANNOTATION DEBT SITS, rolled up by spec file — the rung between
+    # {.unannotated_directories_in} above and {.unannotated_in} below, and the one the worklist's
+    # own cap kept out of reach.
+    #
+    # The worklist orders FILE-NAVIGABLY and is capped at {UNANNOTATED_EXAMPLES_LIMIT} rows; the
+    # area ranking above it names the areas and `?spec_directory=` narrows the worklist to one of
+    # them. What neither does is name the files of that area — SPGD-622 closed this gap one rung up
+    # for areas, and a reader who picked one still knew no more about its files than they did about
+    # the run's areas before that read existed. The narrowing that WOULD have shown them,
+    # `?spec_file=`, is a question about a file you ALREADY KNOW — which is exactly what a reader
+    # working down an area's debt does not have. This read is what tells them, so a file whose rows
+    # fall past the worklist's cap is still named, still one link away, and its link opens a
+    # worklist that starts at its own rows.
+    #
+    # == It is {.unannotated_directories_in} one grain down, deliberately
+    #
+    # Same open WHERE at the run, same `COUNT(*) FILTER (WHERE status = 'unannotated')` aggregate,
+    # same three-term ordering, same `COUNT(*) OVER ()` disclosure — grouped on `spec_file_path`
+    # and narrowed on `DIRECTORY_EXPRESSION = ?` instead. The narrow is the predicate
+    # {.files_in_directory} ships — the IMMEDIATE PARENT compared for EQUALITY, never a prefix
+    # `LIKE` — and it is taken through `DIRECTORY_EXPRESSION` rather than a hand-copy of it, for
+    # the reason that constant's own comment gives: the area a link names must be computed by the
+    # same expression the answering read filters on, or a row in the ranking opens an empty panel.
+    #
+    # == `HAVING unannotated > 0`, and why a file with no debt is OMITTED where an area is a row
+    #
+    # The area ranking keeps a fully-annotated area as a row carrying a zero, and its comment calls
+    # that a decision rather than a leak; this read drops the equivalent file. Both are right, and
+    # the difference is the question each answers. The area ranking surveys where a run's debt
+    # STANDS — "this area has none" is a fact about the survey and `directory_count` has to cover
+    # the run's every area. This read is a worklist of work within one area: a file every one of
+    # whose examples carries an `@intent` has nothing on it to annotate, so listing it at zero
+    # would pad a to-do list with rows that cannot be worked. What is preserved instead is the
+    # disclosure: `COUNT(*) OVER ()` is evaluated after the `HAVING`, so `file_count` counts the
+    # files CARRYING DEBT — not the area's every file, which is what `.files_in_directory`'s window
+    # of the same shape counts over the same grain. The two windows share a construct and not a
+    # population, and neither may be read as the other.
+    #
+    # == The predicate is spelled VERBATIM, exactly as the area ranking's is
+    #
+    # `COUNT(*) FILTER (WHERE status = 'unannotated')`, never `where.not(status: 'annotated')` and
+    # never `!= 'annotated'`: the negated form selects the same rows today and would stop doing so
+    # the moment a third status existed — and would stop by silently ADOPTING it into a file list
+    # captioned "unannotated" rather than by going red. {READINGS} rides the same rule one column
+    # over: {READING_COUNTS} is reused whole rather than retyped, so a file's readings and the
+    # area's readings one rung up can never disagree about what a reading is.
+    #
+    # == The ordering: the DARK files first, the debt second, the path last
+    #
+    # The area ranking's three terms exactly — {READING_COUNTS['unreadable']} `DESC`, the
+    # unannotated `FILTER` count `DESC`, the path `ASC` — and for the same reason. A ten-row list
+    # led by debt on an area that has never annotated anything is a ranking by file SIZE, and the
+    # handful of rows SpecGuard genuinely cannot read never surface; led by unreadable count, the
+    # ten rows are the ten files worth opening, and debt still orders every file that ties at zero
+    # unreadable. The path comes last and is a TOTAL tiebreak, so two identical asks return the same
+    # page — which the cap makes load-bearing rather than tidy, the argument
+    # {.unannotated_directories_in} states for its own third term. No `NULLS LAST` and none wanted:
+    # `COUNT` returns 0, so unlike the duration reads there is no null-ranked row to keep off the head.
+    #
+    # == Query cost
+    #
+    # One grouped aggregate over ONE AREA's rows of ONE run, issued only when the parameter was
+    # sent — the narrow is {.files_in_directory}'s own, an EXPRESSION predicate that buys no index
+    # and decides nothing about the access path: `where(test_run_id:)` is served by
+    # `index_spec_observations_on_test_run_id` and the aggregation sits on top of that scan either
+    # way. There is deliberately no `(test_run_id, status)` index, for the reason both sibling
+    # reads state: `status` is two values over a whole table, which is the shape an index serves
+    # worst. No `layer:` parameter, either — the worklist and the area ranking narrow on nothing
+    # declared, and a rung between them does not invent the narrowing they both decline.
+    #
+    # == Four counts per file, from ONE grouped pass
+    #
+    # `authored`, `derived` and `unreadable` ride back beside the `unannotated` and `recorded`
+    # totals, all as FILTERed aggregates over the same open WHERE — so no column can describe a
+    # different population from the others, and `unannotated_count` stays its own counted column
+    # rather than being recomputed as `derived + unreadable`: it is the figure that reconciles
+    # against `total_specs - annotated_specs`, the reason {.unannotated_directories_in} keeps it.
+    #
+    # The tuple is the area ranking's one grain down —
+    # `[spec_file_path, unannotated, recorded, file_count, authored, derived, unreadable]` — with
+    # the window count at index 3 where `DIRECTORY_COUNT_INDEX` sits on the sibling, a shape
+    # `UnannotatedFiles::FILE_COUNT_INDEX` states rather than a positional habit.
+    #
+    # @return [Array<Array>] `[spec_file_path, unannotated_count, recorded_count, file_count,
+    #   authored_count, derived_count, unreadable_count]` per file carrying debt, dark files first.
+    def unannotated_files_in(test_run, spec_directory:, limit: UNANNOTATED_FILES_LIMIT)
+      where(test_run_id: test_run.id)
+        .where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", spec_directory]))
+        .group(:spec_file_path)
+        .having(Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated') > 0"))
+        .order(Arel.sql("#{READING_COUNTS['unreadable']} DESC"),
+               Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated') DESC"),
+               Arel.sql("spec_file_path ASC"))
+        .limit(limit)
+        .pluck(Arel.sql("spec_file_path"),
                Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated')"),
                Arel.sql("COUNT(*)"),
                Arel.sql("COUNT(*) OVER ()"),

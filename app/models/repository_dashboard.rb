@@ -969,6 +969,34 @@ class RepositoryDashboard
       @unannotated_examples = UnannotatedExamples.for(@latest_test_run, spec_file: @spec_file_request,
                                                                        spec_directory: @spec_directory_request)
     end
+    # THE MISSING RUNG OF THAT LADDER: not which AREAS carry the debt but which FILES of the one
+    # area the reader picked hold it. The worklist above is a capped hundred ordered
+    # file-navigably, so an area carrying more debt than the cap holds was named nowhere — its
+    # past-the-cap files were reachable only by a reader who already knew the path, which is the
+    # same dead end SPGD-622 closed one rung up for areas. Each row here is a `?spec_file=` away
+    # from a worklist that starts at that file's own rows, so a file whose tests fall past the cap
+    # is still named and still one link away.
+    #
+    # Guarded on an AREA being asked and NO FILE being asked, and on nothing else. The gate is the
+    # panel's, not the read's: a file-asked page is already narrowed to exactly the rows this
+    # list would name, so the worklist IS its answer and a second list of one file would restate
+    # it; a no-ask page takes no per-example read at all, the budget rule
+    # `@unannotated_examples` carries one paragraph up. Both halves are read off the raw REQUEST
+    # ivars resolved above — `@spec_directory_request` and `@spec_file_request` — because the ask
+    # is what was made, not the rows it returned: an area this run recorded nothing for is an
+    # ordinary empty read (a stale bookmark, a typo), not a reason to skip the drill-in.
+    #
+    # Rendered only when the worklist it sits above has rows, which is also why it needs no
+    # empty state of its own: if the narrowed worklist holds a row, at least one file of the area
+    # carries debt, so this read cannot have come back empty.
+    #
+    # ONE query, over the area's rows only, capped at `SpecObservation::UNANNOTATED_FILES_LIMIT`
+    # with the file count riding back as a window — and none at all without a directory ask: see
+    # `UnannotatedFiles`. Anchored on `@latest_test_run` for the reason every drill-down above is:
+    # the area was picked out of a ranking of that run, so its files must come from that same run.
+    if @latest_test_run && @spec_directory_request && !@spec_file_request
+      @unannotated_files = UnannotatedFiles.for(@latest_test_run, @spec_directory_request)
+    end
     # The same areas, asked of TWO runs instead of one: not which area carries the time but which
     # area got bigger or smaller since the previous run ON THIS BRANCH. `@previous_test_run` above
     # is that run and is already in memory, so riding it costs nothing and keeps this panel on the

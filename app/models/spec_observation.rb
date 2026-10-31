@@ -478,6 +478,25 @@ class SpecObservation < ApplicationRecord
   # the real population — the same division of labour every capped ranking here ships.
   UNANNOTATED_DIRECTORIES_LIMIT = 10
 
+  # How many spec FILES one area's annotation-debt drill-in returns. Its own constant, by the rule
+  # every `_LIMIT` above obeys and NOT a reuse of `UNANNOTATED_DIRECTORIES_LIMIT` directly above,
+  # which is the tempting one: both are ten, both rank annotation debt, and one of them caps a
+  # ranking of the RUN's areas while this caps a ranking of ONE area's files — which is exactly why
+  # sharing it would look harmless and would not be.
+  #
+  # The populations differ by a power of the grain, the way `SPEC_DIRECTORY_FILES_LIMIT` and
+  # `FILE_EXAMPLES_LIMIT` differ one rung over: an area ranking lists every area the run touched,
+  # a file ranking lists only the files of the one area a reader already picked, and a suite that
+  # wants ten areas named has no reason to want ten files of one of them — or forty. It stays a
+  # ranking's ten rather than the fifty a LISTING of the same grain ships
+  # (`SPEC_DIRECTORY_FILES_LIMIT`): like the area ranking it answers "where is the debt
+  # concentrated", not "what does this area hold", and `file_count` beside the rows is what states
+  # the real population of files carrying debt.
+  #
+  # Named, like all of them, because the panel's caption reports the figure back to the reader and
+  # a sentence explaining a list's length must not be able to disagree with it.
+  UNANNOTATED_FILES_LIMIT = 10
+
   # HOW WELL SPECGUARD KNOWS ONE TEST — three states, and the reason this file no longer has a
   # column that answers the question.
   #

@@ -1350,7 +1350,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     describe "what the drill-in costs" do
       # `queries_against` comes from spec/support/query_capture.rb.
 
-      # @intent: {"entity": "SpecDirectoryDurations", "action": "gate drill-in reads", "behavior": "the spec_observations read count without the ask is exactly two fewer than with it, the file listing and the annotation worklist both sitting behind the directory gate", "layer": "request"}
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "gate drill-in reads", "behavior": "the spec_observations read count without the ask is exactly three fewer than with it, the file listing, the annotation worklist and the debt-file ranking all sitting behind the directory gate", "layer": "request"}
       it "costs one query, and only when an area was asked for" do
         repository = capped_area_run
 
@@ -1359,12 +1359,14 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         end
         unopened = queries_against("spec_observations") { get repository_path(repository) }
 
-        # TWO reads sit behind the `?spec_directory=` gate since SPGD-658, not one: this panel's
-        # file listing, and the per-example annotation worklist that rides the same ask. Both are
-        # narrowed to the area and neither is taken without it, which is what this example is about
-        # — the delta names how many reads the gate holds back, and it moved because a read was
-        # added behind it rather than because one escaped.
-        expect(unopened.size).to eq(opened.size - 2)
+        # THREE reads sit behind the `?spec_directory=` gate: this panel's file listing (since
+        # SPGD-658), the per-example annotation worklist that rides the same ask, and — since
+        # SPGD-1998 — the file-level annotation-debt ranking that rides the same ask with the
+        # worklist it feeds (`UnannotatedFiles.for`, gated on a directory ask and NO file ask).
+        # All three are narrowed to the area and none is taken without it, which is what this
+        # example is about — the delta names how many reads the gate holds back, and it moved
+        # because a read was added behind it rather than because one escaped.
+        expect(unopened.size).to eq(opened.size - 3)
       end
 
       # @intent: {"entity": "SpecDirectoryDurations", "action": "hold drill-in cost flat", "behavior": "the 27-file area issues the same spec_observations query count as the 3-file one, so the narrowed read is bounded by the limit rather than the area", "layer": "request"}

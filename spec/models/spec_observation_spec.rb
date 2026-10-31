@@ -3214,6 +3214,171 @@ RSpec.describe SpecObservation do
       end
     end
 
+    # The rung BELOW the debt ranking, one grain down from it and one grain up from the worklist:
+    # one area's FILES by how many of their examples carry no annotation. The read that names the
+    # files a capped worklist's rows cannot, and the one whose rows are each a `?spec_file=` away
+    # from `.unannotated_in`.
+    describe ".unannotated_files_in" do
+      # The whole claim: the files of the ASKED area carrying debt, dark first, against each file's
+      # whole population. `billing_spec.rb` holds the most debt and the most unreadable rows;
+      # `ledger_spec.rb` holds less of both AND an annotated example, so its third element is the
+      # denominator a narrowed WHERE would have collapsed into its own numerator. `audit_spec.rb`
+      # holds none at all and is OMITTED — the area ranking keeps a fully-annotated area as a row
+      # carrying zero; this read does not, because a file with nothing to annotate is not work, and
+      # the read's own comment holds both decisions. `spec/system` holds an unannotated example and
+      # is absent — the area narrow is doing work.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "one area's files are ranked by unreadable then unannotated count with each file's whole population as the denominator, a fully-annotated file omitted and another area's debt excluded", layer: "unit" }
+      it "ranks the asked area's files by debt, dark first, against each file's whole population" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/billing_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/models/billing_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "unannotated",
+                     spec_file_path: "spec/models/billing_spec.rb")
+        observe(run, duration: 0.1, line_number: 4, status: "unannotated", name: "Model#save persists the record",
+                     spec_file_path: "spec/models/billing_spec.rb")
+        observe(run, duration: 0.1, line_number: 5, status: "unannotated", name: "Invoice#total sums the line items",
+                     spec_file_path: "spec/models/billing_spec.rb")
+        observe(run, duration: 0.1, line_number: 6, status: "unannotated",
+                     spec_file_path: "spec/models/ledger_spec.rb")
+        observe(run, duration: 0.1, line_number: 7, status: "unannotated",
+                     spec_file_path: "spec/models/ledger_spec.rb")
+        observe(run, duration: 0.1, line_number: 8, status: "annotated",
+                     spec_file_path: "spec/models/ledger_spec.rb")
+        observe(run, duration: 0.1, line_number: 9, status: "annotated",
+                     spec_file_path: "spec/models/audit_spec.rb")
+        observe(run, duration: 9.0, line_number: 10, status: "unannotated",
+                     spec_file_path: "spec/system/smoke_spec.rb")
+
+        # `[path, unannotated, recorded, file_count, authored, derived, unreadable]` — the area
+        # ranking's tuple one grain down, the window count at index 3 where the sibling's
+        # `DIRECTORY_COUNT_INDEX` sits on its own. `billing_spec.rb`'s two `Model#save`-shaped
+        # names yield readings, so its derived count is 2 where its bare-"example N" rows are
+        # unreadable.
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models")).to eq(
+          [["spec/models/billing_spec.rb", 5, 5, 2, 0, 2, 3],
+           ["spec/models/ledger_spec.rb", 2, 3, 2, 1, 0, 2]]
+        )
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models").map(&:first))
+          .not_to include("spec/models/audit_spec.rb")
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models").map(&:first))
+          .not_to include("spec/system/smoke_spec.rb")
+      end
+
+      # The IMMEDIATE PARENT compared for EQUALITY, never a prefix — the fence
+      # `.files_in_directory` draws one rung over and `.unannotated_in` draws one rung down, and
+      # the one a "tidier" subtree rollup here would break a third time. The seeded run is flat, so
+      # a subdirectory has to exist for the assertion to mean anything.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file in a subdirectory of the named area is excluded, and the named subdirectory lists its own file", layer: "unit" }
+      it "excludes a SUBDIRECTORY's files, because an area is the immediate parent and not a prefix" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/models/orders/refund_spec.rb")
+
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models").map(&:first))
+          .to eq(["spec/models/order_spec.rb"])
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models/orders").map(&:first))
+          .to eq(["spec/models/orders/refund_spec.rb"])
+      end
+
+      # The debt count is compared to the literal `'unannotated'`, never `!= 'annotated'` — the
+      # rule the area ranking pins one grain up, and easier to break here, where the predicate sits
+      # inside a HAVING a reader scans last. The column is NOT NULL and
+      # `Ingest::Payload::STATUSES` is the two words, so a third status cannot be written through
+      # the app; it is written straight to the row for exactly that reason — a guard against a
+      # FUTURE vocabulary, built the only way it can be.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a non-annotated non-unannotated status counts in the file's denominator and its unreadable reading but never as debt", layer: "unit" }
+      it "counts the literal 'unannotated' rather than everything that is not 'annotated'" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "skipped",
+                     spec_file_path: "spec/models/order_spec.rb")
+
+        # The skipped row is in the DENOMINATOR — it is one of the file's examples — and is not
+        # counted as debt. `where.not(status: "annotated")` reports 2 in the numerator here. AND
+        # THE SKIPPED ROW IS `unreadable`, NOT `authored` — the same guard one column over, and
+        # the safe direction: `READING_EXPRESSION` tests `status = 'annotated'` literally too, so
+        # a status nobody has invented yet falls through to the description.
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models"))
+          .to eq([["spec/models/order_spec.rb", 1, 2, 1, 0, 0, 2]])
+      end
+
+      # The LAST tiebreak is TOTAL, so two identical asks return the same order. Three files tie on
+      # BOTH count terms — one unannotated example each, each unreadable — so neither count term
+      # orders this and the path must.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "files tying on both count terms are ordered by spec_file_path ascending so the ranking is deterministic", layer: "unit" }
+      it "breaks a tie on the spec file path, ascending" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/zebra_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/models/alpha_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "unannotated",
+                     spec_file_path: "spec/models/middle_spec.rb")
+
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models").map(&:first))
+          .to eq(["spec/models/alpha_spec.rb", "spec/models/middle_spec.rb", "spec/models/zebra_spec.rb"])
+      end
+
+      # The window discloses the population the CAP cut — and at this rung that population is the
+      # files CARRYING DEBT, not the area's every file: `COUNT(*) OVER ()` is evaluated after the
+      # `HAVING`, which is what makes it a different figure from `.files_in_directory`'s window of
+      # the same shape. The figure a caption is built from, and the reason a truncated list cannot
+      # wear the shape of a complete one.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "every capped row carries the count of files carrying debt rather than the area's whole file count", layer: "unit" }
+      it "discloses how many files carry debt, on every row, past the cap" do
+        12.times do |index|
+          observe(run, duration: 0.1, line_number: index + 1, status: "unannotated",
+                       spec_file_path: "spec/models/file_#{format('%02d', index)}_spec.rb")
+        end
+        # A fully-annotated file in the same area: counted by `.files_in_directory`'s window and
+        # not by this one.
+        observe(run, duration: 0.1, line_number: 99, status: "annotated",
+                     spec_file_path: "spec/models/fully_annotated_spec.rb")
+
+        files = described_class.unannotated_files_in(run, spec_directory: "spec/models", limit: 2)
+
+        expect(files.length).to eq(2)
+        expect(files.map { |tuple| tuple[UnannotatedFiles::FILE_COUNT_INDEX] }).to eq([12, 12])
+        expect(described_class.files_in_directory(run, "spec/models").first[4]).to eq(13)
+      end
+
+      # Bounded by `UNANNOTATED_FILES_LIMIT` — its own constant and not the area ranking's, on the
+      # rule every `_LIMIT` here obeys: the two rank different populations and one number standing
+      # for both would make that a single edit nobody meant to make.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area holding twelve debt-carrying files lists exactly UNANNOTATED_FILES_LIMIT of them", layer: "unit" }
+      it "lists no more files than its own limit, however many carry debt" do
+        12.times do |index|
+          observe(run, duration: 0.1, line_number: index + 1, status: "unannotated",
+                       spec_file_path: "spec/models/file_#{format('%02d', index)}_spec.rb")
+        end
+
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models").length)
+          .to eq(SpecObservation::UNANNOTATED_FILES_LIMIT)
+      end
+
+      # One run, never the repository's history — the same narrow every read on this endpoint
+      # takes, and the one that makes the aggregate affordable.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the file ranking covers one run's files only and not every run's", layer: "unit" }
+      it "counts one run's files rather than every run's" do
+        other = create_test_run(repository: repository, commit_sha: "b" * 40)
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(other, duration: 0.1, line_number: 2, status: "unannotated",
+                      spec_file_path: "spec/models/order_spec.rb")
+
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models"))
+          .to eq([["spec/models/order_spec.rb", 1, 1, 1, 0, 0, 1]])
+        expect(described_class.unannotated_files_in(other, spec_directory: "spec/models"))
+          .to eq([["spec/models/order_spec.rb", 1, 1, 1, 0, 0, 1]])
+      end
+
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run that recorded nothing reads no files from the debt drill-in", layer: "unit" }
+      it "reads no files for a run that recorded nothing" do
+        expect(described_class.unannotated_files_in(run, spec_directory: "spec/models")).to eq([])
+      end
+    end
+
     # The rung BETWEEN the two above: one area's files, rather than every area's total or one
     # file's examples. The read that closes area → file → example, and the one whose absence made
     # the heaviest area on the page the hardest place in the suite to look inside.
