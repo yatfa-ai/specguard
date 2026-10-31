@@ -49,10 +49,20 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # a panel-level `have_text` would pass for the wrong branch with the deciding `if` deleted.
   def basis_line = panel.find("#unannotated-examples-basis")
 
+  # The worklist's rows, and never the files table's. This panel carries TWO tables on a directory
+  # ask since the files rung landed above the worklist, and a panel-wide `tbody tr` selection would
+  # read the files table's cells as worklist rows — silently, because a path cell looks like data
+  # in either table. Excluded by the files table's OWN id (`table_id: "unannotated-files"`) rather
+  # than by position: the files table renders ABOVE the worklist, and a positional "the second
+  # table" would break the day a third arrives. The files table's own accessors are below it.
+  def worklist_rows_nodes
+    panel.all(:xpath, ".//tbody/tr[not(ancestor::table[@id='unannotated-files'])]")
+  end
+
   # One row as a reader meets it: what the test is called, where it is DEFINED, and which spec file
   # RAN it — the last being the column this worklist is ordered by.
   def rows
-    panel.all("tbody tr").map do |row|
+    worklist_rows_nodes.map do |row|
       cells = row.all("td")
 
       # `cells[1]` and not `cells.last`: SPGD-711 appended a "What SpecGuard reads" column, so the
@@ -68,7 +78,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # run together, or the sentence that says it read nothing.
   def row_readings
     # The third column; the row's drawer detail is a trailing hidden cell in the document, not a column.
-    panel.all("tbody tr").map { |row| row.all("td")[2].text.gsub(/\s+/, " ").strip }
+    worklist_rows_nodes.map { |row| row.all("td")[2].text.gsub(/\s+/, " ").strip }
   end
 
   def row_names = rows.map { |row| row[:test] }
@@ -91,7 +101,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # which branch built the row.
   # The definition site is the drawer's "Open on GitHub" action; the cell keeps the coordinate as the
   # printed line under the test's name.
-  def row_links = panel.all("tbody tr").map { |row| row.find("a", exact_text: "Open on GitHub", visible: :all) }
+  def row_links = worklist_rows_nodes.map { |row| row.find("a", exact_text: "Open on GitHub", visible: :all) }
 
   def row_hrefs = row_links.map { |link| link[:href] }
 
@@ -313,6 +323,277 @@ RSpec.describe "Repository unannotated examples", type: :request do
     end
   end
 
+  # THE RUNG BETWEEN THE TWO PANELS ABOVE THIS ONE. The by-area ranking names the areas the debt
+  # is concentrated in; the worklist above it is a capped hundred ordered file-navigably. Between
+  # them the area's files were named nowhere: an area carrying more debt than the cap holds was a
+  # reader who already knew the path away from finding the rest of its work — the same dead end
+  # SPGD-622 closed one rung up for areas. This is the file table, and the two things it has to be:
+  # a list of the area's debt-carrying files with each one a link into its own worklist, and a
+  # disclosure of how much of that list the worklist's cap actually reaches.
+  #
+  # Its examples read a SECOND table that lives inside the panel, so every worklist helper above
+  # is scoped to the worklist by the files table's own id and the helpers here are scoped to the
+  # files table by the same id — one id, both directions, and a third table would need the same
+  # treatment rather than inherit these.
+  describe "the files of the asked area that hold the debt" do
+    def files_table = Capybara.string(response.body).find("#unannotated-files")
+
+    def files_table? = Capybara.string(response.body).has_css?("#unannotated-files")
+
+    # ELEMENT-scoped, never panel-scoped: the caption's two truncation branches share most of
+    # their words, and a panel-level `have_text` would pass for the wrong branch with the
+    # deciding `if` deleted — the same rule `basis_line` above states for the worklist's caption.
+    def files_basis = panel.find("#unannotated-files-basis")
+
+    # One row as a reader meets it: the path, and its three operands in table order.
+    def file_rows
+      files_table.all("tbody tr").map do |row|
+        cells = row.all("td")
+
+        { path: cells.first.text.strip, unannotated: cells[1].text.strip,
+          unreadable: cells[2].text.strip, recorded: cells[3].text.strip }
+      end
+    end
+
+    def file_links = files_table.all("tbody tr").map { |row| row.find("a", visible: :all) }
+
+    # Built so no assertion about "this area's files" can pass by accident:
+    #
+    #   - `billing_spec.rb` holds five unannotated examples — three unreadable and two derived —
+    #     so it is the file with the most debt AND the most unreadable rows, and its operands are
+    #     a split, not a total.
+    #   - `ledger_spec.rb` holds two unannotated examples, BOTH DERIVED, and one annotated one —
+    #     the acceptance criterion's "A" file at 2 unannotated and 0 unreadable, sitting below
+    #     billing on the unreadable term with its debt intact, and a table serving the file's
+    #     debt as its population is red on its recorded cell.
+    #   - `audit_spec.rb` is fully annotated and is OMITTED — the area ranking keeps a zero-debt
+    #     area as a row; this table does not, and the caption says so.
+    #   - `spec/requests` holds an unannotated example, so a table serving the run's debt rather
+    #     than the narrowing's is red.
+    def files_debt_run
+      repository = create_repository(user: @user)
+      ingest(repository,
+             [unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 1,
+                               name: "Order settles the balance"),
+              unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 2,
+                               name: "Refund restores the stock"),
+              unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 3,
+                               name: "Ledger closes the period"),
+              unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 4,
+                               name: "User#valid checks the handle format"),
+              unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 5,
+                               name: "Invoice#total sums the line items"),
+              unannotated_spec(file_path: "spec/models/ledger_spec.rb", line_number: 6,
+                               name: "Journal#posts records the entry"),
+              unannotated_spec(file_path: "spec/models/ledger_spec.rb", line_number: 7,
+                               name: "Ledger#locks closes the period"),
+              annotated_spec(file_path: "spec/models/ledger_spec.rb", line_number: 8),
+              annotated_spec(file_path: "spec/models/audit_spec.rb", line_number: 9),
+              unannotated_spec(file_path: "spec/requests/checkout_spec.rb", line_number: 10,
+                               name: "Checkout rejects an empty cart")])
+      repository
+    end
+
+    # AC1. The table's whole claim: which FILES of the picked area hold the debt, most unreadable
+    # first, with the three operands on every row and the zero-debt file left out.
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank area files", "behavior": "billing_spec.rb lists at 5 unannotated 3 unreadable 5 recorded, ledger_spec.rb at 2 0 3, the fully-annotated audit_spec.rb and the other area's checkout example are absent, ordered most unreadable first", "layer": "request"}
+    it "lists the area's debt-carrying files with their operands, dark first, omitting the one with none" do
+      get repository_path(files_debt_run, spec_directory: area)
+
+      expect(file_rows).to eq([
+                                { path: "spec/models/billing_spec.rb", unannotated: "5",
+                                  unreadable: "3", recorded: "5" },
+                                { path: "spec/models/ledger_spec.rb", unannotated: "2",
+                                  unreadable: "0", recorded: "3" }
+                              ])
+      expect(file_rows.map { |row| row[:path] }).not_to include("spec/models/audit_spec.rb")
+      expect(file_rows.map { |row| row[:path] }).not_to include("spec/requests/checkout_spec.rb")
+    end
+
+    # AC4, second clause. The table's Unannotated column and the worklist's recorded_count are
+    # ONE population counted twice — the read's open WHERE at the run and the area narrow is the
+    # worklist's own narrow — so an uncut table sums to it exactly. A table whose counts were a
+    # different population (files narrowed further, or the area's whole population rather than
+    # its debt) breaks the equality here without breaking either list.
+    # @intent: {"entity": "GET /repositories/:id", "action": "reconcile with worklist", "behavior": "the listed files' unannotated counts sum to 7, the figure the worklist caption states for the same area", "layer": "request"}
+    it "sums to the worklist's own recorded count for the area" do
+      get repository_path(files_debt_run, spec_directory: area)
+
+      expect(file_rows.sum { |row| row[:unannotated].to_i }).to eq(7)
+      expect(basis_line).to have_text("All 7 examples this run recorded here without an @intent",
+                                      normalize_ws: true)
+    end
+
+    # AC1, the click. Each name links into this same panel with the file ask added on top of the
+    # area ask, and lands at the anchor — the same composed-asks rule every link on the page
+    # obeys, so opening a file does not close the area it was opened from.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link file into worklist", "behavior": "each file name links to spec_directory spec/models with its own spec_file ask and the unannotated-examples fragment", "layer": "request"}
+    it "links each file into its own worklist, on the asks the panel already carries" do
+      get repository_path(files_debt_run, spec_directory: area)
+
+      hrefs = file_links.map { |link| link[:href] }
+
+      expect(hrefs.first).to include("spec_directory=#{CGI.escape(area)}")
+      expect(hrefs.first).to include("spec_file=#{CGI.escape('spec/models/billing_spec.rb')}")
+      expect(hrefs.last).to include("spec_file=#{CGI.escape('spec/models/ledger_spec.rb')}")
+      expect(hrefs).to all(end_with("#unannotated-examples"))
+    end
+
+    # The caption on a complete list: the ranking it uses, the population it names, and the
+    # operands-only rule — with the population counted off files carrying debt, so a fully
+    # annotated sibling does not pad it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state complete file list", "behavior": "the caption reads All 2 spec files in this area that hold at least one unannotated test, names the unreadable-first ranking the by-area table uses, prints no percent sign, and says a file with none is not listed", "layer": "request"}
+    it "says the list is all of the files holding debt, ranked like the area table" do
+      get repository_path(files_debt_run, spec_directory: area)
+
+      expect(files_basis).to have_text(
+        "All 2 spec files in this area that hold at least one unannotated test — most unreadable " \
+        "tests first, then most unannotated, the same ranking the by-area table above uses",
+        normalize_ws: true
+      )
+      expect(files_basis).to have_text("A file with none is not listed", normalize_ws: true)
+      expect(files_basis).to have_text("Operands, never a percentage", normalize_ws: true)
+      expect(files_table).to have_no_text("%")
+      expect(files_basis).to have_no_text("is capped at")
+    end
+
+    # AC2. THE CASE THE TABLE EXISTS FOR: an area carrying more debt than the worklist's cap
+    # holds, where a file's rows fall entirely past the hundredth and were named nowhere. The
+    # table still lists that file — it sorts to the head on its two unreadable examples, against
+    # the single-example files that fill the cap — the caption says how much of the table the
+    # worklist actually carries, and the link opens a worklist that starts at that file's own
+    # rows.
+    def capped_files_run
+      repository = create_repository(user: @user)
+      ingest(repository,
+             (1..(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT + 20)).map do |n|
+               unannotated_spec(file_path: "#{area}/aaa_#{format('%03d', n)}_spec.rb", line_number: 1,
+                                name: "Model #{n} does its thing")
+             end +
+             [unannotated_spec(file_path: "#{area}/zzz_past_cap_spec.rb", line_number: 1,
+                               name: "Report totals the quarter"),
+              unannotated_spec(file_path: "#{area}/zzz_past_cap_spec.rb", line_number: 2,
+                               name: "Report closes the books")])
+      repository
+    end
+
+    # @intent: {"entity": "GET /repositories/:id", "action": "list past-cap file", "behavior": "an area of 122 unannotated examples over 121 files still lists zzz_past_cap_spec.rb at its head, and its caption says the 100-row worklist carries the tests of 9 of these 10 files", "layer": "request"}
+    it "lists a file whose rows fall past the worklist cap, and says how far the cap reaches" do
+      get repository_path(capped_files_run, spec_directory: area)
+
+      # The worklist's own cap: 100 rows, and the past-cap file's two are not among them — they
+      # are a link away, which is what the rest of this example pair pins.
+      expect(rows.size).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(row_names).not_to include("Report totals the quarter")
+
+      expect(file_rows.size).to eq(SpecObservation::UNANNOTATED_FILES_LIMIT)
+      expect(file_rows.first).to eq(
+        { path: "#{area}/zzz_past_cap_spec.rb", unannotated: "2", unreadable: "2", recorded: "2" }
+      )
+      expect(files_basis).to have_text(
+        "The 10 files holding the most unannotated tests, of the 121 in this area that hold any",
+        normalize_ws: true
+      )
+      # 100 rows over 100 single-example aaa files: nine of the LISTED files are on the page
+      # below, and the one that is not — the subject of this example — is named in the same
+      # sentence as the way to its rows.
+      expect(files_basis).to have_text(
+        "The worklist below is capped at 100 rows and carries the tests of 9 of these 10 files — " \
+        "a file whose tests fall past that cap is still listed here, and its link opens a " \
+        "worklist that starts at its own rows",
+        normalize_ws: true
+      )
+    end
+
+    # And the click delivers: the past-the-cap file's link opens THIS panel narrowed to that
+    # file, where its rows are the whole list — the route that did not exist before the rung
+    # shipped.
+    # @intent: {"entity": "GET /repositories/:id", "action": "open past-cap worklist", "behavior": "following zzz_past_cap_spec.rb's link renders a worklist of exactly its two rows, no aaa rows", "layer": "request"}
+    it "opens a worklist holding the past-the-cap file's rows when its link is followed" do
+      repository = capped_files_run
+      get repository_path(repository, spec_directory: area)
+      get file_links.first[:href]
+
+      expect(row_names).to eq(["Report totals the quarter", "Report closes the books"])
+    end
+
+    # THE CAPTION BRANCH THE COMPLETE LIST CANNOT REACH, asserted at the same grain the two
+    # worklist examples above assert theirs: the truncated caption says the ranking AND the cap,
+    # and never the complete list's words. Kept here rather than folded into the example above so
+    # each branch of the `if` is pinned by its own example — the rule `basis_line`'s comment
+    # states for the worklist's own two branches.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose truncated file list", "behavior": "an area holding more debt-carrying files than the cap lists reads The 10 files holding the most unannotated tests, of the 12 in this area that hold any", "layer": "request"}
+    it "says how many files carry debt, not just how many it lists" do
+      repository = create_repository(user: @user)
+      ingest(repository, (1..12).flat_map do |n|
+        [unannotated_spec(file_path: "#{area}/file_#{format('%02d', n)}_spec.rb", line_number: n)]
+      end)
+
+      get repository_path(repository, spec_directory: area)
+
+      expect(files_basis).to have_text(
+        "The 10 files holding the most unannotated tests, of the 12 in this area that hold any",
+        normalize_ws: true
+      )
+    end
+
+    # AC3, first half: the table renders for a directory ask ONLY. A file-asked page is already
+    # narrowed to exactly the rows this table would name, so the worklist IS its answer and a
+    # second list of one file would restate it; a no-ask page takes no per-example read at all.
+    # Asserted as an ABSENCE of the table's own id, never of its caption — a caption that
+    # stopped rendering would satisfy a text assertion while the table stayed on the page.
+    # @intent: {"entity": "GET /repositories/:id", "action": "gate table on ask", "behavior": "a file-asked page renders no unannotated-files table and keeps its worklist rows", "layer": "request"}
+    it "renders no files table on a page asked for a file" do
+      get repository_path(files_debt_run, spec_file: "spec/models/ledger_spec.rb")
+
+      expect(files_table?).to be(false)
+      expect(row_names).to eq(["Journal#posts records the entry", "Ledger#locks closes the period"])
+    end
+
+    # AC3, second half, and the one that matters: the READ is not taken either. Matched on the
+    # read's HAVING — `COUNT(*) FILTER (WHERE status = 'unannotated') > 0`, which no other read
+    # of this table emits — so an assertion of zero cannot be satisfied by a page that simply
+    # issued a different query. The paired non-zero is what stops the zero from being vacuous:
+    # it proves the fingerprint matches when the read IS taken.
+    # @intent: {"entity": "GET /repositories/:id", "action": "gate read on ask", "behavior": "the debt-file read runs zero times on a no-ask page and on a file-asked page, and exactly once with ?spec_directory= asked", "layer": "request"}
+    it "issues the file read only on a directory-asked page" do
+      repository = files_debt_run
+      get repository_path(repository)
+
+      no_ask = queries_against("unannotated') > 0") { get repository_path(repository) }
+      file_asked = queries_against("unannotated') > 0") do
+        get repository_path(repository, spec_file: "spec/models/ledger_spec.rb")
+      end
+      # The file-asked page's absence, against the response that page is — not the one a later
+      # get replaced.
+      expect(Capybara.string(response.body).has_css?("#unannotated-files")).to be(false)
+      directory_asked = queries_against("unannotated') > 0") do
+        get repository_path(repository, spec_directory: area)
+      end
+
+      expect(no_ask).to be_empty
+      expect(file_asked).to be_empty
+      expect(directory_asked.size).to eq(1)
+      expect(files_table?).to be(true)
+    end
+
+    # The layer ask rides through every link on this page, and the debt reads narrow on nothing
+    # declared — so a layer-asked page renders these counts over the whole area. Stated on the
+    # page rather than left for a reader to discover by comparing it to the narrowed panels
+    # beside it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose layer ask ignored", "behavior": "a layer-asked directory page still renders the files table over the whole area and its caption says the counts ignore ?layer= as the worklist and area ranking do", "layer": "request"}
+    it "says the counts ignore a layer ask, as the worklist and area ranking do" do
+      get repository_path(files_debt_run, spec_directory: area, layer: "unit")
+
+      expect(files_table?).to be(true)
+      expect(files_basis).to have_text(
+        "With a ?layer= ask on the URL these counts ignore it, exactly as the worklist below and " \
+        "the by-area ranking above do",
+        normalize_ws: true
+      )
+    end
+  end
+
   # AC5, first of the two empty states. A place whose every recorded example carries an intent is the
   # state the metric exists to reach — not an error, and not missing data.
   describe "an area whose examples all carry an intent" do
@@ -503,9 +784,11 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
       # The coordinate is the printed line under each test's name, and the link to it is the one
       # control in the row's drawer — nothing beside it, so the worklist adds no second control.
-      expect(panel.all("tbody tr").map { |row| row.first("td").first(".rc-sec").text.strip })
+      # Worklist-scoped, never panel-scoped: the files table above these rows carries a link per
+      # row of its own, and this example counts the worklist's.
+      expect(worklist_rows_nodes.map { |row| row.first("td").first(".rc-sec").text.strip })
         .to eq(["#{shared_group_file}:7", "#{order_spec}:30", "#{refund_spec}:9"])
-      expect(panel.all("tbody tr a", visible: :all).size).to eq(3)
+      expect(worklist_rows_nodes.sum { |row| row.all("a", visible: :all).size }).to eq(3)
     end
 
     # BOTH LABEL BRANCHES, and this is the one that is easy to miss: `#label` is
@@ -526,8 +809,9 @@ RSpec.describe "Repository unannotated examples", type: :request do
       expect(row_names).to eq(["#{order_spec}:30"])
       expect(row_hrefs).to eq([blob("feedfacecafe0001", order_spec, 30)])
       # The fallback already IS the coordinate, so the row is not made to wear it — or link it —
-      # twice.
-      expect(panel.all("tbody tr a").size).to eq(1)
+      # twice. Worklist-scoped: the files table above it carries its own links, and they are not
+      # this row's.
+      expect(worklist_rows_nodes.sum { |row| row.all("a").size }).to eq(1)
     end
 
     # THE DEFINITION SITE, never the including file. `location_label` pairs `file_path` with
