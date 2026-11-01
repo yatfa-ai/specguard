@@ -489,6 +489,50 @@ module UnstableTestsHelper
       "linear history."
   end
 
+  # The run-by-run drill-down's two link gestures, single-sourced here on the convention
+  # `AreasOverWindowHelper#spec_directory_window_baseline_run_link` set for the window family and
+  # `#unstable_test_runs_duration_step_shown?` repeated for this panel's gates: one spelling per
+  # gesture, so the places that use it cannot drift apart in classes, targets or anchors.
+  #
+  # `#unstable_test_runs_commit_links` is the pairing itself: the sha out to GitHub — FULL sha in
+  # the href, seven characters as the label the reader scans, the `rc-ext` treatment with
+  # `target`/`rel` every outbound anchor here carries — and, one space after it, "read run" back
+  # into the page's own run anchor (`rc-link`, the Summary anchor, `drill_down_path` carrying the
+  # page's open asks with the explicit `commit_sha` winning). The GitHub link comes FIRST, because
+  # the Commit cell renders this pair as its whole content and the cell's first anchor is the
+  # GitHub one. `@repository` is the page's own instance variable, read the way the window
+  # family's link helpers do (`AreasOverWindowHelper#spec_directory_window_baseline_run_link`);
+  # both hrefs are string composition off the row's already-loaded sha, so the pair adds no
+  # query wherever it renders. Returns a SafeBuffer.
+  def unstable_test_runs_commit_links(row)
+    safe_join([
+                link_to(row.commit_sha.first(7), @repository.github_commit_url(row.commit_sha),
+                        class: "rc-ext", target: "_blank", rel: "noopener noreferrer"),
+                " ",
+                link_to("read run",
+                        drill_down_path(@repository, commit_sha: row.commit_sha, anchor: "summary"),
+                        class: "rc-link")
+              ])
+  end
+
+  # The compare range the offered lines carry beside their boundary pairs: the GitHub range
+  # between the two ends' full shas, and the sentence that says what looking there is for.
+  # Returns nil — which ERB renders as nothing — when the two shas are equal, because a range
+  # between a commit and itself is an empty diff; the guard lives here rather than beside each
+  # call so a caller keeping the wording cannot drop the guard that goes with it. Same query
+  # story as the pairing above: string composition off shas already on the page. Returns a
+  # SafeBuffer.
+  def unstable_test_runs_compare_link(from_row, to_row)
+    return nil if from_row.commit_sha == to_row.commit_sha
+
+    safe_join([
+                link_to("Commits between these two runs",
+                        @repository.github_compare_url(from_row.commit_sha, to_row.commit_sha),
+                        class: "rc-ext", target: "_blank", rel: "noopener noreferrer"),
+                " is where to look."
+              ])
+  end
+
   # == The duration step-up line's prose
   #
   # The sibling of the onset section above, and kept beside it for the same drift argument: the
