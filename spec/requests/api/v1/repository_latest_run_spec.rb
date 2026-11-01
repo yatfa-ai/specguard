@@ -201,6 +201,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # inside a single block on this endpoint; see `repository_unannotated_examples_spec.rb`,
         # where both halves are asserted together.
         "unannotated_directories" => nil,
+        # And the FILE rung under that ranking, null on the same ask plus its narrowing: this
+        # request sent no `?spec_directory=`, so no area was named and no area's files can be
+        # ranked. It rides the same `?unannotated_examples=` ask as the two keys above — no
+        # parameter of its own — and a `?spec_file=` keeps it null too, the file-asked worklist
+        # being its own answer. Its empty ANSWER is a present block with `rows: []` and
+        # `file_count: 0`, never the map's `null` — that nil is reserved for "no per-area grain to
+        # rank", and an area-narrowed worklist has no ambiguous zero to discriminate; see
+        # `repository_unannotated_examples_spec.rb`, where the two empty spellings are asserted
+        # side by side.
+        "unannotated_files" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
@@ -557,7 +567,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "spec_directories", "slowest_examples", "repeated_descriptions",
                             "spec_directory_files", "spec_file_examples",
                             "repeated_description_examples", "unannotated_examples",
-                            "unannotated_directories",
+                            "unannotated_directories", "unannotated_files",
                             "suite_size_measured",
                             "ingested_at")
     end
@@ -2612,6 +2622,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # And the ranking above it, null from the SAME ask rather than one of its own — the two
         # annotation keys share `?unannotated_examples=` and are therefore absent together.
         "unannotated_directories" => nil,
+        # And the file rung under it, null for the same request-shaped reason one rung up: this
+        # request named no area to rank the files of. Same ask, no parameter of its own — and its
+        # empty answer is a present block, so a null here can only ever mean "not asked", never
+        # "nothing found".
+        "unannotated_files" => nil,
         "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )

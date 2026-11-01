@@ -1122,6 +1122,84 @@ class RunDrillInSerializer
     }
   end
 
+  # WHICH FILES OF ONE AREA HOLD THE DEBT, by spec file — the rung between the map above and the
+  # worklist above THAT, and the API's copy of the console panel SPGD-1998 added
+  # (`UnannotatedFiles.for`). The worklist orders FILE-NAVIGABLY and is capped at a hundred, so an
+  # area carrying more debt than the cap holds named its past-the-cap files NOWHERE: the only other
+  # list the ask could reach, `spec_directory_files`, ranks by wall clock and carries no debt
+  # figure. This key names the files, and every row is one `?spec_file=` away from a worklist that
+  # starts at that file's own rows.
+  #
+  # THE SAME PRESENTER THE PANEL READS, never a hand-written query — this file's rule stated on
+  # `serialized_spec_files` and `serialized_spec_directory_files`, and the reason it matters here is
+  # sharper than usual: `UnannotatedFiles` derives NO figure of its own. Every operand comes back
+  # from `SpecObservation.unannotated_files_in` in one grouped pass, so the API and the panel rank
+  # an area's files the same way off the same rows by construction, and `file_count` cannot
+  # describe a different population from the rows it captions.
+  #
+  # THE GATE IS THE CONSOLE'S, plus the ask this endpoint already has: `requested_unannotated_examples?`
+  # AND `requested_spec_directory` present AND `requested_spec_file` ABSENT — otherwise `null`. The
+  # two narrowing halves are read off the guards the controller already includes, exactly as the
+  # console reads `@spec_directory_request` / `@spec_file_request`: a file-asked request is already
+  # narrowed to exactly the rows this list would name, so the worklist IS its answer and a second
+  # list of one file would restate it; a no-directory request has named no area to rank files of.
+  # The flag half is this endpoint's own form of "nobody asked": the worklist and the map above ride
+  # the same gate, so all three keys of the ask arrive and leave together. NO NEW REQUEST PARAMETER.
+  #
+  # `null` IS A FACT ABOUT THE REQUEST ONLY, and this block has none of the sibling's second nil.
+  # `serialized_unannotated_directories` returns `null` for a run that recorded no per-example rows,
+  # because its map is WHOLE-RUN and its `directory_count` claims a per-area grain the run may not
+  # have — the nil exists to discriminate that block's ambiguous zero. This block is a
+  # AREA-NARROWED worklist, and its empty read has exactly one reading: `rows: []` with
+  # `file_count: 0` beside it says "this area holds no files carrying debt", which is true and
+  # useful for a fully-annotated area, a stale bookmark, an unknown path and a run that recorded
+  # nothing alike — the same three-ways-empty answer `unannotated_examples` serves, which is the
+  # block this one sits beside on every such response. A `null` here would take that answer away and
+  # leave the client with two indistinguishable silences. Both halves are pinned together in
+  # `repository_unannotated_examples_spec.rb`.
+  #
+  # OPERANDS, NEVER A FRACTION — the map above states the rule and the presenter's own class comment
+  # carries it one grain down: `unannotated_count` and the `recorded_count` it was counted against,
+  # plus the three readings that sum to the latter. No `coverage_label`, no percentage.
+  #
+  # `limit` is READ OFF `SpecObservation::UNANNOTATED_FILES_LIMIT` rather than restated, on the
+  # precedent every capped block here sets — its own constant, ten, and neither the map's ten nor
+  # the worklist's hundred under another name. `file_count` counts the files CARRYING DEBT (the
+  # read's post-HAVING window), not the area's every file — so `file_count > rows.size` is the
+  # truncation test, and the same sentence `unannotated_directories.directory_count` carries one
+  # grain up, with one deliberate difference the presenter's class comment argues: the zero-debt
+  # area is a row and the zero-debt file is not.
+  #
+  # EXACTLY ONE ADDITIONAL QUERY WHEN ASKED, AND NONE WHEN NOT — the third read behind this ask,
+  # which the cost example in `repository_unannotated_examples_spec.rb` pins against the file-asked
+  # shape: identical flag and area, only the file ask added, and exactly one `spec_observations`
+  # read between them. The gate is decided before any read is issued, so a client that never
+  # narrows to an area pays nothing for the key's existence.
+  def serialized_unannotated_files(test_run)
+    return nil unless requested_unannotated_examples? && requested_spec_directory && !requested_spec_file
+
+    files = UnannotatedFiles.for(test_run, requested_spec_directory)
+
+    {
+      # The ask restated as the server read it — the area the rows were actually gathered under,
+      # on `serialized_unannotated_examples`' rule for the same two keys: a malformed shape is no
+      # ask at all and reaches no block, so what is served here is always the value the read
+      # filtered on. Held even when nothing came back, because the empty state has to name its
+      # subject — the same reason the presenter holds it.
+      spec_directory: files.spec_directory,
+      rows: files.rows.map do |row|
+        # The same six operands the map above serves, one grain down — `UnannotatedFiles::Row` is
+        # `UnannotatedDirectories::Row`'s own struct shape, and the map's row comment states why all
+        # three readings ride rather than the two a caption spends.
+        { path: row.path, unannotated_count: row.unannotated_count, recorded_count: row.recorded_count,
+          authored_count: row.authored_count, derived_count: row.derived_count,
+          unreadable_count: row.unreadable_count }
+      end,
+      file_count: files.file_count,
+      limit: SpecObservation::UNANNOTATED_FILES_LIMIT
+    }
+  end
+
   private :serialized_example_row, :serialized_declared_intent, :serialized_derived_intent
 
   private
