@@ -280,6 +280,64 @@ RSpec.describe Repository do
     end
   end
 
+  describe "#github_compare_url" do
+    # The fourth peer of `#github_url`, `#github_blob_url` and `#github_commit_url`, and the one
+    # the regression-onset line and the duration-step line on the unstable-test drill-in reach
+    # for: those panels print a RANGE, and this is what opens it on GitHub. Its two refs are two
+    # runs the platform observed, never row adjacency — see the method's own note.
+    # @intent: { entity: "Repository", action: "compose a compare URL", behavior: "github_compare_url builds the github.com three-dot range link for the two refs it is handed", layer: "unit" }
+    it "composes a three-dot range URL at the refs it was given" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_compare_url("25c0ffee0000", "26c0ffee0000"))
+        .to eq("https://github.com/acme/billing-service/compare/25c0ffee0000...26c0ffee0000")
+    end
+
+    # The endpoints are the CALLER's and there is no default: `base` is the OLDER endpoint and
+    # `head` the NEWER, so the first argument is pinned to the URL's first slot and the second to
+    # the second — a swapped interpolation would name a range GitHub reads backwards.
+    # @intent: { entity: "Repository", action: "order the endpoints", behavior: "the base argument lands in the compare URL's first slot and the head argument in its second, with no default of its own", layer: "unit" }
+    it "puts the base in the first slot and the head in the second" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_compare_url("aaa111", "bbb222"))
+        .to end_with("/compare/aaa111...bbb222")
+      expect(repository.github_compare_url("bbb222", "aaa111"))
+        .to end_with("/compare/bbb222...aaa111")
+    end
+
+    # Escaped SEGMENT-WISE on BOTH refs, and the `...` separator stays OUTSIDE the escaping — it
+    # is URL structure, the one part of the path that must survive unescaped for GitHub to read
+    # the range as a range. A whole-string `url_encode` would collapse a branch-shaped ref into
+    # one unresolvable segment, and a query-string escape would turn a space into `+`.
+    # @intent: { entity: "Repository", action: "escape ref segments", behavior: "slashes inside a branch-shaped ref survive as separators while a space is percent-encoded as %20, and the three-dot separator stays literal between the two refs", layer: "unit" }
+    it "escapes each ref segment without escaping the separators or the three dots" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_compare_url("release/v1 beta", "feature/deep links"))
+        .to eq("https://github.com/acme/billing-service/compare/release/v1%20beta...feature/deep%20links")
+    end
+
+    # `#` and `?` would terminate the path or open a query if left raw, on either side of the
+    # range; the segment-wise escape handles them like any other non-structural character.
+    # @intent: { entity: "Repository", action: "escape path-terminating characters", behavior: "a hash and a question mark inside a ref are percent-encoded so neither terminates the compare path", layer: "unit" }
+    it "escapes path-terminating characters in a ref" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_compare_url("a#b", "c?d"))
+        .to eq("https://github.com/acme/billing-service/compare/a%23b...c%3Fd")
+    end
+
+    # It COMPOSES and asks GitHub nothing — no probe, no existence check, so no query even when a
+    # panel calls it once per row. An unpushed sha answers 404, which is GitHub telling the truth.
+    # @intent: { entity: "Repository", action: "compose without querying", behavior: "building a compare URL issues zero database queries", layer: "unit" }
+    it "issues no query" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(count_queries { repository.github_compare_url("abc", "def") }).to eq(0)
+    end
+  end
+
   describe "#latest_test_run" do
     # The anchor every suite figure on the Overview panel and the API's `latest_run` block is read
     # off, so what "latest" means is pinned here directly rather than inferred through a figure
