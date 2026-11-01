@@ -281,6 +281,18 @@ class LatestRunSerializer
       # `RunDrillInSerializer#serialized_unannotated_directories`, where the scope difference between the
       # two keys is stated in full.
       unannotated_directories: overview.drill_ins.serialized_unannotated_directories(test_run),
+      # THE THIRD RUNG OF THAT LADDER, and the sixth `null`-is-a-fact-about-the-request key on this
+      # block: the worklist narrows to ONE area, and this names WHICH FILES of the picked area hold
+      # the work — the console panel SPGD-1998 added, which its ticket fenced out of this endpoint.
+      # The gate is the ask's plus the narrowing's: the flag AND a `?spec_directory=` AND no
+      # `?spec_file=` — a file-asked request is already the answer — and `null` on every other
+      # combination, a statement about the request like the five keys above and unlike `shards`
+      # (null about the run) and the four rollups (null about the run's rows). Unlike the map above
+      # it this block has NO second nil: its empty read — an unknown area, a fully-annotated one, a
+      # run that recorded no rows — is a present block answering "none here", and the discrimination
+      # the map's null exists to make has no ambiguous zero to make it about. See
+      # `RunDrillInSerializer#serialized_unannotated_files`, where the gate and the nils are argued.
+      unannotated_files: overview.drill_ins.serialized_unannotated_files(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.

@@ -25,9 +25,11 @@
 # on what the CLIENT ASKED rather than on what the window holds — no `?spec_file=`, no read of that
 # file's examples; no `?repeated_description=`, no read of that group's members; no
 # `?unstable_test=`, no read of that test's run-by-run sequence; no `?unannotated_examples=`, no read
-# of the run's unannotated population; and no
-# `?spec_directory=`, no read of that area at any of the THREE grains one ask now opens — its files
-# by wall clock, their example-count movement, and their runtime movement. Every gate is decided
+# of the run's unannotated population — whose WORKLIST, AREA MAP and, under a `?spec_directory=`
+# with no `?spec_file=`, FILE-LEVEL DEBT RANKING are three grains on one ask; and no
+# `?spec_directory=`, no read of that area at any of the FOUR grains one ask can now open — its files
+# by wall clock, their example-count movement, their runtime movement, and, when the flag above is
+# also sent, its files by debt. Every gate is decided
 # before any read, so an unasked
 # drill-in costs nothing rather than costing an empty one. Each block that uses these bounds its OWN
 # grain rather than the table, because a bare total cannot tell "one aggregate per grain" from "one
@@ -319,8 +321,17 @@ module ObservationGrainReads
   # disagree about what a directory is. It cannot be un-shared, so — exactly as the area/growth split
   # already is — the grain is separated on what it orders by.
   #
-  # `COUNT(*) FILTER (WHERE status = 'unannotated')` **as an ORDER BY term**, which is issued by no
-  # other read of this table. The near neighbour is `.unannotated_in`, which spells the same predicate
+  # `COUNT(*) FILTER (WHERE status = 'unannotated')` **as an ORDER BY term** — since SPGD-2000 the
+  # quantity TWO reads of this table rank by, and the grain holds them apart on what they GROUP BY:
+  # the area ranking (`.unannotated_directories_in`) groups on `DIRECTORY_EXPRESSION`, the file
+  # ranking (`.unannotated_files_in`) on `spec_file_path` and narrows on the area equality, so the
+  # file read is excluded below on its HAVING rather than adopted here. Until SPGD-2000 this
+  # pattern's comment could claim the term had one issuer — a claim true when written and exactly
+  # what a shared ordering always costs; the file has met the shape twice before (`GROWTH_ORDER`,
+  # `RUNTIME_GROWTH_ORDER`), and each time the answer was an explicit exclusion plus a grain of its
+  # own, never a widening.
+  #
+  # The near neighbour is `.unannotated_in`, which spells the same predicate
   # in a WHERE and emits `AS unannotated_recorded_count` besides, so the two cannot meet: a WHERE
   # clause is not a `DESC` and grain 13 matches on an alias this read does not select. Nothing here is
   # a residual definition — an unclassified read still belongs to no list and is caught by the total,
@@ -338,8 +349,35 @@ module ObservationGrainReads
   # NOT retargeted at the new leading term. That one is spelled with `READING_EXPRESSION`, which
   # `SpecObservation::RUN_READING_COUNTS` shares by design, so a pattern built on it would be a
   # candidate for two reads at once — the exact double-classification `classified_observation_reads`
-  # exists to catch. The debt count remains the quantity only this read ranks by.
+  # exists to catch. Until SPGD-2000 this sentence could end by calling the debt count the quantity
+  # only this read ranks by; the file ranking one constant down now ranks by it too, and the grain
+  # holds the two apart on their grouping rather than on the term.
   UNANNOTATED_DEBT_ORDER = /COUNT\(\*\) FILTER \(WHERE status = 'unannotated'\) DESC/
+
+  # The FILE-grain ANNOTATION-DEBT ranking — `SpecObservation.unannotated_files_in`, ONE area's
+  # spec files by how many of their examples carry no annotation, the API's copy of the console
+  # panel SPGD-1998 added (`UnannotatedFiles.for`). It is the area ranking above it one grain down:
+  # the same open WHERE at the run, the same `READING_COUNTS` projections, the same two-term
+  # ordering with `UNANNOTATED_DEBT_ORDER` as the second sort term — and it would land in TWO
+  # existing grains at once without a pattern of its own. Its `GROUP BY "spec_observations"."
+  # spec_file_path"` beside `AREA_PREDICATE` is exactly the `directory_files` grain's match (6),
+  # and its `UNANNOTATED_DEBT_ORDER` term is exactly the debt grain's (14), so the parts would sum
+  # to more than the total — the defect `classified_observation_reads` exists to catch.
+  #
+  # Matched on its HAVING — `COUNT(*) FILTER (WHERE status = 'unannotated') > 0`, the read's own
+  # "a file with no debt is OMITTED where an area is a row" decision, argued at length on the
+  # method — which no other read of this table issues. The two neighbours that carry a HAVING spell
+  # different predicates: `.repeated_descriptions_in` carries `HAVING (COUNT(*) > 1)` and the
+  # retention pruner's runs-on-a-branch count is not even this table. The same three grains the
+  # read would otherwise join exclude it on this constant, which is what keeps a double-count off
+  # the partition rather than trusting any one pattern to be loose in the right places.
+  #
+  # ⭐ GATED ON THE ASK AND THE NARROWING TOGETHER: `?unannotated_examples=` AND `?spec_directory=`
+  # AND no `?spec_file=`. A flag-only ask reads the worklist and the map and NOT this — no area was
+  # named to rank the files of; a file-asked ask reads none of the three either, the narrowing
+  # being its own answer. So a block bounding this endpoint's reads should expect 0 or 1, and the
+  # cost example beside the grain pins which shapes take it.
+  UNANNOTATED_FILES_HAVING = /HAVING \(COUNT\(\*\) FILTER \(WHERE status = 'unannotated'\) > 0\)/
 
   # The RUN-grain reading counts — `SpecObservation.reading_counts_in`, the one read on this table
   # that answers how many of a run's examples SpecGuard has an authored, a derived or no reading of.
@@ -473,8 +511,8 @@ module ObservationGrainReads
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
   # repeated_description_examples, directory_file_growth, runtime_growth,
   # directory_file_runtime_growth, unstable_test_runs, unannotated_examples,
-  # unannotated_directories, run_readings, identity, history_layer_counts]` — the eighteen grains,
-  # each an array of the
+  # unannotated_directories, run_readings, identity, history_layer_counts, unannotated_files]` — the
+  # nineteen grains, each an array of the
   # statements matched. The single-run grains come first, in the order `serialized_latest_run` serves
   # them, and the two CROSS-RUN grains after them in the order `show` serves them — so a
   # destructuring caller reads the endpoint's own shape, and a caller written before a grain was
@@ -504,7 +542,11 @@ module ObservationGrainReads
   # intersection of the first two — a count-growth-ordered read narrowed to one area, grouped by file
   # — and `directory_file_runtime_growth` (11) is the intersection of the last two, the same shape
   # one quantity over. Without the four exclusions those two statements would each be counted three
-  # times. See `GROWTH_ORDER` and `RUNTIME_GROWTH_ORDER`.
+  # times. See `GROWTH_ORDER` and `RUNTIME_GROWTH_ORDER`. `directory_files` (6) carries a SECOND
+  # exclusion since SPGD-2000: `unannotated_files_in` groups by file beside the area predicate like
+  # the wall-clock drill-in does, and is separated on its HAVING (`UNANNOTATED_FILES_HAVING`) into a
+  # grain of its own at the end — the debt grain (14) carries the same exclusion for the same reason,
+  # because the file read ranks by the debt count too.
   def observation_reads_by_grain(&)
     reads = observation_reads(&)
     [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path.*ORDER BY SUM\(duration_seconds\)/m),
@@ -516,7 +558,7 @@ module ObservationGrainReads
      flakiness_grain_patterns.flat_map { |pattern| reads.grep(pattern) },
      reads.grep(GROWTH_ORDER).grep_v(AREA_PREDICATE),
      reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/).grep(AREA_PREDICATE)
-          .grep_v(GROWTH_ORDER).grep_v(RUNTIME_GROWTH_ORDER),
+          .grep_v(GROWTH_ORDER).grep_v(RUNTIME_GROWTH_ORDER).grep_v(UNANNOTATED_FILES_HAVING),
      reads.grep(/AS file_recorded_count/),
      reads.grep(/AS description_recorded_count/),
      reads.grep(GROWTH_ORDER).grep(AREA_PREDICATE),
@@ -524,11 +566,12 @@ module ObservationGrainReads
      reads.grep(RUNTIME_GROWTH_ORDER).grep(AREA_PREDICATE),
      reads.grep(/AS unstable_test_recorded_count/),
      reads.grep(/AS unannotated_recorded_count/),
-     reads.grep(UNANNOTATED_DEBT_ORDER),
+     reads.grep(UNANNOTATED_DEBT_ORDER).grep_v(UNANNOTATED_FILES_HAVING),
      reads.grep(RUN_READINGS_PROJECTION),
      reads.grep(IDENTITY_PRESENCE) + reads.grep(IDENTITY_CANDIDATES) +
        reads.grep(IDENTITY_GROUPING).grep(IDENTITY_COMPOSITION) + reads.grep(IDENTITY_RUN_DURATIONS),
-     reads.grep(HISTORY_LAYER_COUNTS_GROUPING)]
+     reads.grep(HISTORY_LAYER_COUNTS_GROUPING),
+     reads.grep(UNANNOTATED_FILES_HAVING)]
   end
 
   # `UnstableTests.for`'s five reads, in the order it issues them: the gating outcome-reporting
@@ -565,14 +608,14 @@ module ObservationGrainReads
   def unannotated_examples_grain_reads(&) = observation_reads_by_grain(&)[13]
   def unannotated_directories_grain_reads(&) = observation_reads_by_grain(&)[14]
   def run_readings_grain_reads(&) = observation_reads_by_grain(&)[15]
-
   # The run-grain aggregate reads that carry the declared-layer mix — the latest run's, plus the
-  # PREVIOUS run's when (and only when) `LayerRunGrowth` is comparable. NOT an eighteen-grain
+  # PREVIOUS run's when (and only when) `LayerRunGrowth` is comparable. NOT a nineteen-grain
   # partition member: it selects the same statements `run_readings_grain_reads` already holds, so
   # adding it to `observation_reads_by_grain` would double-classify them.
   def run_layer_mix_reads(&) = observation_reads(&).grep(/run_layer_unit_count/)
   def identity_grain_reads(&) = observation_reads_by_grain(&)[16]
   def history_layer_counts_grain_reads(&) = observation_reads_by_grain(&)[17]
+  def unannotated_files_grain_reads(&) = observation_reads_by_grain(&)[18]
 end
 
 RSpec.configure do |config|

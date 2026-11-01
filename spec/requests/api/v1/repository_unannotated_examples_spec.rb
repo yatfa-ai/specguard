@@ -914,6 +914,272 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     end
   end
 
+  # ⭐ THE FILE RUNG UNDER THE MAP — `latest_run.unannotated_files`, the API's copy of the console
+  # panel SPGD-1998 added to `repositories#show` (`UnannotatedFiles.for`). The worklist narrows to
+  # ONE area and is capped at a hundred ordered file-navigably, so an area carrying more debt than
+  # the cap holds named its past-the-cap files nowhere: `spec_directory_files` ranks the same files
+  # by WALL CLOCK with no debt figure on it. This key names the files, and every row is one
+  # `?spec_file=` away from a worklist that starts at that file's own rows.
+  #
+  # It rides the SAME ask as the two keys above it plus the narrowing one of them picks — flag AND
+  # `?spec_directory=` AND no `?spec_file=` — and its `null` is a fact about that request and
+  # NOTHING else, which the last example here pins against the map's second nil.
+  describe "the files of a narrowed area that hold the debt" do
+    def files_list(**) = get_repository(**).dig("latest_run", "unannotated_files")
+
+    # A fixture built so no assertion about "this area's files" can pass by accident — the console
+    # panel's `files_debt_run` (spec/requests/repository_unannotated_examples_spec.rb) re-expressed
+    # for the API, since the two surfaces read the SAME rows and their fixtures disagree nowhere:
+    #
+    #   - `billing_spec.rb` holds five unannotated examples — three unreadable and two derived — so
+    #     it leads on BOTH count terms and its operands are a split, not a total.
+    #   - `ledger_spec.rb` holds two unannotated examples, BOTH DERIVED, and one annotated one — the
+    #     file whose `recorded_count` (3) is not its debt (2), below billing on the unreadable term.
+    #   - `audit_spec.rb` is fully annotated and is OMITTED — the map keeps a zero-debt area as a
+    #     row; this list does not, and `file_count` counts only what it lists plus what it cut.
+    #   - `spec/requests` holds an unannotated example, so a list serving the run's debt rather
+    #     than the narrowing's is red on a path that never held any.
+    #
+    # Memoized on the example instance (`||=`), because several examples below need the key more
+    # than once — a second call would build the same-named repository a second time and fail on the
+    # full-name uniqueness — and an example instance is fresh per example, so nothing leaks between
+    # them.
+    def files_debt_run
+      @files_debt_run ||= begin
+        repository = separate_repository("acme/api-area-files")
+        ingest(repository,
+               [unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 1,
+                                 name: "Order settles the balance"),
+                unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 2,
+                                 name: "Refund restores the stock"),
+                unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 3,
+                                 name: "Ledger closes the period"),
+                unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 4,
+                                 name: "User#valid checks the handle format"),
+                unannotated_spec(file_path: "spec/models/billing_spec.rb", line_number: 5,
+                                 name: "Invoice#total sums the line items"),
+                unannotated_spec(file_path: "spec/models/ledger_spec.rb", line_number: 6,
+                                 name: "Journal#posts records the entry"),
+                unannotated_spec(file_path: "spec/models/ledger_spec.rb", line_number: 7,
+                                 name: "Ledger#locks closes the period"),
+                annotated_spec(file_path: "spec/models/ledger_spec.rb", line_number: 8),
+                annotated_spec(file_path: "spec/models/audit_spec.rb", line_number: 9),
+                unannotated_spec(file_path: "spec/requests/checkout_spec.rb", line_number: 10,
+                                 name: "Checkout rejects an empty cart")])
+        repository
+      end
+    end
+
+    let(:area) { "spec/models" }
+
+    # AC1. The block's whole claim: which FILES of the picked area hold the debt, most unreadable
+    # first, with the three operands on every row and the zero-debt file left out.
+    # @intent: { entity: "repository unannotated_files ranking", action: "rank area files", behavior: "billing_spec.rb lists at 5 unannotated 3 unreadable 5 recorded, ledger_spec.rb at 2 0 3, the fully-annotated audit_spec.rb and the other area's checkout example are absent, ordered most unreadable first", layer: "request" }
+    it "lists the area's debt-carrying files with their operands, dark first, omitting the one with none" do
+      expect(files_list(key: files_debt_run.api_keys.create!, query: ask.merge(spec_directory: area)))
+        .to eq("spec_directory" => "spec/models",
+               "rows" => [
+                 { "path" => "spec/models/billing_spec.rb", "unannotated_count" => 5,
+                   "recorded_count" => 5, "authored_count" => 0, "derived_count" => 2,
+                   "unreadable_count" => 3 },
+                 { "path" => "spec/models/ledger_spec.rb", "unannotated_count" => 2,
+                   "recorded_count" => 3, "authored_count" => 1, "derived_count" => 2,
+                   "unreadable_count" => 0 }
+               ],
+               "file_count" => 2,
+               "limit" => SpecObservation::UNANNOTATED_FILES_LIMIT)
+    end
+
+    # The sub-block's own key set as its stated subject, on the pattern the map's contract example
+    # sets — and the same two identities beside it, which are what make the operands safe to render
+    # side by side and safe to reconcile against the worklist.
+    # @intent: { entity: "repository unannotated_files ranking", action: "pin the block shape", behavior: "the files block serves exactly the contracted unannotated_files keys and nothing more", layer: "request" }
+    it "serves exactly the unannotated_files keys this contract pins" do
+      served = files_list(key: files_debt_run.api_keys.create!, query: ask.merge(spec_directory: area))
+
+      expect(served.keys).to contain_exactly("spec_directory", "rows", "file_count", "limit")
+      expect(served["rows"].first.keys)
+        .to contain_exactly("path", "unannotated_count", "recorded_count", "authored_count",
+                            "derived_count", "unreadable_count")
+      # The three readings partition the file's whole population — the same assertion the map's
+      # contract example makes one grain up, because the read plucks them from the same
+      # `READING_COUNTS` the area ranking selects.
+      expect(served["rows"]).to all(satisfy do |row|
+        row["authored_count"] + row["derived_count"] + row["unreadable_count"] == row["recorded_count"]
+      end)
+      # And `unannotated_count` is exactly the two non-authored readings — the identity that lets
+      # this key keep the worklist's own meaning while the readings split it.
+      expect(served["rows"]).to all(satisfy do |row|
+        row["derived_count"] + row["unreadable_count"] == row["unannotated_count"]
+      end)
+      # No fraction, no label, no verdict — the rule every rollup on this endpoint is served under.
+      expect(served["rows"].first).not_to have_key("coverage_label")
+    end
+
+    # ⭐ THE LEAD TERM, pulled apart from the debt term it sits above, in BOTH directions — the same
+    # pull-apart the map's own example performs, one grain down, and for the reason that one states:
+    # `specguard-mcp` states this row order to agents as contract, so the API needs its own copy of
+    # the claim it publishes rather than relying on the console panel's.
+    #
+    # Both halves put the expected head row at the path order's mercy — the first half's head sorts
+    # LAST alphabetically and carries THREE TIMES LESS debt than the row below it, so neither the
+    # debt term nor `path ASC` can produce the answer; the second half empties every file of
+    # unreadable rows and checks the debt ranking survives underneath as the tiebreak.
+    # @intent: { entity: "repository unannotated_files ranking", action: "lead on unreadable files", behavior: "files that cannot be read sort first and debt is used as the tie-breaking signal when nothing is unreadable", layer: "request" }
+    it "leads on the files it cannot read, and falls back to debt where none is dark" do
+      dark = separate_repository("acme/api-one-dark-file")
+      ingest(dark,
+             # Three times the debt, and SpecGuard reads every one of them.
+             [unannotated_spec(file_path: "spec/models/alpha_sweep_spec.rb", line_number: 1,
+                               name: "Sweep#runs the nightly pass"),
+              unannotated_spec(file_path: "spec/models/alpha_sweep_spec.rb", line_number: 2,
+                               name: "Sweep#purges expired entries"),
+              unannotated_spec(file_path: "spec/models/alpha_sweep_spec.rb", line_number: 3,
+                               name: "Sweep#notifies the retention queue"),
+              # One unannotated row, and nothing to read it by.
+              unannotated_spec(file_path: "spec/models/zulu_oracle_spec.rb", line_number: 4,
+                               name: "the oracle decides")])
+      rows = files_list(key: dark.api_keys.create!,
+                        query: ask.merge(spec_directory: "spec/models"))["rows"]
+
+      # `zulu_oracle` carries a third of the debt of the file above it and sorts last by path: under
+      # the ranking this example replaced it sat second, and the one file SpecGuard can say nothing
+      # about was below it.
+      expect(rows.map { it["path"] })
+        .to eq(["spec/models/zulu_oracle_spec.rb", "spec/models/alpha_sweep_spec.rb"])
+      expect(rows.map { it["unannotated_count"] }).to eq([1, 3])
+      expect(rows.map { it["unreadable_count"] }).to eq([1, 0])
+
+      # The other direction: with nothing dark anywhere, the debt ranking is intact underneath as
+      # the tiebreak, so the file carrying the most unannotated rows leads exactly as it did before.
+      readable = separate_repository("acme/api-nothing-dark-files")
+      ingest(readable,
+             [unannotated_spec(file_path: "spec/models/alpha_oracle_spec.rb", line_number: 1,
+                               name: "Oracle#decides the nightly question"),
+              unannotated_spec(file_path: "spec/models/middle_ledger_spec.rb", line_number: 2,
+                               name: "Ledger#posts records the journal entry"),
+              unannotated_spec(file_path: "spec/models/middle_ledger_spec.rb", line_number: 3,
+                               name: "Ledger#void reverses the journal entry"),
+              unannotated_spec(file_path: "spec/models/zulu_refund_spec.rb", line_number: 4,
+                               name: "Refund#issue returns the money to the payer")])
+      rows = files_list(key: readable.api_keys.create!,
+                        query: ask.merge(spec_directory: "spec/models"))["rows"]
+
+      expect(rows.map { it["path"] })
+        .to eq(["spec/models/middle_ledger_spec.rb", "spec/models/alpha_oracle_spec.rb",
+                "spec/models/zulu_refund_spec.rb"])
+      expect(rows.map { it["unreadable_count"] }).to eq([0, 0, 0])
+      expect(rows.map { it["unannotated_count"] }).to eq([2, 1, 1])
+    end
+
+    # The cap and its disclosure, which are one fact: a capped list whose own length is the only
+    # thing describing it is a truncated list silently wearing the shape of a complete one.
+    # `file_count` is a `COUNT(*) OVER ()` evaluated AFTER the read's HAVING, so it counts the files
+    # CARRYING DEBT — not the area's every file, which is the figure `spec_directory_files`' own
+    # window counts over the same grain — and `file_count > rows.size` is the truncation test.
+    # @intent: { entity: "repository unannotated_files ranking", action: "disclose the cap", behavior: "the ranking honours its own limit and reports how many files of the area carry debt overall", layer: "request" }
+    it "caps the ranking at its own limit and discloses how many files of the area carry debt" do
+      wide = separate_repository("acme/api-many-debt-files")
+      files = SpecObservation::UNANNOTATED_FILES_LIMIT + 3
+      ingest(wide, (1..files).flat_map do |file|
+        # Debt DESCENDS with the index, so the files that survive the cap are a genuine head of the
+        # ranking rather than whichever ten the scan happened to reach first.
+        Array.new(files - file + 1) do |row|
+          unannotated_spec(file_path: "spec/models/f#{format('%02d', file)}_spec.rb",
+                           line_number: row + 1, name: "File #{file} row #{row}")
+        end
+      end)
+      key = wide.api_keys.create!
+      served = files_list(key: key, query: ask.merge(spec_directory: area))
+
+      expect(served["rows"].length).to eq(SpecObservation::UNANNOTATED_FILES_LIMIT)
+      expect(served["file_count"]).to eq(files)
+      expect(served["limit"]).to eq(SpecObservation::UNANNOTATED_FILES_LIMIT)
+      # The head of the ranking, not an arbitrary ten: the heaviest-debt file leads and the three
+      # lightest are the ones the cap cut.
+      expect(served["rows"].first["path"]).to eq("spec/models/f01_spec.rb")
+      expect(served["rows"].map { it["path"] }).not_to include("spec/models/f12_spec.rb")
+      # And the disclosure is what says so — the sentence a client writes instead of comparing the
+      # list's length against a limit it cannot see.
+      expect(served["file_count"]).to be > served["rows"].length
+    end
+
+    # The gate's own first arm, and the flag's own shape of "nobody asked here": the flag opens the
+    # ask, but no `?spec_directory=` names no area to rank the files OF. Key present, value null —
+    # never an empty block, which is the answer to a named area and would here be a fabricated one.
+    # A malformed directory shape is no ask at all, the same answer the worklist's own narrowing
+    # gives it.
+    # @intent: { entity: "repository unannotated_files ranking", action: "omit without a directory", behavior: "the files key is present but null when the flag was sent without a spec_directory, and a malformed directory shape is no ask", layer: "request" }
+    it "is null — with the key present — when no directory was asked" do
+      run = latest_run(key: files_debt_run.api_keys.create!, query: ask)
+
+      expect(run).to have_key("unannotated_files")
+      expect(run["unannotated_files"]).to be_nil
+      # And a shape the guard treats as no ask never opens the block either — an Array would
+      # otherwise become an IN list against an equality comparison and answer a question nobody
+      # asked, which is exactly the hazard `RequestedSpecDirectoryParam` exists for.
+      expect(files_list(key: files_debt_run.api_keys.create!,
+                        query: ask.merge(spec_directory: ["spec/models"]))).to be_nil
+      # The two blocks the SAME flag DID open are present on the same response, which is what says
+      # the null is this key's gate and not the endpoint's.
+      expect(run["unannotated_examples"]).not_to be_nil
+      expect(run["unannotated_directories"]).not_to be_nil
+    end
+
+    # The gate's second arm, and the console's reason for it: a file-asked request is already
+    # narrowed to exactly the rows this list would name, so the worklist IS the answer and a second
+    # list of one file would restate it. Both halves in one example — the null here and the
+    # worklist answering beside it — so a serializer that dropped the file arm passes an assertion
+    # about the worklist alone and vice versa.
+    # @intent: { entity: "repository unannotated_files ranking", action: "yield to the file ask", behavior: "the files key is null when a spec_file is also asked, where the narrowed worklist block answers", layer: "request" }
+    it "is null when a file is also asked, where the worklist block is the answer" do
+      combined = ask.merge(spec_directory: area, spec_file: "spec/models/billing_spec.rb")
+
+      expect(files_list(key: files_debt_run.api_keys.create!, query: combined)).to be_nil
+      served = block(key: files_debt_run.api_keys.create!, query: combined)
+
+      expect(served["spec_file"]).to eq("spec/models/billing_spec.rb")
+      expect(served["spec_directory"]).to eq("spec/models")
+      expect(served["recorded_count"]).to eq(5)
+    end
+
+    # The empty READ, which is not a null: an area this run recorded nothing in is an ordinary
+    # answer to a named question — a stale bookmark, a typo, a renamed directory — and it arrives
+    # as a present block naming its subject. Never a 404, and never the map's `null` re-used: the
+    # run above HAS a per-area grain, so the map beside this response is present too.
+    # @intent: { entity: "repository unannotated_files ranking", action: "answer unknown areas", behavior: "an unknown directory yields a present block with empty rows, a zero file count and the ask echoed", layer: "request" }
+    it "answers an unknown area with a present empty block that echoes the ask" do
+      expect(files_list(key: files_debt_run.api_keys.create!, query: ask.merge(spec_directory: "spec/nope")))
+        .to eq("spec_directory" => "spec/nope", "rows" => [], "file_count" => 0,
+               "limit" => SpecObservation::UNANNOTATED_FILES_LIMIT)
+    end
+
+    # THE OTHER WAY THIS KEY COULD HAVE BEEN NULL, pinned as deliberately NOT: a run that recorded
+    # no per-example rows at all. The map above answers that run `null` — `UnannotatedDirectories#
+    # recorded?` — because the map is whole-run and its `directory_count` claims a per-area grain
+    # the run does not have, and its nil exists to discriminate that block's ambiguous zero. This
+    # block has no ambiguous zero: an area-narrowed worklist answered on such a run has exactly one
+    # reading, "no files here carry debt", the same three-ways-empty answer the WORKLIST block
+    # beside it serves. A null here would take that answer away and leave the client two
+    # indistinguishable silences on one response body.
+    # @intent: { entity: "repository unannotated worklist and files", action: "keep the files block present on a bare run", behavior: "a run with no per-example rows leaves the files block present and empty while the map stays null, so the two empty spellings stay distinguishable", layer: "request" }
+    it "answers a bare run with a present empty block, while the map stays null" do
+      bare = separate_repository("acme/api-no-observations")
+      create_test_run(repository: bare, commit_sha: "norowsapi01", duration_seconds: 42.5)
+      run = latest_run(key: bare.api_keys.create!, query: ask.merge(spec_directory: area))
+
+      expect(bare.latest_test_run.spec_observations).to be_empty
+      expect(run["unannotated_files"])
+        .to eq("spec_directory" => "spec/models", "rows" => [], "file_count" => 0,
+               "limit" => SpecObservation::UNANNOTATED_FILES_LIMIT)
+      # The disagreement itself, pinned the way the worklist-vs-map pair above is: three keys of one
+      # ask, three answers, and each one's spelling is the fact.
+      expect(run).to have_key("unannotated_directories")
+      expect(run["unannotated_directories"]).to be_nil
+      expect(run.dig("unannotated_examples", "recorded_count")).to eq(0)
+    end
+  end
+
   # AC3. The distinction this key must not collapse — and the sharpest instance of it on the block,
   # because the empty answer here is not a stale bookmark or a deleted file but the STATE THE METRIC
   # EXISTS TO REACH.
@@ -1146,6 +1412,50 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       expect(observation_reads { get_repository(query: query) }.length).to eq(11)
     end
 
+    # THE THIRD READ BEHIND THE ASK, and the shape of ask that takes it: a directory and NO file —
+    # the console panel's own gate, which SPGD-2000 carried onto this endpoint with the key.
+    #
+    # ⚠️ THE MARGINAL COST IS MEASURED ON THE GRAIN THE KEY OWNS, not on a whole-request delta
+    # between shapes — because the neighbouring shapes compensate each other. A directory ask opens
+    # the `spec_directory_files` listing a flag-only ask does not take, and a file ask opens the
+    # `spec_file_examples` drill-in a directory-only ask does not, each exactly one read — so a
+    # total compared across two shapes attributes other blocks' reads to this key. The files grain
+    # is the exact instrument: exactly one grouped read when the gate opens, empty on every other
+    # shape, and the +2 the whole request grows by against the flag-only ask decomposes into those
+    # two grain additions and nothing else.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "charge the files rung", behavior: "the directory-only ask costs exactly one spec_observations read in the files grain and none elsewhere, with the whole-request delta against the flag-only ask fully decomposed", layer: "request" }
+    it "charges the files read exactly once, on the directory-only ask and no other shape" do
+      directory_asked = ask.merge(spec_directory: "spec/models")
+
+      # Exactly one, and only on the shape whose gate opens: no flag, no read at all; flag without
+      # a directory reads the worklist and the map and nothing more; a file ask — with or without a
+      # directory — takes no files read, the worklist being its own answer.
+      expect(unannotated_files_grain_reads { get_repository(query: directory_asked) }.length).to eq(1)
+      expect(unannotated_files_grain_reads { get_repository }).to be_empty
+      expect(unannotated_files_grain_reads { get_repository(query: ask) }).to be_empty
+      expect(unannotated_files_grain_reads { get_repository(query: ask.merge(spec_file: other_file)) })
+        .to be_empty
+      expect(unannotated_files_grain_reads { get_repository(query: ask.merge(spec_file: other_file,
+                                                                             spec_directory: "spec/models")) })
+        .to be_empty
+      # The whole-request delta against the flag-only ask is TWO, and both belong to the directory
+      # ask: this key's read AND the `spec_directory_files` listing every directory ask pays. The
+      # two grain pins beside the counts are what attribute them — without that split, a +2 total
+      # could satisfy a claim about one read by hiding a second.
+      get_repository(query: ask)
+      un_narrowed = count_queries { get_repository(query: ask) }
+
+      get_repository(query: directory_asked)
+      narrowed = count_queries { get_repository(query: directory_asked) }
+
+      expect(narrowed).to eq(un_narrowed + 2)
+      expect(directory_files_grain_reads { get_repository(query: ask) }).to be_empty
+      expect(directory_files_grain_reads { get_repository(query: directory_asked) }.length).to eq(1)
+      # And the classified reads are ALL of them — the assertion that catches a read matching no
+      # grain's pattern, which neither a total nor a per-grain count can see.
+      expect(observation_reads { get_repository(query: directory_asked) }.length)
+        .to eq(classified_observation_reads { get_repository(query: directory_asked) })
+    end
     # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's
     # 20,000-example design point: BOTH reads are bounded by the size of the RUN and capped, so the
     # just-installed repository whose every example is unannotated costs the same two queries as this
