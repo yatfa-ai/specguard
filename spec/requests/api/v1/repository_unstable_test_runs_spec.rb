@@ -114,6 +114,25 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # failed, passed, passed, failed, passed.
     before { repository_with(%w[passed failed passed passed failed]) }
 
+    # The block's own contract, pinned EXACTLY on the precedent its parent block's shape pin sets:
+    # a key added without a line here fails, and a listed key quietly dropped fails too. The two
+    # computed readings ride the same rule as everything above them — present on every asked
+    # request, in every state the block can hold (the empty answer pins them withheld in the
+    # examples below headed "the ways this key can be empty").
+    # @intent: { entity: "unstable_test_runs", action: "pin the block shape", behavior: "exactly the contracted keys appear on the drill-in block, including the onset and duration-step readings", layer: "request" }
+    it "serves exactly the keys this contract pins on the block" do
+      served = block(query: { branch: "main", unstable_test: flipping_test })
+
+      expect(served.keys).to contain_exactly(
+        "name", "rows", "recorded_count", "reported_outcome_count", "unreported_outcome_count",
+        "run_count", "limit",
+        # SPGD-2007, the panel's two computed readings served as operands. `onset` answers the
+        # boundary the console's line names; `duration_step` answers the pace jump, for every
+        # origin — the console's `?unstable_test_from=` gate has no API counterpart to honour.
+        "onset", "duration_step"
+      )
+    end
+
     # AC1 at the row grain. Run identity BESIDE the test's own fields, because either half alone is
     # useless: an outcome with no commit cannot be attributed and a commit with no outcome is the
     # `history` row that already exists.
@@ -210,6 +229,182 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
         .to eq(%w[failed failed failed failed passed passed passed passed passed passed])
       expect(flaky_block.dig("unstable_test_runs", "rows").map { it["outcome"] })
         .to eq(%w[passed passed failed passed failed passed failed passed failed passed])
+    end
+  end
+
+  # SPGD-2007 — THE COMPUTED READINGS, and the panel's answer to the pair the block above
+  # distinguishes by hand. The console panel names the boundary in words
+  # (`UnstableTestRunOnset`) and the pace jump in one more line (`UnstableTestRunDurationStep`);
+  # this block pins the API's copy of both readings, served as operand keys beside the sequence
+  # they were computed from — same presenters, same withhold arms, no prose. The origin gate the
+  # console puts on the step line (`?unstable_test_from=slowest-examples`) has NO API counterpart
+  # to honour, so the step is served for every ask.
+  #
+  # ⭐ THE ORIENTATION EVERY EXAMPLE HERE GUARDS. The presenters walk `rows` from the window's
+  # newest end, and the rows on THIS endpoint arrive newest FIRST — the opposite of the
+  # oldest-first window the panel renders beside. Handed as-is, a trailing regression reads
+  # `newest_not_failed` (the window's oldest run, its far row, is the newest row of the reversed
+  # list) and the block serves a withhold over exactly the window the panel offers an onset for.
+  # Every offered assertion below names the boundary at OLDEST-FIRST indices, which the served
+  # rows' own order inverts — so a serializer that skipped the re-orientation fails these
+  # examples rather than passing them with a different shape.
+  describe "naming the regression onset and the duration step, as the panel does" do
+    # Chronologically: passed, passed, failed, failed — a textbook trailing regression whose
+    # boundary sits at oldest-first runs 1 → 2, which is rows 1 → 2 of the SERVED list reversed.
+    # The default fixture every onset example below reads.
+    before { repository_with(%w[passed passed failed failed]) }
+
+    # The run operands the readings name their ends by, resolved against ONE repository — sha
+    # values repeat across repositories, so the run is looked up through the repo's own runs and
+    # never globally.
+    def run_operand(repo, index)
+      run = repo.test_runs.find_by!(commit_sha: sha_for(index))
+
+      { "test_run_id" => run.id, "commit_sha" => run.commit_sha, "branch" => run.branch,
+        "ingested_at" => run.created_at.iso8601 }
+    end
+
+    def second_repository(name) = create_repository(user: repository.user, github_full_name: name)
+
+    # One repository whose window holds one run per entry of `durations_per_run`, every run
+    # passing unless `outcomes:` says otherwise — the step reading's input in the shape the
+    # console's own fixture file uses, and, with a trailing failure passed in, the fixture whose
+    # BOTH readings are offered at once (the cost example's).
+    def repository_with_durations(durations_per_run, outcomes: nil, repo: repository)
+      outcomes ||= Array.new(durations_per_run.length, "passed")
+      durations_per_run.each_with_index do |duration, index|
+        outcome = outcomes[index]
+        ingest(repo,
+               [example_spec(name: flipping_test, outcome: outcome, line_number: 1, duration: duration),
+                example_spec(name: "User signs in", outcome: outcome.nil? ? nil : "passed", line_number: 2,
+                             file_path: "spec/models/user_spec.rb")],
+               commit_sha: sha_for(index), branch: "main", at: (30 - index).days.ago)
+      end
+      repo
+    end
+
+    # AC: the correct pair DESPITE the newest-first rows — the whole point of the orientation
+    # guard above. The pair is also pinned EXACTLY, so a fourth key on an operand fails here.
+    # @intent: { entity: "unstable_test_runs.onset", action: "serve the offered boundary pair", behavior: "a trailing regression serves the last passing and first failing run at their oldest-first positions, with the compare range between their shas, while the rows themselves keep the window's newest-first direction", layer: "request" }
+    it "serves the pass→fail boundary pair despite the rows arriving newest-first" do
+      served = block(query: { branch: "main", unstable_test: flipping_test })
+
+      expect(served["onset"]).to eq(
+        "state" => "offered", "reason" => nil,
+        "last_pass" => run_operand(repository, 1),
+        "first_fail" => run_operand(repository, 2),
+        "compare" => repository.github_compare_url(sha_for(1), sha_for(2))
+      )
+      # The sequence the readings were computed over is NOT the one served: the rows keep the
+      # window's own newest-first direction, and the reversal the presenters need happens beside
+      # them, not under them.
+      expect(served["rows"].map { it["commit_sha"] })
+        .to eq([sha_for(3), sha_for(2), sha_for(1), sha_for(0)])
+    end
+
+    # The window OPENS inside the regression: every run that reported an outcome failed, so the
+    # last pass this window saw is none. An answer, not a withhold — with no operands and no
+    # range, because a range needs a passing run on this side of the window and there is none.
+    # @intent: { entity: "unstable_test_runs.onset", action: "answer failing since window start", behavior: "a window whose every reported run failed serves state failing_since_window_start with no operands and no compare", layer: "request" }
+    it "answers failing_since_window_start when every reported run failed" do
+      predates = repository_with(%w[failed failed failed], repo: second_repository("acme/onset-predates"))
+
+      onset = parent(repo: predates, query: { branch: "main", unstable_test: flipping_test })
+              .dig("unstable_test_runs", "onset")
+
+      expect(onset).to eq("state" => "failing_since_window_start", "reason" => nil,
+                          "last_pass" => nil, "first_fail" => nil, "compare" => nil)
+    end
+
+    # THE FLAKINESS SHAPE — failures scattered through the window, the newest one included. The
+    # newest run FAILED (otherwise the reading stops one arm earlier, at `newest_not_failed`) and
+    # a failure sits OLDER than the last passing run, which is the arm the flakiness shape is:
+    # the trailing block and its boundary are perfectly clean and the onset is still refused,
+    # because the newest failure of a scattered window is the latest failure and not the first
+    # one.
+    # @intent: { entity: "unstable_test_runs.onset", action: "withhold on scattered failures", behavior: "a failed newest run with an older failure before the last pass serves withheld with reason scattered, no operands and no compare", layer: "request" }
+    it "withholds with the scattered reason over the flakiness shape" do
+      flaky_repo = repository_with(%w[passed failed passed failed failed],
+                                   repo: second_repository("acme/onset-scattered"))
+
+      onset = parent(repo: flaky_repo, query: { branch: "main", unstable_test: flipping_test })
+              .dig("unstable_test_runs", "onset")
+
+      expect(onset).to eq("state" => "withheld", "reason" => "scattered", "last_pass" => nil,
+                          "first_fail" => nil, "compare" => nil)
+    end
+
+    # THE CAP, for both readings at once — the arm each presenter checks FIRST, so the two
+    # cannot disagree with each other or with the block's own `recorded_count > rows.length`
+    # comparison about whether the cap bit.
+    # @intent: { entity: "unstable_test_runs", action: "withhold both readings when capped", behavior: "a capped sequence serves withheld with reason capped on both the onset and the duration step, keeping the readings in agreement with the cap operands", layer: "request" }
+    it "withholds both readings with the capped reason when the cap took the newest rows" do
+      stub_const("SpecObservation::UNSTABLE_TEST_RUNS_LIMIT", 2)
+
+      served = block(query: { branch: "main", unstable_test: flipping_test })
+
+      expect(served["recorded_count"]).to eq(4)
+      expect(served["rows"].length).to eq(2)
+      expect(served["onset"]).to include("state" => "withheld", "reason" => "capped",
+                                         "compare" => nil)
+      expect(served["duration_step"]).to include("state" => "withheld", "reason" => "capped",
+                                                 "compare" => nil)
+    end
+
+    # THE STEP, offered: a green, steadily passing window whose pace jumped from one second to
+    # four. The ends carry the SUMMED run durations (one example per run here, so sum and
+    # per-row agree — the multi-example reduction is the presenter's own spec's to pin), and the
+    # compare range is between the two ends' shas.
+    # @intent: { entity: "unstable_test_runs.duration_step", action: "serve the offered step", behavior: "a passing window with a pace jump serves the largest run-over-run rise with both ends as run operands carrying the summed durations, and the compare range between their shas", layer: "request" }
+    it "serves the largest run-over-run rise with both ends and their summed durations" do
+      slowed = repository_with_durations([1.0, 1.1, 1.0, 4.2, 4.3],
+                                         repo: second_repository("acme/onset-slowed"))
+
+      step = parent(repo: slowed, query: { branch: "main", unstable_test: flipping_test })
+             .dig("unstable_test_runs", "duration_step")
+
+      expect(step).to eq(
+        "state" => "offered", "reason" => nil,
+        "from" => run_operand(slowed, 2).merge("seconds" => 1.0),
+        "to" => run_operand(slowed, 3).merge("seconds" => 4.2),
+        "compare" => slowed.github_compare_url(sha_for(2), sha_for(3))
+      )
+    end
+
+    # Two withhold arms beside the cap above, each on its own shape: a window that only ever got
+    # faster has no rise to name, and a genuine fourfold rise across only TWO timed runs still
+    # refuses because one interval cannot be told apart from the test simply being that slow.
+    # @intent: { entity: "unstable_test_runs.duration_step", action: "withhold the step", behavior: "a window with no rising pair serves withheld no_rise, and a genuine rise across only two timed runs serves withheld too_few_timed_runs", layer: "request" }
+    it "withholds the step with no_rise and with too_few_timed_runs" do
+      slowing = repository_with_durations([4.3, 4.2, 4.1], repo: second_repository("acme/onset-faster"))
+      step = parent(repo: slowing, query: { branch: "main", unstable_test: flipping_test })
+             .dig("unstable_test_runs", "duration_step")
+      expect(step).to eq("state" => "withheld", "reason" => "no_rise", "from" => nil,
+                         "to" => nil, "compare" => nil)
+
+      two = repository_with_durations([1.0, 4.2], repo: second_repository("acme/onset-two-runs"))
+      step = parent(repo: two, query: { branch: "main", unstable_test: flipping_test })
+             .dig("unstable_test_runs", "duration_step")
+      expect(step).to include("state" => "withheld", "reason" => "too_few_timed_runs")
+    end
+
+    # THE COST — both readings OFFERED on one window (a trailing failure beside the pace jump),
+    # the busiest path the readings have: both presenters run, the reversed window is built and
+    # memoized, two compare ranges are composed — and the request still issues exactly one read
+    # of the drill-in grain and nothing besides.
+    # @intent: { entity: "unstable_test_runs", action: "compute the readings for free", behavior: "the request whose onset and duration step are both offered still issues exactly one read of the drill-in grain and none besides", layer: "request" }
+    it "costs no query of its own when both readings are offered" do
+      both = repository_with_durations([1.0, 1.1, 4.2, 4.3], outcomes: %w[passed passed failed failed],
+                                       repo: second_repository("acme/onset-both-offered"))
+      ask = { branch: "main", unstable_test: flipping_test }
+      get_repository(repo: both, query: ask)
+
+      served = parent(repo: both, query: ask).dig("unstable_test_runs")
+      expect(served["onset"]["state"]).to eq("offered")
+      expect(served["duration_step"]["state"]).to eq("offered")
+
+      expect(unstable_test_runs_grain_reads { get_repository(repo: both, query: ask) }.length)
+        .to eq(1)
     end
   end
 
@@ -405,15 +600,27 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # A renamed test is the ORDINARY way to arrive here rather than the exotic one: the project's
     # identity rule is semantic, so a rename starts a new history and every bookmark to the old name
     # goes stale by design. 200, never a 404.
+    #
+    # The onset and the duration step are the presenters' OWN answers over a sequence with no rows —
+    # `nothing_reported` and `too_few_timed_runs` — which keeps the block's key set identical in
+    # every state: a client reads `onset` without first asking whether rows came back. Pinned here
+    # because this is the state where a `rows.any?` gate (the console's, which renders no line
+    # over an empty panel) would have made the keys conditional.
     # @intent: { entity: "unstable_test_runs", action: "answer an unknown test with an empty block", behavior: "a renamed or never-recorded description yields a present block with zero rows, its counts and the asked name, never a 404", layer: "request" }
     it "is a present block with no rows, naming the test, when the window recorded none" do
       served = block(query: { branch: "main", unstable_test: "Invoice finalize locks the line-items" })
 
       expect(response).to have_http_status(:ok)
-      expect(served).to eq("name" => "Invoice finalize locks the line-items", "rows" => [],
-                           "recorded_count" => 0, "reported_outcome_count" => 0,
-                           "unreported_outcome_count" => 0, "run_count" => 5,
-                           "limit" => SpecObservation::UNSTABLE_TEST_RUNS_LIMIT)
+      expect(served).to eq(
+        "name" => "Invoice finalize locks the line-items", "rows" => [],
+        "recorded_count" => 0, "reported_outcome_count" => 0,
+        "unreported_outcome_count" => 0, "run_count" => 5,
+        "limit" => SpecObservation::UNSTABLE_TEST_RUNS_LIMIT,
+        "onset" => { "state" => "withheld", "reason" => "nothing_reported", "last_pass" => nil,
+                     "first_fail" => nil, "compare" => nil },
+        "duration_step" => { "state" => "withheld", "reason" => "too_few_timed_runs", "from" => nil,
+                             "to" => nil, "compare" => nil }
+      )
     end
 
     # The pair, side by side, which is the assertion neither example above can make on its own: a

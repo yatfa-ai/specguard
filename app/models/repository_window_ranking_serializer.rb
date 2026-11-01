@@ -251,7 +251,46 @@ class RepositoryWindowRankingSerializer
   #
   # WHAT IT MAKES POSSIBLE, in one join the client already holds both sides of: `history` rows carry
   # `commit_sha` and these rows carry `commit_sha`, so the run this test started failing at is the
-  # commit on the earliest row of the failing tail. That is the answer this endpoint could not give.
+  # commit on the earliest row of the failing tail — a walk over up to 200 rows read NEWEST FIRST,
+  # where "earliest" is the far end. AND SINCE SPGD-2007 the endpoint does that walk ITSELF and
+  # names the pair: the `onset` key below is the panel's regression reading served as operands, so
+  # the scan and the orientation it can get wrong are the endpoint's work now, not the client's.
+  #
+  # THE ONSET AND THE DURATION STEP (SPGD-2007) — the panel's two computed readings over this same
+  # sequence, served as operand keys whenever the block is present. `onset` is
+  # `UnstableTestRunOnset.for`'s answer, five keys: `state` — `offered` (the pass→fail boundary
+  # pair in `last_pass` / `first_fail`, each the run operands the rows serve, with `compare` the
+  # GitHub range between the two shas), `failing_since_window_start` (every reported row failed,
+  # so no pass exists on this side of the window: no operands, no range), or `withheld` — `reason`
+  # naming WHICH arm of the reading rule refused, the presenter's own `REASONS` keys and never
+  # prose, on the operands-not-sentences rule every block on this endpoint follows.
+  # `duration_step` is the same shape over `UnstableTestRunDurationStep` — the largest
+  # run-over-run rise between consecutive timed runs, with `from` / `to` carrying the summed run
+  # durations the presenter reduced each run's rows to (`seconds` beside the run operands) — and
+  # it is served for EVERY origin, because the console's `?unstable_test_from=` gate words WHO the
+  # line is for and adds nothing to what the sequence supports. The pace figures around the step
+  # (fastest, median, newest, slowest) are deliberately NOT served: unlike the boundary, they are
+  # order-free aggregates a client computes from the rows it already holds.
+  #
+  # ⭐ THE ORIENTATION THE PRESENTERS REQUIRE, AND THE ONE TRAP IN THIS BLOCK. The two presenters
+  # walk `rows` POSITIONALLY from its newest end, and `UnstableTestRuns` is order-PROPAGATING — so
+  # they are computed over a fresh OLDEST-FIRST build of this same window, never over the
+  # newest-first sequence the rows are served in. Handed as-is, `reported.last` is the window's
+  # OLDEST run, a trailing regression reads as `newest_not_failed`, and the block serves a
+  # withheld onset over exactly the window the panel offers one for — the wrong answer wearing
+  # the right shape, with nothing in it to catch the eye. No second query pays for the
+  # correction: `UnstableTestRuns.new` re-pairs the SAME loaded observations against
+  # `history_runs.oldest_first`, and the presenters are pure over the rows they are handed. The
+  # window counts ride the rows' aggregate columns (`window_count` reads whichever row comes
+  # first, and every row carries the same two), so `capped?` and the rest read identically on
+  # both orientations.
+  #
+  # EVERY STATE THE BLOCK CAN HOLD SERVES THE TWO KEYS. The empty answer — an ask that matched
+  # nothing — carries `withheld` / `nothing_reported` and `withheld` / `too_few_timed_runs`,
+  # which are the presenters' own answers over a sequence with no rows, and they keep the block's
+  # key set identical in every state, on the key-always-present rule
+  # `serialized_unstable_tests_window` states in full: a client reads `onset` without first
+  # asking whether rows came back.
   #
   # `test_run_id` is served BESIDE `commit_sha` because a commit is not a key: the same commit is
   # legitimately ingested more than once — a re-run, a retry, a second workflow — and a reader
@@ -287,7 +326,9 @@ class RepositoryWindowRankingSerializer
   # the ask and it is decided before any read is issued. The read is bounded by ONE DESCRIPTION'S
   # rows over at most thirty runs — constant in the size of the suite, not merely sublinear in it —
   # and rides `index_spec_observations_on_repository_id_and_name`, EXPLAIN-certified for exactly this
-  # narrow in `spec/models/spec_observation_spec.rb`.
+  # narrow in `spec/models/spec_observation_spec.rb`. The onset and the duration step add NOTHING to
+  # that: both are pure over the loaded rows, so the block costs the same one read whatever the
+  # readings answer.
   def serialized_unstable_test_runs
     return nil if requested_unstable_test.nil?
 
@@ -318,7 +359,9 @@ class RepositoryWindowRankingSerializer
       reported_outcome_count: sequence.reported_outcome_count,
       unreported_outcome_count: sequence.unreported_outcome_count,
       run_count: sequence.run_count,
-      limit: SpecObservation::UNSTABLE_TEST_RUNS_LIMIT
+      limit: SpecObservation::UNSTABLE_TEST_RUNS_LIMIT,
+      onset: serialized_unstable_test_run_onset(sequence),
+      duration_step: serialized_unstable_test_run_duration_step(sequence)
     }
   end
 
@@ -652,6 +695,105 @@ class RepositoryWindowRankingSerializer
 
   delegate :repository, :history_runs, :requested_branch, :requested_unstable_test, :requested_layer,
            to: :overview, private: true
+
+  # THE PANEL'S REGRESSION READING over this block's sequence, as operands. The panel computes the
+  # same `UnstableTestRunOnset.for` over the oldest-first window it renders beside; this endpoint
+  # hands it the same rows re-paired oldest first (see the ⭐ orientation paragraph on the block
+  # above), so the two surfaces cannot disagree about the boundary they name.
+  #
+  # Operands and the reason KEY only: the sentences of this line live in `UnstableTestsHelper`,
+  # exactly where every other caption of the panel lives — the JSON words nothing. `state` is a
+  # three-way answer rather than the presenter's predicate trio flattened, spelled the way
+  # `serialized_slowest_tests` spells `state`: a string a client switches on.
+  def serialized_unstable_test_run_onset(sequence)
+    onset = UnstableTestRunOnset.for(unstable_test_run_readings(sequence))
+    last_pass, first_fail = onset.onset? ? [onset.last_pass_row, onset.first_fail_row] : []
+
+    {
+      state:
+        if onset.onset?
+          "offered"
+        elsif onset.failing_since_window_start?
+          "failing_since_window_start"
+        else
+          "withheld"
+        end,
+      reason: onset.reason&.to_s,
+      last_pass: last_pass && serialized_unstable_test_run_operand(last_pass),
+      first_fail: first_fail && serialized_unstable_test_run_operand(first_fail),
+      compare: unstable_test_run_compare_url(last_pass, first_fail)
+    }
+  end
+
+  # THE PANEL'S PACE READING over the same sequence, as operands — served for EVERY origin, on the
+  # rule the block's comment states: the console's `?unstable_test_from=` gate words who the line
+  # is for and adds nothing to what the sequence supports.
+  def serialized_unstable_test_run_duration_step(sequence)
+    step = UnstableTestRunDurationStep.for(unstable_test_run_readings(sequence))
+    from_row, to_row = step.offered? ? [step.from_row, step.to_row] : []
+
+    {
+      state: step.offered? ? "offered" : "withheld",
+      reason: step.reason&.to_s,
+      from: from_row && serialized_unstable_test_run_operand(from_row, seconds: step.from_seconds),
+      to: to_row && serialized_unstable_test_run_operand(to_row, seconds: step.to_seconds),
+      compare: unstable_test_run_compare_url(from_row, to_row)
+    }
+  end
+
+  # ONE RUN of the window, named the way the block's own rows name one — the operands the onset
+  # and step keys point their boundary ends by, on the shape `serialized_slowest_tests_anchor_run`
+  # set: the run is the identity (`test_run_id` beside `commit_sha`, which a re-run legitimately
+  # repeats) and `ingested_at` is the run's own. `seconds` rides ONLY on the duration step's two
+  # ends — the summed run durations the presenter reduced that run's rows to, the figures the
+  # step is between — and is dropped from the onset's operands, whose pair carries no figure at
+  # all. The presenters guarantee non-nil where the key survives: the step's ends are TIMED
+  # entries by construction.
+  def serialized_unstable_test_run_operand(row, seconds: nil)
+    {
+      test_run_id: row.test_run_id,
+      commit_sha: row.commit_sha,
+      branch: row.branch,
+      ingested_at: row.ingested_at.iso8601,
+      seconds: seconds
+    }.compact
+  end
+
+  # The GitHub range the offered readings point at — `Repository#github_compare_url`, base the
+  # older end, head the newer, composed off the two shas the operands already carry. `nil` unless
+  # both rows are present (an offered reading) AND they are different commits: the presenters
+  # withhold their same-commit arms, and the composition keeps the empty-diff guard that goes
+  # with it anyway, on `unstable_test_runs_compare_link`'s rule that a caller keeping the wording
+  # cannot drop the guard that travels with it.
+  def unstable_test_run_compare_url(from_row, to_row)
+    return nil unless from_row && to_row
+    return nil if from_row.commit_sha == to_row.commit_sha
+
+    repository.github_compare_url(from_row.commit_sha, to_row.commit_sha)
+  end
+
+  # THE PRESENTERS' WINDOW — the block's sequence re-paired OLDEST FIRST, the orientation
+  # `UnstableTestRunOnset` and `UnstableTestRunDurationStep` walk and the OPPOSITE of the one the
+  # rows are served in. See the ⭐ orientation paragraph on the block above for why this is not
+  # optional. Memoized on the file's `defined?` convention; this endpoint reaches it twice, once
+  # per reading, and the build is pure — re-pairing the SAME loaded observations against
+  # `history_runs.oldest_first`, no second query of any grain.
+  #
+  # `UnstableTestRuns.new` rather than a second `.for`: `.for` re-reads
+  # `SpecObservation.outcome_sequence_in`, and the observations this block already loaded ARE
+  # that read — the reversal is a pairing change, not a fetch. The runs are handed oldest first
+  # because `initialize` pairs each observation with its run off the handed array and counts the
+  # window off its size, both of which are orientation-free; the ORDER that changes is the rows',
+  # which is the point.
+  def unstable_test_run_readings(sequence)
+    return @unstable_test_run_readings if defined?(@unstable_test_run_readings)
+
+    @unstable_test_run_readings = UnstableTestRuns.new(
+      name: sequence.name,
+      runs: history_runs.oldest_first,
+      observations: sequence.rows.reverse.map(&:observation)
+    )
+  end
 
   # The presenter, or `nil` when no ranking was allowed — memoized across the nil with `defined?`
   # rather than `||=`, for the reason `unstable_tests` states below and under the same double read
