@@ -287,12 +287,18 @@ class RepositoryGrowthSerializer
   #   `null` is a latest run whose client sent no branch (there is no branch to compare on, and
   #   `Repository#previous_test_run_on_branch` refuses to pool anonymous runs into a fictional
   #   history), and a named `branch` is a genuine first run on that branch.
+  # * `baseline_unavailable` — a participating `?compare_to=` ask that resolved to NOTHING: the
+  #   named branch has no run at or before the anchored run (SPGD-2009). Serializer-level, and
+  #   deliberately NOT a fallback to the same-branch predecessor — silently measuring against a
+  #   different branch than the URL names is the one falsehood the ask must never produce. The
+  #   raw ask rides the block as `requested_compare_to`, so a client can tell this miss from the
+  #   same-branch `no_previous_run` it resembles.
   # * `latest_unmeasured`, `previous_unmeasured`, `assembled_differently` — `SpecDirectoryGrowth`'s
   #   three pre-query states, decided from the two runs alone.
   # * `neither_recorded`, `previous_unrecorded`, `latest_unrecorded` — its three row-decided states.
   # * `comparable` — the rows block below is non-null.
   #
-  # The first two are ADDED AT THIS CALL SITE and are not model states, deliberately.
+  # The first three are ADDED AT THIS CALL SITE and are not model states, deliberately.
   # `SpecDirectoryGrowth.for` dereferences its second argument on its second line, so it must not be
   # handed a nil; widening it to accept one would change a contract the dashboard already guards for
   # itself (`repositories_controller.rb`, `if @latest_test_run && @previous_test_run`). The guard is
@@ -319,6 +325,12 @@ class RepositoryGrowthSerializer
   # the few that enumerates what does and does not move it, and an enumeration that named only the
   # parameter with no effect would be the more misleading half to leave standing alone.
   #
+  # THE ONE EXCEPTION IS `?compare_to=` (SPGD-2009), which re-points the BASELINE instead of the
+  # anchor: the anchored run stays exactly what `?commit_sha=` picked (or the repository's newest),
+  # and the baseline becomes the newest run on the NAMED branch at or before it. `branch` still
+  # names the ANCHOR run's branch, and the ask's own `baseline_branch` names the branch the
+  # baseline was drawn from — the pair is cross-branch BY ASK, never by accident.
+  #
   # `basis` IS WHAT SEPARATES THIS PAIR FROM THE ONE ABOVE IT, and it is the key a client reads to
   # know which of the two growth measurements it is holding. `two_endpoints` there says the figures
   # are the two ends of a thirty-run window and not a series over it; `previous_run_on_branch` here
@@ -327,7 +339,10 @@ class RepositoryGrowthSerializer
   # hide inside a two-run comparison. Spelled as the baseline's RULE rather than as "adjacent_runs",
   # which would be read as adjacent in the history `history` serves and is not what this is: the two
   # runs are consecutive ON THEIR BRANCH, and the all-branch history routinely has other branches'
-  # runs between them.
+  # runs between them. Under a participating `?compare_to=` ask the token flips to
+  # `named_branch_baseline` — the rule the baseline follows is now "the newest run of the branch the
+  # URL names", and a client must be able to tell a cross-branch pair from a same-branch one by
+  # this token alone, because under an honoured ask the two shas name runs of DIFFERENT branches.
   #
   # `order` and `tie_break_served` are the WINDOW SIBLING'S OWN VALUES because they are the same
   # query's: `SpecObservation.directory_growth_between` orders by `ABS(...) DESC` then `path ASC`,
@@ -395,10 +410,11 @@ class RepositoryGrowthSerializer
 
   # The contract block for `layer_run_growth`, shaped like `directory_run_growth_window` and
   # carrying the same two runs (`anchor_commit_sha` = the latest/named run, `baseline_commit_sha` =
-  # its predecessor ON ITS OWN BRANCH). `state` is `LayerRunGrowth#state`, plus the two
+  # its predecessor ON ITS OWN BRANCH). `state` is `LayerRunGrowth#state`, plus the three
   # serializer-level states added at this call site exactly as the area sibling does —
-  # `no_latest_run` (CI never reported) and `no_previous_run` (first run on the branch, or a latest
-  # run that named no branch) — because the presenter is never handed a nil previous run.
+  # `no_latest_run` (CI never reported), `no_previous_run` (first run on the branch, or a latest
+  # run that named no branch) and `baseline_unavailable` (a `?compare_to=` ask that resolved to
+  # nothing, SPGD-2009) — because the presenter is never handed a nil previous run.
   # `comparable` is exactly `layer_run_growth != null`.
   def serialized_layer_run_growth_window
     layer_run_pair_window(layer_run_growth)
@@ -416,8 +432,8 @@ class RepositoryGrowthSerializer
 
   # The contract block for `layer_runtime_growth`, the exact shape of `layer_run_growth_window` so a
   # client reads both with one routine. `state` is `LayerRuntimeGrowth#state` (ten states) plus the
-  # two serializer-level ones, `no_latest_run` and `no_previous_run`. `comparable` is exactly
-  # `layer_runtime_growth != null`.
+  # three serializer-level ones, `no_latest_run`, `no_previous_run` and `baseline_unavailable`
+  # (SPGD-2009). `comparable` is exactly `layer_runtime_growth != null`.
   def serialized_layer_runtime_growth_window
     layer_run_pair_window(layer_runtime_growth)
   end
@@ -556,13 +572,17 @@ class RepositoryGrowthSerializer
   # times for "the facts that decide how the array beside it may be read". This comparison spans
   # exactly TWO runs and `basis` says so in a token.
   #
-  # ⭐ TWELVE STATES, AND THE ENUMERATION IS THE POINT. `SpecDirectoryRuntimeGrowth` has TEN of its
+  # ⭐ THIRTEEN STATES, AND THE ENUMERATION IS THE POINT. `SpecDirectoryRuntimeGrowth` has TEN of its
   # own — three MORE than its count sibling, because this grain has a second kind of absence:
   #
   # * `no_latest_run` — CI has never reported. ADDED AT THIS CALL SITE; see the accessor.
   # * `no_previous_run` — there is a latest run and no earlier run on its branch. ADDED HERE too, and
   #   it covers the same two shapes `branch` separates for the count sibling: a `null` branch is a
   #   latest run whose client sent none, a named branch is a genuine first run on it.
+  # * `baseline_unavailable` — a participating `?compare_to=` ask that resolved to nothing: the
+  #   named branch has no run at or before the anchored run (SPGD-2009). ADDED HERE as well, and
+  #   never fallen back from — the raw ask rides the block as `requested_compare_to`, so the miss
+  #   is stated, not substituted away.
   # * `latest_unmeasured`, `previous_unmeasured`, `assembled_differently` — the three pre-query
   #   states, decided from the two runs alone and short-circuiting the read.
   # * `neither_recorded`, `previous_unrecorded`, `latest_unrecorded` — a side wrote no per-example
@@ -1226,9 +1246,35 @@ class RepositoryGrowthSerializer
   end
 
   # `state` of every previous-run-on-branch contract block: the presenter's own state, plus the two
-  # serializer-level ones the presenter is never handed (`no_latest_run`, `no_previous_run`).
+  # serializer-level ones the presenter is never handed (`no_latest_run`, `no_previous_run`) — and,
+  # ahead of all of them, the third serializer-level one a participating `?compare_to=` ask that
+  # resolved to nothing serves. The decision is read off the overview's own
+  # `comparison_baseline_missed?`, never re-derived here from its two reads: the ask, the anchor
+  # and the lookup all happened in one place, so the classification must come from that place too
+  # (the same single-derivation rule `previous_test_run`'s memo carries).
   def run_pair_state(growth)
+    return :baseline_unavailable if comparison_baseline_missed?
+
     growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run)
+  end
+
+  # `basis` of every run-pair window block: `named_branch_baseline` exactly when a
+  # `?compare_to=` ask participates (the baseline is the NAMED branch's run, cross-branch on
+  # purpose), `previous_run_on_branch` in every other state. The token is the one fact a client
+  # needs to never mistake a cross-branch figure for a same-branch one — under a honoured ask the
+  # two shas name runs of DIFFERENT branches, which the anchor-side `branch` key alone cannot say.
+  def run_pair_basis
+    comparison_baseline_request ? "named_branch_baseline" : "previous_run_on_branch"
+  end
+
+  # The two keys a participating ask appends to every run-pair window block, in wire order:
+  # `baseline_branch` names the branch the baseline run was drawn from — the ask, verbatim, since
+  # `Repository#baseline_test_run_on_branch` resolves only ON that branch or returns nil — and
+  # `requested_compare_to` echoes the raw ask so a client can see the parameter it sent was seen,
+  # honoured or missed. Appended LAST (merge, not splice), so an un-asked body's bytes and key
+  # order are exactly what they were.
+  def named_baseline_keys
+    { baseline_branch: comparison_baseline_request, requested_compare_to: comparison_baseline_request }
   end
 
   # Body of `layer_growth` / `layer_run_growth`: the declared-layer COUNT movement.
@@ -1275,26 +1321,33 @@ class RepositoryGrowthSerializer
   end
 
   # The `basis: "previous_run_on_branch"` contract block of the two run-pair layer objects.
+  # Under a participating `?compare_to=` ask, `basis` flips to `named_branch_baseline` and the
+  # ask's two keys are appended last (see `run_pair_basis` / `named_baseline_keys`).
   def layer_run_pair_window(growth)
-    {
-      basis: "previous_run_on_branch",
+    window = {
+      basis: run_pair_basis,
       branch: latest_test_run&.branch,
       state: run_pair_state(growth),
       comparable: growth&.comparable? || false,
       anchor_commit_sha: latest_test_run&.commit_sha,
       baseline_commit_sha: previous_test_run&.commit_sha
     }
+
+    window.merge!(named_baseline_keys) if comparison_baseline_request
+    window
   end
 
   # The `basis: "previous_run_on_branch"` contract block of the two AREA run-pair windows
   # (`directory_run_growth_window` / `directory_runtime_growth_window`); `order` is each caller's own.
   # `layer` is echoed only when `?layer=` was asked (SPGD-1780), so a REFUSED state — where the block
-  # beside it is `null` — still says which layer's comparison was refused.
+  # beside it is `null` — still says which layer's comparison was refused. Under a participating
+  # `?compare_to=` ask, `basis` flips to `named_branch_baseline` and the ask's two keys are appended
+  # last (see `run_pair_basis` / `named_baseline_keys`).
   def area_run_pair_window(growth, order:)
     window = {
       order: order,
       tie_break_served: true,
-      basis: "previous_run_on_branch",
+      basis: run_pair_basis,
       branch_scope: "single_branch",
       branch: latest_test_run&.branch,
       state: run_pair_state(growth),
@@ -1304,23 +1357,30 @@ class RepositoryGrowthSerializer
     }
 
     window[:layer] = growth.layer if growth&.layer?
+    window.merge!(named_baseline_keys) if comparison_baseline_request
     window
   end
 
   # The contract block of the two FILE run-pair drill-ins (`directory_run_file_growth_window` /
-  # `directory_runtime_file_growth_window`); `order` and `limit` are each caller's own.
+  # `directory_runtime_file_growth_window`); `order` and `limit` are each caller's own. Under a
+  # participating `?compare_to=` ask, `basis` flips to `named_branch_baseline` and the ask's two
+  # keys are appended last — the two CONTRACT facts every run-pair block carries under an ask. The
+  # three operands (`branch`, `anchor_commit_sha`, `baseline_commit_sha`) stay un-served here even
+  # under an ask: they are the parent area block's, spelled once (see
+  # `serialized_directory_run_file_growth_window`).
   def file_run_pair_window(growth, order:, limit:)
     window = {
       path: requested_spec_directory,
       order: order,
       tie_break_served: true,
-      basis: "previous_run_on_branch",
+      basis: run_pair_basis,
       state: run_pair_state(growth),
       comparable: growth&.comparable? || false,
       limit: limit
     }
 
     window[:layer] = growth.layer if growth&.layer?
+    window.merge!(named_baseline_keys) if comparison_baseline_request
     window
   end
 
@@ -1351,7 +1411,8 @@ class RepositoryGrowthSerializer
   end
 
   delegate :latest_test_run, :previous_test_run, :requested_spec_directory, :requested_branch,
-           :requested_layer, :history_runs, to: :overview, private: true
+           :requested_layer, :history_runs, :comparison_baseline_request,
+           :comparison_baseline_missed?, to: :overview, private: true
 
   # The run-over-run presenter, or `nil` when there are not two runs to hand it — memoized across
   # the nil with `defined?` for the reason `unstable_tests` states, and under the same double read

@@ -190,6 +190,28 @@ class RepositoryOverview
   # See `RequestedCommitShaParam`, which holds that reasoning in full.
   include RequestedCommitShaParam
 
+  # `?compare_to=<branch>` read as the branch every run-pair growth figure below is explicitly
+  # measured against — SPGD-2009 bringing SPGD-1981's console ask to the API. One more
+  # value-carrying `Requested*Param` guard, shared with `RepositoryDashboard` and `RunsController`
+  # on the reasoning every shared include above gives: the guard is the parameter's, not the
+  # surface's, and a second copy of it would be a second answer to "which shapes does
+  # `?compare_to=` tolerate".
+  #
+  # It re-points a COMPARISON rather than narrowing a series or anchoring a run — `?branch=`
+  # narrows `history`, `?commit_sha=` picks the run this body describes, and this one names the
+  # run the growth blocks measure that run AGAINST — which is why it is read in exactly ONE place:
+  # the `previous_test_run` memo below, the choke point every run-pair block already flows
+  # through. Nothing else in the body re-derives the ask; the growth serializer reads the
+  # classification off the memos beside that memo (`comparison_baseline_request` and
+  # `comparison_baseline_missed?`), the way `RepositoryDashboard` keeps its own three ivars.
+  #
+  # Like the console's, a same-branch ask is absorbed COMPLETELY — `comparison_baseline_request`
+  # stays nil and the response is byte-for-byte the un-asked one — and a cross-branch ask that
+  # finds nothing at or before the anchored run is STATED (`baseline_unavailable` in the window
+  # blocks' `state`) rather than fallen back from, because silently measuring against a different
+  # branch than the URL names is the one falsehood this parameter must never produce.
+  include RequestedCompareToParam
+
   # `?limit=` read as an Integer ask for how many rows the two run-grain duration rollups should
   # list — the first MAGNITUDE `Requested*Param` this object reads, shared with
   # `RepositoriesController` on the same reasoning every shared include above gives: the guard is
@@ -1267,6 +1289,27 @@ class RepositoryOverview
   # or its branch is blank, so a repository CI has never reported on, and a run whose client sent no
   # branch, cost this endpoint nothing at all. Otherwise it is one indexed row lookup.
   #
+  # ⭐ THE ONE PLACE A `?compare_to=` ASK LANDS (SPGD-2009). Every run-pair growth block on this
+  # body flows through this memo, so re-pointing it here re-points all of them at once and an
+  # un-asked request touches none of them — the same one-choke-point property
+  # `RepositoryDashboard` verified before making the same promise about its own page. When the ask
+  # names a branch OTHER than the anchored run's own, this row becomes
+  # `Repository#baseline_test_run_on_branch`'s answer: the newest run on the NAMED branch at or
+  # before the anchored run — the explicit cross-branch baseline a PR branch whose CI has reported
+  # once needs, since it has no same-branch predecessor and every "since the previous run" figure
+  # would otherwise dead-end. One query either way: the named-branch lookup REPLACES the
+  # same-branch lookup, it does not add to it, so a query-count pin written against the un-asked
+  # endpoint still holds under an ask.
+  #
+  # A same-branch ask is absorbed COMPLETELY — `comparison_baseline_request` below stays nil and
+  # this memo takes the same-branch lookup, because the ask names the comparison the default
+  # already makes. And a cross-branch ask that finds NOTHING at or before the anchored run lands
+  # here as `nil` — never a same-branch predecessor — so the growth objects stay unconstructed and
+  # the window blocks say `baseline_unavailable` with the raw ask echoed, the way
+  # `RepositoryDashboard` records `@comparison_baseline_missed` instead of substituting a branch.
+  # Silently measuring against a different branch than the URL names is the one falsehood this ask
+  # must never produce.
+  #
   # THIS ROW IS NOT PRIMED, and that is a known second query rather than an oversight.
   # `SpecDirectoryGrowth`'s gate asks `TestRun#assembled_like?`, which reads `shard_count` on BOTH
   # sides; `latest_test_run` has already paid for its own `shard_totals` under `latest_run.shards`,
@@ -1284,7 +1327,54 @@ class RepositoryOverview
   def previous_test_run
     return @previous_test_run if defined?(@previous_test_run)
 
-    @previous_test_run = repository.previous_test_run_on_branch(latest_test_run)
+    @previous_test_run =
+      if comparison_baseline_request
+        repository.baseline_test_run_on_branch(latest_test_run, comparison_baseline_request)
+      else
+        repository.previous_test_run_on_branch(latest_test_run)
+      end
+  end
+
+  # THE PARTICIPATING ASK: the branch an honoured OR MISSED `?compare_to=` names, or `nil` when no
+  # ask participates — no parameter, a same-branch ask (the comparison the default already makes,
+  # absorbed completely), a malformed shape (treated as no ask by the concern's guard), or an ask
+  # with nothing to compare against (`latest_test_run` is nil, so there is no anchored run to be
+  # "other than"). The three-way split `RepositoryDashboard` keeps as
+  # `@comparison_baseline_request` / `@comparison_baseline_branch` / `@comparison_baseline_missed`
+  # collapses to these two memos here because the API serves no fallback delta: the console shows
+  # the same-branch comparison BESIDE a missed ask, so it keeps the two apart in two ivars; this
+  # endpoint either compares or states the miss, and `nil` means the default comparison stands.
+  #
+  # Memoized across the nil with `defined?` — `nil` (no ask) is the common answer, and the window
+  # builders read it on every response.
+  #
+  # Read by `previous_test_run` above and by `RepositoryGrowthSerializer` (published below), which
+  # echoes the raw ask as `requested_compare_to` and flips `basis` to `named_branch_baseline` on
+  # every run-pair window block exactly when this is non-nil — so a client can never mistake a
+  # cross-branch figure for a same-branch one.
+  def comparison_baseline_request
+    return @comparison_baseline_request if defined?(@comparison_baseline_request)
+
+    @comparison_baseline_request =
+      if requested_compare_to && latest_test_run && requested_compare_to != latest_test_run.branch
+        requested_compare_to
+      end
+  end
+
+  # Whether the participating ask RESOLVED TO NOTHING: a run is being described, the ask names a
+  # branch other than its own, and `baseline_test_run_on_branch` found no run of that branch at or
+  # before it. `false` — a MEASURED false, not an absence — for no ask, an absorbed same-branch
+  # ask, an honoured ask, and every shape the guard treats as no ask; true only for the missed
+  # arm, which is what the window blocks' `baseline_unavailable` state is served from. The
+  # serializer must not re-derive this from its own two reads — the decision is made once, here,
+  # beside the memo that performs it.
+  #
+  # Reads the memoized `previous_test_run`, so it adds no query to any state: with an ask, the
+  # named-branch lookup has already been issued and memoized.
+  def comparison_baseline_missed?
+    return @comparison_baseline_missed if defined?(@comparison_baseline_missed)
+
+    @comparison_baseline_missed = comparison_baseline_request.present? && previous_test_run.nil?
   end
 
   # THE GROWTH FAMILY, one memoized collaborator per overview — see `RepositoryGrowthSerializer`.
@@ -1304,6 +1394,14 @@ class RepositoryOverview
   # serializer and to nothing else. `public` needs the methods defined first, hence this position.
   public :latest_test_run, :previous_test_run, :requested_spec_directory, :requested_branch,
          :history_runs
+
+  # THE `?compare_to=` CLASSIFICATION the growth serializer reads off this object rather than
+  # re-deriving: `comparison_baseline_request` is the participating ask (nil for no ask, an
+  # absorbed same-branch ask, and every unresolvable shape) and `comparison_baseline_missed?`
+  # says whether it resolved to nothing. The window builders echo the first as
+  # `requested_compare_to` and serve the second as the `baseline_unavailable` state — one
+  # derivation, one choke point, the way `previous_test_run` above is.
+  public :comparison_baseline_request, :comparison_baseline_missed?
 
   # THE RUN-LEVEL DRILL-IN FAMILY, one memoized collaborator per overview — see
   # `RunDrillInSerializer`. One instance is all `LatestRunSerializer` needs; it holds no state of

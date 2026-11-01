@@ -1,8 +1,7 @@
 # frozen_string_literal: true
 
 # The shapes a `?compare_to=` query string can legally parse into that are NOT a branch name,
-# pinned ONCE for every surface that reads the parameter (SPGD-1981 — today that is the console
-# page; the API's growth blocks deliberately take no cross-branch ask).
+# pinned ONCE for every surface that reads the parameter (SPGD-1981 console, SPGD-2009 API).
 #
 # `?compare_to[]=main` is an Array, `?compare_to[a]=b` is an `ActionController::Parameters` and
 # `?compare_to[][a]=b` is an Array of them. None is a String, and an unguarded `.presence` on any
