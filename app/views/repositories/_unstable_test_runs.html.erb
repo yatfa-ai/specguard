@@ -99,33 +99,19 @@
               <p class="mt-1"><%= unstable_test_runs_onset_withheld_sentence(onset.reason) %></p>
             <% end %>
           <% elsif onset.onset? %>
-            <%# The same pairing the Commit cell of every row keeps — the sha out to GitHub, "read
-                run" back into the page's own run anchor — one pair per boundary run, then the
-                compare range beside them, shown only when the two shas differ (they always do when
-                the onset is offered — a shared sha with both outcomes is the same-commit withhold —
-                but the guard is the view's sentence to make, so it is made here). %>
+            <%# The boundary pairs are `unstable_test_runs_commit_links` — the sha out to GitHub,
+                "read run" back into the page's own run anchor — and the compare range beside them
+                is `unstable_test_runs_compare_link`, which renders nothing when the two shas are
+                the same (a shared sha with both outcomes is the same-commit withhold, so the onset
+                is never offered for one, and the guard travels with the helper rather than beside
+                each call). %>
             <%= render UI::AlertComponent.new(tone: :info, id: "unstable-test-runs-onset", class: "mb-3") do %>
               <p class="mt-1">
                 Regression onset: passed in
-                <%= link_to onset.last_pass_row.commit_sha.first(7),
-                            @repository.github_commit_url(onset.last_pass_row.commit_sha),
-                            class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
-                <%= link_to "read run",
-                            drill_down_path(@repository, commit_sha: onset.last_pass_row.commit_sha, anchor: "summary"),
-                            class: "rc-link" %>,
+                <%= unstable_test_runs_commit_links(onset.last_pass_row) %>,
                 first failed in
-                <%= link_to onset.first_fail_row.commit_sha.first(7),
-                            @repository.github_commit_url(onset.first_fail_row.commit_sha),
-                            class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
-                <%= link_to "read run",
-                            drill_down_path(@repository, commit_sha: onset.first_fail_row.commit_sha, anchor: "summary"),
-                            class: "rc-link" %>.
-                <% if onset.last_pass_row.commit_sha != onset.first_fail_row.commit_sha %>
-                  <%= link_to "Commits between these two runs",
-                              @repository.github_compare_url(onset.last_pass_row.commit_sha, onset.first_fail_row.commit_sha),
-                              class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
-                  is where to look.
-                <% end %>
+                <%= unstable_test_runs_commit_links(onset.first_fail_row) %>.
+                <%= unstable_test_runs_compare_link(onset.last_pass_row, onset.first_fail_row) %>
                 <%= unstable_test_runs_onset_range_caveat %>
               </p>
             <% end %>
@@ -155,36 +141,21 @@
           <% if unstable_test_runs_duration_step_shown? %>
             <% step = UnstableTestRunDurationStep.for(@unstable_test_runs) %>
             <% if step.offered? %>
-              <%# The same pairing the onset line and every row's Commit cell keep — the sha out
-                  to GitHub, "read run" back into the page's own run anchor — one pair per
-                  boundary run, then the compare range beside them, shown only when the two shas
-                  differ (they always do when the step is offered — a shared sha on the boundary
-                  is the same-commit withhold — but the guard is the view's sentence to make, as
-                  it is for the onset's pair). %>
+              <%# The boundary pairs are `unstable_test_runs_commit_links`, the compare range
+                  beside them `unstable_test_runs_compare_link` — the helpers the onset line
+                  above reaches too, so the offered lines cannot spell the gestures differently.
+                  The nil return covers the same-commit shape (a shared sha on the boundary is
+                  the same-commit withhold, so the step is never offered for one) the way it
+                  does for the onset's pair. %>
               <%= render UI::AlertComponent.new(tone: :info, id: "unstable-test-runs-duration-step", class: "mb-3") do %>
                 <p class="mt-1">
                   Largest step up:
                   <%= SpecObservation.humanized_duration(step.from_seconds) %> in
-                  <%= link_to step.from_row.commit_sha.first(7),
-                              @repository.github_commit_url(step.from_row.commit_sha),
-                              class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
-                  <%= link_to "read run",
-                              drill_down_path(@repository, commit_sha: step.from_row.commit_sha, anchor: "summary"),
-                              class: "rc-link" %>
+                  <%= unstable_test_runs_commit_links(step.from_row) %>
                   →
                   <%= SpecObservation.humanized_duration(step.to_seconds) %> in
-                  <%= link_to step.to_row.commit_sha.first(7),
-                              @repository.github_commit_url(step.to_row.commit_sha),
-                              class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
-                  <%= link_to "read run",
-                              drill_down_path(@repository, commit_sha: step.to_row.commit_sha, anchor: "summary"),
-                              class: "rc-link" %>.
-                  <% if step.from_row.commit_sha != step.to_row.commit_sha %>
-                    <%= link_to "Commits between these two runs",
-                                @repository.github_compare_url(step.from_row.commit_sha, step.to_row.commit_sha),
-                                class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
-                    is where to look.
-                  <% end %>
+                  <%= unstable_test_runs_commit_links(step.to_row) %>.
+                  <%= unstable_test_runs_compare_link(step.from_row, step.to_row) %>
                   <%= unstable_test_runs_onset_range_caveat %>
                   Across this window's timed runs: fastest
                   <%= SpecObservation.humanized_duration(step.fastest_seconds) %>, median
@@ -204,18 +175,17 @@
                 describedby: "unstable-test-runs-basis", sortable: true) do %>
             <% @unstable_test_runs.rows.each do |row| %>
               <tr>
-                <%# The Commit cell pairs the two destinations every sibling per-run affordance now
-                    offers: the sha out to GitHub, for the reader who wants the DIFF, and "read run"
-                    back into the page's own run anchor, for the one who wants the run's OWN
-                    telemetry (delivery line, shards, slowest examples) — the pairing Recent runs
-                    ("Read this run" / "Open commit on GitHub"), the near-duplicate stamp and the
-                    slowest-tests window's drawer all keep. `drill_down_path` is string composition
-                    off data the page already loaded, so the second link adds no query. No
-                    self-link suppression when the row IS the run being read: an extra path back is
-                    harmless, and Recent runs deliberately made the same call. %>
+                <%# The Commit cell's pairing — the sha out to GitHub for the reader who wants
+                    the DIFF, "read run" back into the page's own run anchor for the one who
+                    wants the run's OWN telemetry (delivery line, shards, slowest examples) — is
+                    the helper's one spelling, `unstable_test_runs_commit_links`, reached here by
+                    name like every other gesture of this partial. `drill_down_path` inside it is
+                    string composition off data the page already loaded, so the second link adds
+                    no query. No self-link suppression when the row IS the run being read: an
+                    extra path back is harmless, and Recent runs deliberately made the same
+                    call. %>
                 <td>
-                  <%= link_to row.commit_sha.first(7), @repository.github_commit_url(row.commit_sha), class: "rc-ext", target: "_blank", rel: "noopener noreferrer" %>
-                  <%= link_to "read run", drill_down_path(@repository, commit_sha: row.commit_sha, anchor: "summary"), class: "rc-link" %>
+                  <%= unstable_test_runs_commit_links(row) %>
                 </td>
                 <td>
                   <% if row.observation.file_path.present? && row.observation.line_number.present? %>
