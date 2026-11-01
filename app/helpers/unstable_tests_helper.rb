@@ -500,9 +500,10 @@ module UnstableTestsHelper
   # into the page's own run anchor (`rc-link`, the Summary anchor, `drill_down_path` carrying the
   # page's open asks with the explicit `commit_sha` winning). The GitHub link comes FIRST, because
   # the Commit cell renders this pair as its whole content and the cell's first anchor is the
-  # GitHub one. `@repository` is read as every sibling helper here does; both hrefs are string
-  # composition off the row's already-loaded sha, so the pair adds no query wherever it renders.
-  # Returns a SafeBuffer.
+  # GitHub one. `@repository` is the page's own instance variable, read the way the window
+  # family's link helpers do (`AreasOverWindowHelper#spec_directory_window_baseline_run_link`);
+  # both hrefs are string composition off the row's already-loaded sha, so the pair adds no
+  # query wherever it renders. Returns a SafeBuffer.
   def unstable_test_runs_commit_links(row)
     safe_join([
                 link_to(row.commit_sha.first(7), @repository.github_commit_url(row.commit_sha),

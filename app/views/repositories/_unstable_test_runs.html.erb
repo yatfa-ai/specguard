@@ -178,12 +178,11 @@
                 <%# The Commit cell's pairing — the sha out to GitHub for the reader who wants
                     the DIFF, "read run" back into the page's own run anchor for the one who
                     wants the run's OWN telemetry (delivery line, shards, slowest examples) — is
-                    the helper's one spelling, `unstable_test_runs_commit_links`, reached here by
-                    name like every other gesture of this partial. `drill_down_path` inside it is
-                    string composition off data the page already loaded, so the second link adds
-                    no query. No self-link suppression when the row IS the run being read: an
-                    extra path back is harmless, and Recent runs deliberately made the same
-                    call. %>
+                    the helper's one spelling, `unstable_test_runs_commit_links`. `drill_down_path`
+                    inside it is string composition off data the page already loaded, so the
+                    second link adds no query. No self-link suppression when the row IS the run
+                    being read: an extra path back is harmless, and Recent runs deliberately
+                    made the same call. %>
                 <td>
                   <%= unstable_test_runs_commit_links(row) %>
                 </td>
