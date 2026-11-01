@@ -5,7 +5,8 @@
 # the two intent helpers (`serialized_declared_intent`, `serialized_derived_intent`) they share. It
 # follows the `RepositoryGrowthSerializer` / `RepositoryWindowRankingSerializer` precedent: a
 # collaborator the overview owns one memoized instance of (`RepositoryOverview#drill_ins`), reaching
-# back into it only for the asks. `LatestRunSerializer` is its one caller.
+# back into it only for the asks. `LatestRunSerializer` is its one caller. (THIRTEEN since
+# SPGD-2000, which added `serialized_unannotated_files`; the twelve counts the move, not the file.)
 #
 # MOVE ONLY. Every method body and comment below is byte-identical to what it was in
 # `app/models/repository_overview.rb`; nothing about the emitted JSON, its key order or its query
@@ -1046,13 +1047,15 @@ class RunDrillInSerializer
   # before any read is issued — on this file's rule that THE GATE IS THE ASK: a client that never
   # sends the flag pays nothing for the key's existence, and one that does gets the ranking and the
   # worklist off one request rather than having to learn a second parameter to make the first usable.
-  # EXACTLY ONE ADDITIONAL QUERY FOR THIS KEY WHEN ASKED, AND NONE WHEN NOT — so the ask now costs
-  # TWO reads in total, one per block, which is what the cost examples in
+  # EXACTLY ONE ADDITIONAL QUERY FOR THIS KEY WHEN ASKED, AND NONE WHEN NOT — so the flag-ask costs
+  # TWO reads, one per block, and a directory-only narrowing adds the files rung's third
+  # (`serialized_unannotated_files` below), which is what the cost examples in
   # `repository_unannotated_examples_spec.rb` pin.
   #
-  # ⭐ THIS MAP IS WHOLE-RUN EVEN UNDER `?spec_file=` / `?spec_directory=`, AND ITS SIBLING IS NOT.
-  # This is the one place on this endpoint where two keys of ONE block are deliberately scoped
-  # differently, so it is disclosed here rather than left for a client to discover by arithmetic.
+  # ⭐ THIS MAP IS WHOLE-RUN EVEN UNDER `?spec_file=` / `?spec_directory=`, AND ITS SIBLINGS ARE NOT.
+  # This is the one place on this endpoint where keys of ONE ask are deliberately scoped differently
+  # — the worklist narrows, the files rung narrows with it, and this map does neither — so it is
+  # disclosed here rather than left for a client to discover by arithmetic.
   #
   # `unannotated_examples.recorded_count` NARROWS with the narrowing — SPGD-608 made it so on purpose,
   # because the window rides the WHERE and a count beside a narrowed list has to describe the
@@ -1171,10 +1174,12 @@ class RunDrillInSerializer
   # area is a row and the zero-debt file is not.
   #
   # EXACTLY ONE ADDITIONAL QUERY WHEN ASKED, AND NONE WHEN NOT — the third read behind this ask,
-  # which the cost example in `repository_unannotated_examples_spec.rb` pins against the file-asked
-  # shape: identical flag and area, only the file ask added, and exactly one `spec_observations`
-  # read between them. The gate is decided before any read is issued, so a client that never
-  # narrows to an area pays nothing for the key's existence.
+  # which the cost example in `repository_unannotated_examples_spec.rb` pins on the grain this key
+  # owns: exactly one `spec_observations` read when the gate opens, none on any other shape, and the
+  # whole-request delta against the flag-only ask fully decomposed (the other read behind a
+  # directory ask is `spec_directory_files`, which the key does not own). The gate is decided before
+  # any read is issued, so a client that never narrows to an area pays nothing for the key's
+  # existence.
   def serialized_unannotated_files(test_run)
     return nil unless requested_unannotated_examples? && requested_spec_directory && !requested_spec_file
 

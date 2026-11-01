@@ -321,15 +321,15 @@ module ObservationGrainReads
   # disagree about what a directory is. It cannot be un-shared, so — exactly as the area/growth split
   # already is — the grain is separated on what it orders by.
   #
-  # `COUNT(*) FILTER (WHERE status = 'unannotated')` **as an ORDER BY term** — the debt count is
-  # now the quantity TWO reads of this table rank by, and the grain holds both apart on what they
-  # GROUP BY: the area ranking (`.unannotated_directories_in`) groups on `DIRECTORY_EXPRESSION`,
-  # the file ranking (`.unannotated_files_in`) on `spec_file_path` and narrows on the area
-  # equality, so the file read is excluded below on its HAVING rather than adopted here. Before
-  # SPGD-2000 the term had one issuer, and the sentence above claimed it; that claim is why the
-  # exclusion is stated rather than assumed — a shared ordering is the one shape this file has met
-  # four times now (see `GROWTH_ORDER` and `RUNTIME_GROWTH_ORDER`), and each time the answer was an
-  # explicit exclusion plus a grain of its own, never a widening.
+  # `COUNT(*) FILTER (WHERE status = 'unannotated')` **as an ORDER BY term** — since SPGD-2000 the
+  # quantity TWO reads of this table rank by, and the grain holds them apart on what they GROUP BY:
+  # the area ranking (`.unannotated_directories_in`) groups on `DIRECTORY_EXPRESSION`, the file
+  # ranking (`.unannotated_files_in`) on `spec_file_path` and narrows on the area equality, so the
+  # file read is excluded below on its HAVING rather than adopted here. Until SPGD-2000 this
+  # pattern's comment could claim the term had one issuer — a claim true when written and exactly
+  # what a shared ordering always costs; the file has met the shape twice before (`GROWTH_ORDER`,
+  # `RUNTIME_GROWTH_ORDER`), and each time the answer was an explicit exclusion plus a grain of its
+  # own, never a widening.
   #
   # The near neighbour is `.unannotated_in`, which spells the same predicate
   # in a WHERE and emits `AS unannotated_recorded_count` besides, so the two cannot meet: a WHERE
@@ -349,7 +349,9 @@ module ObservationGrainReads
   # NOT retargeted at the new leading term. That one is spelled with `READING_EXPRESSION`, which
   # `SpecObservation::RUN_READING_COUNTS` shares by design, so a pattern built on it would be a
   # candidate for two reads at once — the exact double-classification `classified_observation_reads`
-  # exists to catch. The debt count remains the quantity only this read ranks by.
+  # exists to catch. Until SPGD-2000 this sentence could end by calling the debt count the quantity
+  # only this read ranks by; the file ranking one constant down now ranks by it too, and the grain
+  # holds the two apart on their grouping rather than on the term.
   UNANNOTATED_DEBT_ORDER = /COUNT\(\*\) FILTER \(WHERE status = 'unannotated'\) DESC/
 
   # The FILE-grain ANNOTATION-DEBT ranking — `SpecObservation.unannotated_files_in`, ONE area's

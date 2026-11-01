@@ -1104,8 +1104,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       expect(served["file_count"]).to be > served["rows"].length
     end
 
-    # The first of the three null spellings, and the gate's own first arm: the flag opens the ask,
-    # but no `?spec_directory=` names no area to rank the files OF. Key present, value null —
+    # The gate's own first arm, and the flag's own shape of "nobody asked here": the flag opens the
+    # ask, but no `?spec_directory=` names no area to rank the files OF. Key present, value null —
     # never an empty block, which is the answer to a named area and would here be a fabricated one.
     # A malformed directory shape is no ask at all, the same answer the worklist's own narrowing
     # gives it.
