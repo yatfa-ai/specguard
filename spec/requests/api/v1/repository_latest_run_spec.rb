@@ -3184,7 +3184,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # Read off the constant and never as a literal 60, so lowering the rule cannot leave this
         # example asserting a bound the platform no longer enforces.
         "observations_retained" => true,
-        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS,
+        # The run ask's own echo, present on every response and nil here — a sha ask is not a run
+        # ask, and the block never claims one was made.
+        "requested_run_id" => nil
       )
     end
 
@@ -3203,7 +3206,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "commit_sha" => third.commit_sha,
         "branch" => "main",
         "observations_retained" => true,
-        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS,
+        "requested_run_id" => nil
       )
     end
 
@@ -3232,7 +3236,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # newest run and not the sha the client typed — the same rule `commit_sha`/`branch` two
         # lines up already follow.
         "observations_retained" => true,
-        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS,
+        "requested_run_id" => nil
       )
       expect(body["latest_run"]).to include("commit_sha" => third.commit_sha, "total_specs" => 30)
     end
@@ -3258,7 +3263,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # verdict about a run that does not exist — the same separation `commit_sha: null` draws one
         # line up. `retention_runs` still ships, because the RULE exists whether or not a run does.
         "observations_retained" => nil,
-        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS,
+        "requested_run_id" => nil
       )
     end
 
@@ -3352,7 +3358,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "commit_sha" => third.commit_sha,
         "branch" => "main",
         "observations_retained" => true,
-        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS,
+        "requested_run_id" => nil
       )
     end
 
