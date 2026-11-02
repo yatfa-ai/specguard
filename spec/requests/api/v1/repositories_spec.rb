@@ -71,16 +71,21 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
       response.parsed_body
     end
 
-    # @intent: { entity: "run_anchor", action: "disclose retention", behavior: "the retention disclosure adds exactly observations_retained and retention_runs beside the five pre-existing run_anchor keys, each unchanged in name, type and value", layer: "request" }
-    it "adds exactly two keys to run_anchor and leaves the other five as they were" do
+    # @intent: { entity: "run_anchor", action: "disclose retention", behavior: "run_anchor carries exactly the retention keys (observations_retained, retention_runs) beside the five pre-existing anchor keys and SPGD-2018's requested_run_id echo, the pre-existing five unchanged in name, type and value", layer: "request" }
+    it "serves the two retention keys beside the anchor's other keys, with no stray sixth key" do
       run = create_test_run(repository: repository, branch: "main", commit_sha: "feedfacecafe",
                             total_specs_count: 12)
 
       anchor = anchor_for["run_anchor"]
 
+      # `requested_run_id` joined the set with SPGD-2018's run ask; it is the sha ask's sibling
+      # echo and is nil on this un-asked call. Pinned here so a THIRD stray key cannot slip in
+      # unobserved, and so the five's names, types and values stay exactly what they were.
       expect(anchor.keys).to contain_exactly("source", "requested_commit_sha", "resolved",
                                              "commit_sha", "branch",
-                                             "observations_retained", "retention_runs")
+                                             "observations_retained", "retention_runs",
+                                             "requested_run_id")
+      expect(anchor["requested_run_id"]).to be_nil
       # The five, unchanged in name, type and value — a default call is what it always was.
       expect(anchor.slice("source", "requested_commit_sha", "resolved", "commit_sha", "branch"))
         .to eq("source" => "default", "requested_commit_sha" => nil, "resolved" => true,
