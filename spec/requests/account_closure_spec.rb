@@ -460,6 +460,57 @@ RSpec.describe "Account closure", type: :request do
       expect(owned_item).not_to include("acme/solo-3")
     end
 
+    # SPGD-2016 — the grammar arms the singular examples above cannot reach: two
+    # unadministrable repositories flip that clause to "2 have members"/"their CI keys", and
+    # when both clause kinds exist the "; " separator between them is what holds the
+    # disclosure together as one sentence. Flipping either plural or the join stayed green,
+    # because no example ever rendered this mixed state.
+    # @intent: { entity: "Repository", action: "compose the mixed owned-repository disclosure", behavior: "GET /account for an owner of one memberless repository and two repositories whose only members hold view and runs.ingest renders the unopenable clause and the plural unadministrable clause joined by '; ' in the Close-account panel, each naming its repositories", layer: "request" }
+    it "joins an unopenable clause to a plural unadministrable clause with '; '" do
+      create_repository(user: person, github_full_name: "acme/solo")
+      create_repository(user: person, github_full_name: "acme/stuck-a").tap do |repository|
+        create_membership(repository: repository, user: colleague,
+                          permissions: [RepositoryMembership::VIEW, RepositoryMembership::RUNS_INGEST])
+      end
+      create_repository(user: person, github_full_name: "acme/stuck-b").tap do |repository|
+        create_membership(repository: repository, user: colleague,
+                          permissions: [RepositoryMembership::VIEW, RepositoryMembership::RUNS_INGEST])
+      end
+
+      get account_path
+
+      item = owned_item
+      expect(item).to include("You own 3 repositories.")
+      expect(item).to include("1 has no other members and will become unopenable")
+      # Panel names are links, so the mixed assertion runs to the second clause's stem and
+      # stops at its parenthesis; the names themselves are asserted on their own.
+      expect(item).to include("); 2 have members but none who can manage keys or members, " \
+                              "so their CI keys can no longer be minted or revoked from SpecGuard")
+      expect(item).to include("acme/solo")
+      expect(item).to include("acme/stuck-a")
+      expect(item).to include("acme/stuck-b")
+    end
+
+    # The name cap on the other clause's list: four unadministrable repositories name three and
+    # fall back to "and 1 more", in panel and confirm — the cap had only ever been asserted on
+    # the unopenable list.
+    # @intent: { entity: "Repository", action: "cap the unadministrable clause's named repositories", behavior: "GET /account for an owner of four repositories whose only members hold view and runs.ingest lists three full names plus 'and 1 more' in the unadministrable clause of the panel and the confirm and never names the fourth", layer: "request" }
+    it "caps the unadministrable clause's named repositories too" do
+      4.times do |n|
+        create_repository(user: person, github_full_name: "acme/stuck-#{n}").tap do |repository|
+          create_membership(repository: repository, user: colleague,
+                            permissions: [RepositoryMembership::VIEW, RepositoryMembership::RUNS_INGEST])
+        end
+      end
+
+      get account_path
+
+      expect(owned_item).to include("4 have members but none who can manage keys or members")
+      expect(owned_item).to include(" and 1 more)")
+      expect(owned_item).not_to include("acme/stuck-3")
+      expect(closure_panel).to include("acme/stuck-0, acme/stuck-1, acme/stuck-2 and 1 more")
+    end
+
     # @intent: { entity: "Repository", action: "pair the panel and confirm copy", behavior: "GET /account renders the owned-repository disclosure in the turbo_confirm with the same clauses and names as the panel, in plain text", layer: "request" }
     it "says the same thing in the confirm dialog" do
       create_repository(user: person, github_full_name: "acme/lonely")
@@ -471,6 +522,35 @@ RSpec.describe "Account closure", type: :request do
         "(acme/lonely). Renaming a repository is owner-only, so none of them can be renamed " \
         "once the account is closed. Add a member holding keys.manage or members.manage first, " \
         "or remove the repository."
+      )
+    end
+
+    # The mixed disclosure in the dialog too: the plain twin carries both clauses and the
+    # "; " join, and the remedy sentence still closes the owned part — nothing asserted the
+    # unadministrable clause in plain text at all.
+    # @intent: { entity: "Repository", action: "carry the mixed owned disclosure into the confirm", behavior: "GET /account for an owner of one memberless repository and two repositories whose only members hold view and runs.ingest renders both clauses joined by '; ' in the turbo_confirm plain text, closing the owned part on the add-a-member remedy", layer: "request" }
+    it "carries the mixed disclosure into the confirm dialog" do
+      create_repository(user: person, github_full_name: "acme/solo")
+      create_repository(user: person, github_full_name: "acme/stuck-a").tap do |repository|
+        create_membership(repository: repository, user: colleague,
+                          permissions: [RepositoryMembership::VIEW, RepositoryMembership::RUNS_INGEST])
+      end
+      create_repository(user: person, github_full_name: "acme/stuck-b").tap do |repository|
+        create_membership(repository: repository, user: colleague,
+                          permissions: [RepositoryMembership::VIEW, RepositoryMembership::RUNS_INGEST])
+      end
+
+      get account_path
+
+      expect(closure_panel).to include(
+        "You own 3 repositories. Of those, 1 has no other members and will become unopenable " \
+        "(acme/solo); 2 have members but none who can manage keys or members, so their CI keys " \
+        "can no longer be minted or revoked from SpecGuard"
+      )
+      expect(closure_panel).to include("(acme/stuck-a, acme/stuck-b). Renaming a repository is " \
+                                       "owner-only")
+      expect(closure_panel).to include(
+        "or remove the repository. This cannot be undone from within SpecGuard."
       )
     end
 
