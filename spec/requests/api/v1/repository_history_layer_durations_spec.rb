@@ -96,14 +96,16 @@ RSpec.describe "GET /api/v1/repository — history[].layer_durations", type: :re
       end
     end
 
-    # @intent: { entity: "history layer_durations", action: "append last", behavior: "layer_durations is the last key of every history row and the earlier keys keep their order", layer: "request" }
+    # @intent: { entity: "history layer_durations", action: "append last", behavior: "layer_durations is the last key of every history row before the SPGD-2014 appended id, and the earlier keys keep their order", layer: "request" }
     it "appends layer_durations as the LAST key, after layer_counts" do
       keys = get_repository(query: { branch: "main" })["history"].map(&:keys)
 
       expect(keys.uniq.length).to eq(1)
+      # SPGD-2014 appended `id` after `layer_durations`, on that key's own append-last rule — the
+      # assertion grows by the appended key rather than being rewritten.
       expect(keys.first).to eq(
         %w[commit_sha branch total_specs annotated_specs annotated_ratio duration_seconds shard_count
-           timed_shard_count suite_size_measured ingested_at layer_counts layer_durations]
+           timed_shard_count suite_size_measured ingested_at layer_counts layer_durations id]
       )
     end
 

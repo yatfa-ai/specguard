@@ -110,7 +110,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                       duration_seconds: 42.5)
     end
 
-    # @intent: { entity: "Repository latest-run endpoint", action: "report suite facts", behavior: "the response describes the newest run's suite totals exactly as ingest stored them, with no derived or invented figures", layer: "request" }
+    # @intent: { entity: "Repository latest-run endpoint", action: "report suite facts", behavior: "the response describes the newest run's suite totals exactly as ingest stored them, with no derived or invented figures, naming the run by the id delete consumes", layer: "request" }
     it "reports the latest run's suite facts" do
       body = get_repository
 
@@ -212,7 +212,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # side by side.
         "unannotated_files" => nil,
         "suite_size_measured" => true,
-        "ingested_at" => test_run.created_at.iso8601
+        "ingested_at" => test_run.created_at.iso8601,
+        # SPGD-2014, APPENDED LAST to mirror the serializer's append-last discipline (every earlier
+        # key keeps its position): the run's primary key, the handle DELETE
+        # /api/v1/repositories/:repository_id/runs/:id consumes and POST /ingest answers as
+        # `test_run_id`. Read off the fixture's row rather than a literal, on the rule AC2 below
+        # states for the counters: a hand-written id would let the endpoint serve a different
+        # row's id without anything going red.
+        "id" => test_run.id
       )
     end
 
@@ -569,7 +576,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "repeated_description_examples", "unannotated_examples",
                             "unannotated_directories", "unannotated_files",
                             "suite_size_measured",
-                            "ingested_at")
+                            "ingested_at",
+                            # SPGD-2014, appended last exactly as the serializer appends it: the
+                            # run's durable handle, the id the delete route consumes.
+                            "id")
     end
 
     # @intent: { entity: "Repository latest-run endpoint", action: "pin shard keys", behavior: "once shards have arrived the shards block serves exactly the pinned key set and nothing improvised", layer: "request" }
@@ -2338,7 +2348,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # state: NULL, never five zeros. The populated shape is pinned in repository_history_layer_counts_spec.rb.
         "layer_counts" => nil,
         # The machine-time twin of `layer_counts`, on the same rule: NULL for a run with no per-example rows.
-        "layer_durations" => nil
+        "layer_durations" => nil,
+        # SPGD-2014, APPENDED LAST to mirror the serializer: the run's primary key — the tie-break
+        # term of the history order and the handle DELETE /api/v1/repositories/:repository_id/runs/:id
+        # consumes — read off the fixture's row rather than a literal.
+        "id" => third.id
       )
     end
 
@@ -2370,7 +2384,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # BOTH ordering keys, because the second one decides the same-instant pair below and a
         # client that read `ingested_at_desc` alone would re-sort straight through it.
         "order" => "ingested_at_desc,ingest_sequence_desc",
-        "tie_break_served" => false,
+        # SPGD-2014 flipped this to `true`, and honestly: every row now carries the tie-break key
+        # as `id`, so the order is reproducible from the fields the client holds. The row-key guard
+        # below pins the key itself, so the token and the rows cannot drift apart.
+        "tie_break_served" => true,
         "branch_scope" => "all_branches",
         "branch" => nil,
         "limit" => 10,
@@ -2378,35 +2395,43 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       )
     end
 
-    # The claim `tie_break_served: false` makes, pinned rather than left as a literal nobody checks:
-    # the rows genuinely do not carry the second ordering key, so the order cannot be reproduced
-    # from what the client holds and the array's own order is the answer. If a later slice serves an
-    # id or an ingest sequence on a row, this fails and the token has to be re-decided rather than
-    # silently becoming a lie.
-    # @intent: { entity: "Repository history window", action: "keep array order authoritative", behavior: "no second ordering key is served on a row, so the array position stays the only order", layer: "request" }
-    it "serves no second ordering key on a row, which is what makes the array order authoritative" do
+    # The claim `tie_break_served: true` makes since SPGD-2014, pinned rather than left as a
+    # literal nobody checks: the rows DO carry the second ordering key now, as `id`, so the order
+    # is reproducible from what the client holds and the array order is a rendering of one rather
+    # than the only answer. SPGD-2014 re-decided the token this example used to pin the opposite
+    # of — the old guard served NO id on a row and stated the re-decision rule this slice
+    # followed: a served id flips the token rather than silently making a served claim a lie.
+    # @intent: { entity: "Repository history window", action: "serve the tie-break key", behavior: "each history row carries its id as the second ordering key, so the tie_break_served token is honest and the order is reproducible client-side", layer: "request" }
+    it "serves the id on every row, which is what makes tie_break_served honest" do
       first, _second, _third = three_runs
 
-      row = get_repository["history"].last
+      body = get_repository
+      row = body["history"].last
 
       expect(row["commit_sha"]).to eq(first.commit_sha)
-      # Asserted on the KEYS, and bidirectionally: a served id or ingest sequence needs a key, and
-      # `contain_exactly` fails on any key not in this list. Checking the VALUES for the row's id
-      # instead would read as the stronger assertion and be a weaker one — `test_runs.id` is a
-      # bigint from a sequence Postgres does not roll back between examples, so it eventually
-      # collides with this fixture's `total_specs` (30) or `annotated_specs` (6) and goes red on an
-      # untouched serializer, under a name that blames the serializer for leaking an id.
-      # `not_to include("id", "ingest_sequence")` is no better: it negates "includes BOTH", so it
-      # passes on a row serving one of them — the same trap the shards example flags one describe
-      # block up. `ingested_at` is the only ordering key served, and it is the one that ties.
+      # The id is the ROW's own primary key, read off the fixture the same way the commit_sha
+      # beside it is — not a literal, which could pass while the endpoint served a different
+      # row's id.
+      expect(row["id"]).to eq(first.id)
+      # Asserted on the KEYS, and bidirectionally: `contain_exactly` fails on any key not in this
+      # list, so the guard keeps describing the whole row rather than the one key this slice
+      # added. (`test_runs.id` is a bigint from a sequence Postgres does not roll back between
+      # examples, which is why the VALUE above is read off the fixture rather than guessed at —
+      # it eventually collides with this fixture's `total_specs` (30) or `annotated_specs` (6),
+      # and the guard must go red only on a real drift.)
       expect(row.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at",
-        "layer_counts", "layer_durations"
+        "layer_counts", "layer_durations",
+        # SPGD-2014, APPENDED LAST exactly as the serializer appends it — every earlier key keeps
+        # its position, so a client reading rows positionally or diffing key lists sees only
+        # additions at the end.
+        "id"
       )
-      # `layer_counts` then `layer_durations` are APPENDED: every earlier key keeps its position, so a
-      # client reading rows positionally or diffing key lists sees only additions at the end.
-      expect(row.keys.last(2)).to eq(%w[layer_counts layer_durations])
+      expect(row.keys.last(3)).to eq(%w[layer_counts layer_durations id])
+      # The window beside the rows states the same fact, so the two halves of one response cannot
+      # disagree about whether the order is reproducible.
+      expect(body["history_window"]["tie_break_served"]).to be(true)
     end
 
     # AC. Every figure re-derived straight from the table, in the ordering the model documents —
@@ -2628,7 +2653,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # "nothing found".
         "unannotated_files" => nil,
         "suite_size_measured" => true,
-        "ingested_at" => third.created_at.iso8601
+        "ingested_at" => third.created_at.iso8601,
+        # SPGD-2014, appended LAST to mirror the serializer: the run's primary key, the handle the
+        # run-delete route consumes, read off the fixture's row rather than a literal.
+        "id" => third.id
       )
       expect(body["api_key"]).to have_key("last_used_at")
     end
@@ -2758,7 +2786,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(get_repository(query: { branch: "main" })["history_window"]).to eq(
         "order" => "ingested_at_desc,ingest_sequence_desc",
-        "tie_break_served" => false,
+        # SPGD-2014: every row carries its id, so the tie-break token is true under the narrowed
+        # window exactly as under the unfiltered one.
+        "tie_break_served" => true,
         "branch_scope" => "single_branch",
         "branch" => "main",
         # AC2's second half: the bound ACTUALLY APPLIED, not the constant `10` the unfiltered
@@ -2928,9 +2958,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at",
-        "layer_counts", "layer_durations"
+        "layer_counts", "layer_durations",
+        # SPGD-2014, appended last exactly as the serializer appends it, under the narrowed window
+        # too: the id is served on every row whatever the ask was.
+        "id"
       )
-      expect(body["history"].first.keys.last(2)).to eq(%w[layer_counts layer_durations])
+      expect(body["history"].first.keys.last(3)).to eq(%w[layer_counts layer_durations id])
     end
 
     # AC8. The rows are `recent_test_runs`' own ordering, tie-break included, and the branch
@@ -3666,7 +3699,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["branches"]).to be_present
       expect(body["history_window"]).to eq(
         "order" => "ingested_at_desc,ingest_sequence_desc",
-        "tie_break_served" => false,
+        # SPGD-2014: the window keeps its key set exactly — this example's point is that the
+        # catalogue grows no key here — and the tie-break token holds its SPGD-2014 value: every
+        # row carries its id, so `true` is served under every ask.
+        "tie_break_served" => true,
         "branch_scope" => "all_branches",
         "branch" => nil,
         "limit" => 10,
