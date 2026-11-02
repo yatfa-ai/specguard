@@ -258,6 +258,22 @@ Rails.application.routes.draw do
       # offboarding actually took. See `Api::V1::UserRepositoryAgentKeysController#presented_revoked`.
       get "repositories/:repository_id/agent_keys/presented_revoked",
           to: "user_repository_agent_keys#presented_revoked"
+      # DELETING ONE RUN (SPGD-2014) — the API half of the web surface's `resources :runs,
+      # only: %i[destroy]` (SPGD-812), through the SAME `:repo_delete` gate that verb already
+      # carries, so the API cannot be cheaper than the browser. The body that makes the route
+      # usable is `RepositoryOverview`'s: `latest_run.id` and every `history[]` row now carry the
+      # run's id (SPGD-2014 again), which is the only handle this route accepts — a commit_sha
+      # deliberately is not it, because one sha can name several runs of one repository, the
+      # reason the console anchors pages on `?run=<id>` too. Named-per-route, like the api_keys /
+      # agent_keys / members trios around it: same `sgu_`/`sga_` credential pair, same noun,
+      # one controller, and the `:repository_id` segment is what
+      # `RepositoryAuthorization#current_repository` reads. Declared in THIS block (after the
+      # literal `presented_revoked`, before the greedy `repositories/:id` member route) on the
+      # same reading-order grounds that comment states: the literal `runs` sits behind a dynamic
+      # `:repository_id`, so no member `:id` route can swallow it — but keeping every
+      # `:repository_id`-named route above the two greedy ones is what keeps that property true
+      # by construction. Do not sort these routes.
+      delete "repositories/:repository_id/runs/:id", to: "user_repository_runs#destroy"
       # ONE REPOSITORY, BY NAME, FOR THE PERSON HOLDING THE KEY — the reading `get "repositories"`
       # above stops one grain short of. That one lists what a person may open and serves six identity
       # fields per row; this opens one and serves the whole overview.

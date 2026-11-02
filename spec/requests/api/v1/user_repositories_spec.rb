@@ -375,7 +375,11 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
         "shards" => nil,
         # Appended after `shards`. This run recorded no per-example rows, so there is no mix to
         # state: `null`, never five zeros.
-        "layer_counts" => nil
+        "layer_counts" => nil,
+        # SPGD-2014, appended LAST to mirror the serializer: the run's primary key — the handle
+        # DELETE /api/v1/repositories/:repository_id/runs/:id consumes — read off the fixture's
+        # row rather than a literal.
+        "id" => run.id
       )
     end
 
@@ -526,7 +530,11 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
       block = entry_for("acme/empty")["latest_run"]
       expect(block.key?("layer_counts")).to be(true)
       expect(block["layer_counts"]).to be_nil
-      expect(entry_for("acme/billing-service")["latest_run"].keys.last).to eq("layer_counts")
+      # SPGD-2014 appended `id` after `layer_counts`, exactly as the serializer appends it — the
+      # assertion grows by the appended key rather than being rewritten, so the append-last
+      # discipline it pins (every earlier key keeps its position) is still what is being tested.
+      expect(entry_for("acme/billing-service")["latest_run"].keys.last(2))
+        .to eq(%w[layer_counts id])
     end
 
     # @intent: { entity: "repository list", action: "batch the layer read", behavior: "the list issues exactly one spec_observations query with three repositories (one with no observations, one never ingested) and the same single query after a fourth is added", layer: "request" }

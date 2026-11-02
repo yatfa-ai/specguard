@@ -1019,24 +1019,26 @@ class RepositoryOverview
   # bound is what keeps `returned == limit` meaning the same thing under both — a client that had to
   # know the rule to interpret the number would be reading a caption again.
   #
-  # `order` NAMES BOTH KEYS, because the second one is load-bearing and is not served. The rows are
-  # ordered `(created_at, id) DESC` — `Repository#recent_test_runs`' ordering, tie-break included —
-  # and `ingested_at_desc` alone would invite exactly the re-sort the serializer refuses to do
-  # itself: two runs ingested in the same instant carry the same `ingested_at`, so a client sorting
-  # on that field alone scrambles the very pair the tie-break exists to order, and can disagree with
-  # `latest_run` about which commit is newest. Narrowing the window does not re-sort it; the branch
-  # predicate rides along with the same `ORDER BY`.
+  # `order` NAMES BOTH KEYS, because the second one is load-bearing and both are served. The rows
+  # are ordered `(created_at, id) DESC` — `Repository#recent_test_runs`' ordering, tie-break
+  # included — and `ingested_at_desc` alone would invite exactly the re-sort the serializer refuses
+  # to do itself: two runs ingested in the same instant carry the same `ingested_at`, so a client
+  # sorting on that field alone scrambles the very pair the tie-break exists to order, and can
+  # disagree with `latest_run` about which commit is newest. Narrowing the window does not re-sort
+  # it; the branch predicate rides along with the same `ORDER BY`.
   #
-  # `tie_break_served: false` is the honest half of that. The tie-break key is the ingest sequence —
-  # the runs table's own id — and this endpoint does not serialize it on a row, here or on
-  # `latest_run`. So the ordering is NOT reproducible from the fields the client holds, which makes
-  # the array's own order the authoritative answer rather than a rendering of one. A client that
-  # needs a stable comparison reads the array in the order it arrived; one that must re-sort can
-  # only do so within a set of distinct `ingested_at` values.
+  # `tie_break_served: true` since SPGD-2014, and honestly so. The tie-break key is the ingest
+  # sequence — the runs table's own id — and every row now carries it as `id` (as does
+  # `latest_run`), so the ordering IS reproducible from the fields the client holds and the array
+  # order is a rendering of one rather than the only answer. Before SPGD-2014 this block said
+  # `false`, and the example guarding it stated the re-decision rule this slice followed: serving
+  # the id flips the token rather than silently making a served claim a lie. A client that needs
+  # a stable comparison can now re-sort within a set of distinct `ingested_at` values and still
+  # agree with the server on same-instant pairs.
   def serialized_history_window
     {
       order: "ingested_at_desc,ingest_sequence_desc",
-      tie_break_served: false,
+      tie_break_served: true,
       branch_scope: requested_branch ? "single_branch" : "all_branches",
       branch: requested_branch,
       limit: history_limit,
@@ -1149,7 +1151,8 @@ class RepositoryOverview
       # `intent_readings.recorded`, or `null` — never five zeros — for a run with no per-example rows.
       # It is the per-run SERIES that `layer_run_growth` (latest vs previous) and `layer_growth` (two
       # endpoints of the window) cannot give. Operands only: no verdict, no threshold, DECLARED only
-      # (never inferred from a path). Appended LAST so every earlier key keeps its position.
+      # (never inferred from a path). Appended after `ingested_at` — every earlier key keeps its
+      # position, the rule the keys after it follow too.
       #
       # Same differencing rule as `total_specs`: it is a SUM over the shards RECORDED, so do not
       # difference it across rows whose `shard_count` differs. Primed for the whole window by ONE grouped
@@ -1161,12 +1164,23 @@ class RepositoryOverview
       # examples was timed (`timed_count: 0`), and the whole key is `null` for a run with no per-example
       # rows. The per-run SERIES that `layer_runtime_growth` (latest vs previous) and
       # `layer_runtime_window_growth` (two endpoints) deliberately are not. Operands only: no verdict, no
-      # threshold, DECLARED layers only. Appended LAST so every earlier key keeps its position.
+      # threshold, DECLARED layers only. Appended after `layer_counts` — and, since SPGD-2014,
+      # followed by the row's `id` — so every earlier key keeps its position.
       #
       # A SUM of example durations — machine time, NOT wall clock — so do not difference it across rows
       # whose `shard_count` / `timed_shard_count` differ. Primed with `layer_counts` by the ONE grouped read
       # in `history_runs`, so it costs nothing per row.
-      layer_durations: run.layer_durations
+      layer_durations: run.layer_durations,
+      # THE RUN'S DURABLE HANDLE (SPGD-2014), appended LAST so every earlier key keeps its position —
+      # the same number `latest_run.id` serves when the row IS the latest run (the identity the
+      # ordering preserves), and the only handle `DELETE /api/v1/repositories/:repository_id/runs/:id`
+      # accepts. A commit_sha deliberately is not this handle: one sha can name several runs of one
+      # repository, which is why the console anchored pages on `?run=<id>` rather than on the sha.
+      #
+      # Serving it is also what flips `history_window.tie_break_served` to `true`: the window's
+      # ordering is `(ingested_at, id) DESC` and both terms now ride every row, so a client can
+      # reproduce the order from the fields it holds instead of taking the array's order on faith.
+      id: run.id
     }
   end
 

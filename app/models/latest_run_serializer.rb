@@ -150,7 +150,16 @@ class LatestRunSerializer
       # whole page by `ShardCountPreloading#preload_layer_counts` (one grouped read), so it costs
       # no query per entry. `null` — never five zeros — when the run recorded no per-example rows.
       # APPENDED after `shards`: every earlier list key keeps its position.
-      layer_counts: test_run.layer_counts
+      layer_counts: test_run.layer_counts,
+      # THE RUN'S DURABLE HANDLE (SPGD-2014) — the numeric id `POST /ingest` names as `test_run_id`
+      # and `DELETE /api/v1/repositories/:repository_id/runs/:id` consumes, appended LAST so every
+      # earlier list key keeps its position. A commit_sha is NOT this handle: one sha can name
+      # several runs (re-runs, sharded slices), which is exactly why the console needed `?run=<id>`
+      # to anchor a page and why the delete route takes the id rather than the sha. Served at BOTH
+      # depths — the list entry and the detail page are the same row and the naming rule forbids
+      # the two naming a shared fact differently — and the identity `history[0] == latest_run`
+      # keeps holding with both blocks carrying it.
+      id: test_run.id
     }
   end
 
@@ -310,7 +319,15 @@ class LatestRunSerializer
       # `timed_shard_count` follows: a guard a client has to test for before it can trust is not a
       # guard. A repository whose CI never reported has no `latest_run` block at all.
       suite_size_measured: test_run.suite_size_measured?,
-      ingested_at: test_run.created_at.iso8601
+      ingested_at: test_run.created_at.iso8601,
+      # THE RUN'S DURABLE HANDLE (SPGD-2014), appended LAST so every earlier key keeps its
+      # position — the same value the list depth serves under the same name, and the same number
+      # `POST /ingest` answers as `test_run_id`. This is the handle `DELETE
+      # /api/v1/repositories/:repository_id/runs/:id` consumes; a commit_sha names possibly
+      # several runs and is deliberately not it. It is also what makes `history_window`'s
+      # `tie_break_served: true` honest from here on: the tie-break term of the history order is
+      # the runs table's own id, and that key now rides every row.
+      id: test_run.id
     }
   end
 
