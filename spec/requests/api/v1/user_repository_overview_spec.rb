@@ -40,8 +40,6 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
 
   let(:user_api_key) { create_user_api_key(user: person) }
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   # `query:` rather than named keywords, so an example can send the shapes a real client's malformed
   # query string parses into — an Array, a nested hash — the same way it sends a path.
   def get_repository(id: owned.id, token: user_api_key.raw_token, query: {})

@@ -21,8 +21,6 @@ RSpec.describe "POST /api/v1/repositories/:repository_id/ingest — the agent cr
     create_agent_api_key(user: person, repositories: [repository], permissions: [ingest_permission])
   end
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   def agent_ingest(body, key: agent_key, repository_id: repository.id, headers: {}, path: nil)
     post path || "/api/v1/repositories/#{repository_id}/ingest",
          params: body.is_a?(String) ? body : body.to_json,

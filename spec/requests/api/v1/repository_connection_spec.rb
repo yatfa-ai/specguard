@@ -17,8 +17,6 @@ RSpec.describe "repository overview — credential_health.connection", type: :re
   let(:repository) { create_repository(user: person) }
   let(:ingest_permission) { RepositoryMembership::RUNS_INGEST }
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   def connection_via(path, token)
     get path, headers: bearer(token)
     expect(response).to have_http_status(:ok)

@@ -17,8 +17,6 @@ RSpec.describe "API v1 — the credential seam", type: :request do
   let(:repository_key) { repository.api_keys.create! }
   let(:user_key) { create_user_api_key(user: person) }
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   # SPGD-1056: the two bodies the failure path can render, stated once so every example below
   # asserts against the SAME strings. The whole-body `eq` each pin uses doubles as the
   # no-extra-keys assertion — a body that grew a name, an owner, or a timestamp fails these

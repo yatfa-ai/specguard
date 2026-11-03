@@ -30,8 +30,6 @@ RSpec.describe "API v1 — the agent credential (sga_)", type: :request do
   # request. Minted eagerly, once.
   let!(:agent_key) { create_agent_api_key(user: person, repositories: [repository], permissions: []) }
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   describe "GET /api/v1/repositories" do
     # @intent: { entity: "AgentApiKey", action: "list the granted set", behavior: "an agent key listing repositories serves exactly its own granted set, and nothing outside it", layer: "request" }
     it "lists the key's own repository set" do

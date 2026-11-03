@@ -15,8 +15,6 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
   let(:user_api_key) { create_user_api_key(user: person) }
   let(:repository) { create_repository(user: person, github_full_name: "acme/billing-service") }
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   def rename(new_full_name, id: repository.id, token: user_api_key.raw_token)
     patch "/api/v1/repositories/#{id}", params: { github_full_name: new_full_name }, as: :json,
                                        headers: bearer(token)

@@ -32,8 +32,6 @@ RSpec.describe "The public administration guide", type: :request do
   # `root_url.sub(...)` locally — which would keep passing if the helper's own stripping broke.
   include AdministrationGuideHelper
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   # The `<code>` block inside the wrapper div the template stamps the shared id onto. Scoped to the
   # wrapper rather than matched on the whole page because the guide renders several copyable blocks
   # and only this one is the fixture.
