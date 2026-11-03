@@ -126,6 +126,14 @@ class ApiKeyPartition
   attr_reader :live_rows, :revoked_rows, :stranded_rows, :presented_revoked_rows,
               :last_api_request_at, :last_live_api_request_at
 
+  # The same partition over every row EXCEPT the given credential's own — for the API surfaces,
+  # where the requesting credential has just stamped `last_used_at` and would otherwise make every
+  # "last request" figure read "now". Rows of other credential classes are never matched on id
+  # alone (ids are per table).
+  def excluding(credential)
+    self.class.new(rows: @rows.reject { |row| row.instance_of?(credential.class) && row.id == credential.id })
+  end
+
   # The repositories grid's rotation trigger: the date its stranded sentence is dated from, or
   # `nil` for every repository that does not read the way show's rotated branch reads.
   #

@@ -233,7 +233,8 @@ class Api::V1::UserRepositoriesController < Api::BaseController
 
     return render_not_found("No repository with that id is available to this key.") if repository.nil?
 
-    render json: RepositoryOverview.new(repository: repository, params: params).body
+    render json: RepositoryOverview.new(repository: repository, params: params,
+                                        requesting_credential: current_api_key).body
   end
 
   # WHAT MAY BE REGISTERED — the reading `#index` cannot give, because that one serves

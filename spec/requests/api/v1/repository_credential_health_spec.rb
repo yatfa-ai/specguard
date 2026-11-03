@@ -46,12 +46,15 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
     it "serves the block with a negative verdict rather than omitting it" do
       health = credential_health
 
-      expect(health).to eq(
+      expect(health).to include(
         "rotated_and_unused" => false,
         "keys" => [],
         "revoked_key_presented" => false,
         "presented_revoked_keys" => []
       )
+      # SPGD-2024: the connection verdict rides the same unconditional block; its own examples live
+      # in `repository_connection_spec.rb`.
+      expect(health["connection"]).to include("state" => "not_connected")
     end
 
     # @intent: { entity: "credential_health", action: "clear on first use", behavior: "one use of the replacement after a rotation clears the stranded verdict, with no window to expire and no threshold to cross", layer: "request" }
