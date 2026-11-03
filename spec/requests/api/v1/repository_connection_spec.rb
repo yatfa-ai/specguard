@@ -106,6 +106,16 @@ RSpec.describe "repository overview — credential_health.connection", type: :re
       expect(connection).to include("state" => "not_connected", "last_request_at" => nil)
       expect(requester.reload.last_used_at).to be_present
     end
+
+    # @intent: { entity: "credential_health.connection", action: "keep a same-numbered agent key", behavior: "an sgk_ caller whose numeric id equals an ingest-carrying sga_ key's id does not exclude that key, because ids are per table", layer: "request" }
+    it "does not let the caller's id exclude an agent key that shares its number" do
+      other = person.agent_api_keys.create!(id: requester.id, name: "Agent", repository_ids: [repository.id],
+                                                         permissions: [ingest_permission])
+      other.touch_last_used!
+
+      expect(connection).to include("state" => "connected",
+                                    "last_live_request_at" => other.reload.last_used_at.iso8601)
+    end
   end
 
   describe "GET /api/v1/repositories/:id (sgu_)" do
@@ -113,6 +123,16 @@ RSpec.describe "repository overview — credential_health.connection", type: :re
     let(:connection) { connection_via("/api/v1/repositories/#{repository.id}", requester.raw_token) }
 
     include_examples "an overview route"
+
+    # @intent: { entity: "credential_health.connection", action: "keep a same-numbered sgk_ key", behavior: "a sgu_ caller whose numeric id equals a sibling sgk_ key's id does not exclude that key, because ids are per table", layer: "request" }
+    it "does not let the caller's id exclude an sgk_ key that shares its number" do
+      sibling = repository.api_keys.create!(id: requester.id, name: "CI")
+      sibling.touch_last_used!
+
+      expect(connection).to include("state" => "connected",
+                                    "last_request_at" => sibling.reload.last_used_at.iso8601,
+                                    "last_live_request_at" => sibling.last_used_at.iso8601)
+    end
   end
 
   describe "GET /api/v1/repositories/:id (sga_)" do
@@ -128,6 +148,16 @@ RSpec.describe "repository overview — credential_health.connection", type: :re
     it "does not count the requesting agent key as a request" do
       expect(connection).to include("state" => "not_connected", "last_request_at" => nil)
       expect(requester.reload.last_used_at).to be_present
+    end
+
+    # @intent: { entity: "credential_health.connection", action: "keep a same-numbered sgk_ key", behavior: "a sga_ caller whose numeric id equals a sibling sgk_ key's id does not exclude that key, because ids are per table", layer: "request" }
+    it "does not let the caller's id exclude an sgk_ key that shares its number" do
+      sibling = repository.api_keys.create!(id: requester.id, name: "CI")
+      sibling.touch_last_used!
+
+      expect(connection).to include("state" => "connected",
+                                    "last_request_at" => sibling.reload.last_used_at.iso8601,
+                                    "last_live_request_at" => sibling.last_used_at.iso8601)
     end
   end
 end
