@@ -816,7 +816,11 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       get_repository(key: api_key)
 
       statements = executed_sql { get_repository(key: api_key, query: { branch: "main" }) }
-      branch_selects = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
+      # `history_window.total_count` (SPGD-2020) is a FOURTH-kind read: one `SELECT COUNT(*)` over the
+      # same scope, told apart STRUCTURALLY by its aggregate and bounded at exactly ONE below, so
+      # the carve-out cannot swallow a per-row regression.
+      total_counts = statements.grep(/FROM "test_runs"/).grep(/SELECT COUNT\(\*\)/)
+      branch_selects = statements.grep(/FROM "test_runs"/).grep(/"branch" = /).grep_v(/SELECT COUNT\(\*\)/)
       # `run_anchor`'s retention boundary is a THIRD branch-scoped select and is excluded from both
       # counts below, on the same rule the row-value predicate excludes the previous-run lookup by:
       # it is one indexed read ABOUT THE ANCHORED RUN, not part of this window, so folding it in
@@ -824,6 +828,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       # Told apart STRUCTURALLY — it is the only branch-scoped read carrying an OFFSET, where every
       # other selects `test_runs.*` — and bounded at exactly ONE below, so the carve-out cannot
       # swallow a per-row regression, which is the leak this example exists to catch.
+      expect(total_counts.length).to eq(1)
       boundary_selects = branch_selects.grep(/OFFSET/)
       branch_selects = branch_selects.grep_v(/OFFSET/)
       window_selects = branch_selects.grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)

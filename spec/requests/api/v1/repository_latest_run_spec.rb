@@ -2391,7 +2391,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "branch_scope" => "all_branches",
         "branch" => nil,
         "limit" => 10,
-        "returned" => 3
+        "returned" => 3,
+        # SPGD-2020: the keyset-cursor keys, always present. No `?runs_before=` was sent, so the
+        # cursor is unapplied and unasked, "resolved" is vacuously true, and `window_blocks_anchor`
+        # states which window the window-grain blocks read.
+        "before" => nil,
+        "requested_runs_before" => nil,
+        "runs_before_resolved" => true,
+        "window_blocks_anchor" => "newest_runs",
+        "next_runs_before" => nil,
+        "total_count" => 3
       )
     end
 
@@ -2796,7 +2805,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # a deeper bound was in force — under `limit => 10` a client reading `returned` against it
         # would conclude the window overflowed its own bound.
         "limit" => 30,
-        "returned" => 25
+        "returned" => 25,
+        # SPGD-2020: the keyset-cursor keys, always present. No `?runs_before=` was sent, so the
+        # cursor is unapplied and unasked, "resolved" is vacuously true, and `window_blocks_anchor`
+        # states which window the window-grain blocks read.
+        "before" => nil,
+        "requested_runs_before" => nil,
+        "runs_before_resolved" => true,
+        "window_blocks_anchor" => "newest_runs",
+        "next_runs_before" => nil,
+        "total_count" => 25
       )
     end
 
@@ -3706,14 +3724,23 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["branches"]).to be_present
       expect(body["history_window"]).to eq(
         "order" => "ingested_at_desc,ingest_sequence_desc",
-        # SPGD-2014: the window keeps its key set exactly — this example's point is that the
+        # SPGD-2014: the window's key set is exactly the SPGD-2020 set — this example's point is that the
         # catalogue grows no key here — and the tie-break token holds its SPGD-2014 value: every
         # row carries its id, so `true` is served under every ask.
         "tie_break_served" => true,
         "branch_scope" => "all_branches",
         "branch" => nil,
         "limit" => 10,
-        "returned" => 10
+        "returned" => 10,
+        # SPGD-2020: the keyset-cursor keys, always present. No `?runs_before=` was sent, so the
+        # cursor is unapplied and unasked, "resolved" is vacuously true, and `window_blocks_anchor`
+        # states which window the window-grain blocks read.
+        "before" => nil,
+        "requested_runs_before" => nil,
+        "runs_before_resolved" => true,
+        "window_blocks_anchor" => "newest_runs",
+        "next_runs_before" => body["history"].last["id"],
+        "total_count" => repository.test_runs.count
       )
     end
   end
@@ -3901,7 +3928,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # per-row boundary read would be the very leak this example exists to catch, so the carve-out
       # is asserted rather than assumed.
       boundary_reads = statements.grep(/FROM "test_runs"/).grep(/OFFSET/)
+      # `history_window.total_count` (SPGD-2020) is a FOURTH-kind read: one `SELECT COUNT(*)` over the
+      # same scope, told apart STRUCTURALLY by its aggregate and bounded at exactly ONE below, so
+      # the carve-out cannot swallow a per-row regression.
       history_queries = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
+                                  .grep_v(/SELECT COUNT\(\*\)/)
                                   .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
                                   .grep_v(/OFFSET/)
       grouped_counts = statements.grep(/FROM "test_run_shards"/).grep(/GROUP BY/)
@@ -3951,6 +3982,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       history = executed_sql { get_repository(query: { branch: "main" }) }
                 .grep(/FROM "test_runs"/).grep(/"branch" = /)
+                .grep_v(/SELECT COUNT\(\*\)/) # `history_window.total_count`, SPGD-2020: one COUNT, not a window read
                 .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
                 .grep_v(/OFFSET/)
 

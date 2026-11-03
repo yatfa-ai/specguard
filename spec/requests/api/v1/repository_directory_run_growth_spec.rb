@@ -645,7 +645,12 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
       adjacent_runs
       get_repository(key: api_key)
 
+      # `history_window.total_count` (SPGD-2020) is a FOURTH-kind read: one `SELECT COUNT(*)` over the
+      # same scope, told apart STRUCTURALLY by its aggregate and bounded at exactly ONE below, so
+      # the carve-out cannot swallow a per-row regression.
       statements = executed_sql { get_repository(key: api_key) }.grep(/FROM "test_runs"/)
+      total_counts = statements.grep(/SELECT COUNT\(\*\)/)
+      statements = statements.grep_v(/SELECT COUNT\(\*\)/)
       # `run_anchor`'s retention boundary is excluded from both counts, on the same rule the
       # row-value predicate excludes the previous-run lookup by: it is one indexed read ABOUT THE
       # ANCHORED RUN and not one of the three this example names, so folding it into the total would
@@ -657,6 +662,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
       anchor_shaped = statements.grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
 
       expect(boundary.length).to eq(1)
+      expect(total_counts.length).to eq(1)
       expect(statements.length).to eq(3)
       expect(anchor_shaped.length).to eq(2)
     end
