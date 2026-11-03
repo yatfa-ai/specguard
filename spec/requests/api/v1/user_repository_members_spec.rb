@@ -29,8 +29,6 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
   let!(:stranger) { create_user(github_uid: "7777", github_handle: "locutus") }
   let(:stranger_key) { create_user_api_key(user: stranger) }
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   def members_path(repo = repository) = "/api/v1/repositories/#{repo.id}/members"
   def member_path(id, repo = repository) = "/api/v1/repositories/#{repo.id}/members/#{id}"
 

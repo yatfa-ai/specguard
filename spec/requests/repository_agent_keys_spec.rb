@@ -15,8 +15,6 @@ require "rails_helper"
 RSpec.describe "Revoking an agent key from the repository page", type: :request do
   before { @user = sign_in_via_github }
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   # The offboarding shape the endpoint exists for: a member mints, then loses their membership.
   # Nothing cascades into the stored array — the key outlives the grant it was minted under.
   def outlived_key(repository, name: "Fleet agent")

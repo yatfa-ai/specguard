@@ -211,6 +211,9 @@ end
 # Builders that go through the app over HTTP rather than straight to the model, so they are only
 # meaningful where a request is available.
 module RequestBuilders
+  # The Authorization header for an `sgk_`/`sga_`/`sgu_` token, as request specs pass it via `headers:`.
+  def bearer(token) = { "Authorization" => "Bearer #{token}" }
+
   # Registers a repository the way a user does — through RepositoriesController#create. Kept as a
   # real round-trip on purpose: swapping it for `create_repository` would silently drop the callers'
   # coverage of the create action.

@@ -17,8 +17,6 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
   let(:person) { create_user(github_uid: "1001", github_handle: "octocat") }
   let(:user_api_key) { create_user_api_key(user: person) }
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   def register(full_name, token: user_api_key.raw_token)
     post "/api/v1/repositories", params: { github_full_name: full_name }, as: :json,
                                  headers: bearer(token)

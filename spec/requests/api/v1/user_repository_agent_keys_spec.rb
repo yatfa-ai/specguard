@@ -28,8 +28,6 @@ RSpec.describe "API v1 — repository agent keys over a Bearer token", type: :re
   let(:stranger) { create_user(github_uid: "6777", github_handle: "locutus") }
   let(:stranger_key) { create_user_api_key(user: stranger) }
 
-  def bearer(token) = { "Authorization" => "Bearer #{token}" }
-
   def index_path(repo = repository) = "/api/v1/repositories/#{repo.id}/agent_keys"
   def revoke_path(key, repo = repository) = "/api/v1/repositories/#{repo.id}/agent_keys/#{key.id}"
   def triage_path(repo = repository) = "/api/v1/repositories/#{repo.id}/agent_keys/presented_revoked"
