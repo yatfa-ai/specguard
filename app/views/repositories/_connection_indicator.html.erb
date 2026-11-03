@@ -12,10 +12,10 @@
       <%= rejected_ingests_note(@rejected_ingests.last_rejection_at) %>
       <a href="#delivery">See Delivery</a>
     </span>
-  <% elsif @last_live_api_request_at.present? %>
+  <% elsif @connection.connected? %>
     <%= render UI::BadgeComponent.new(tone: :success) { "Connected" } %>
-    <span>Last request <%= time_ago_in_words(@last_live_api_request_at) %> ago.</span>
-  <% elsif @last_api_request_at.present? %>
+    <span>Last request <%= time_ago_in_words(@connection.last_live_request_at) %> ago.</span>
+  <% elsif @connection.rotated_unused? %>
     <% rotations = @rotated_unused_api_keys.filter_map(&:rotated_at).sort %>
     <%= render UI::BadgeComponent.new(tone: :warning) { rotated_key_label } %>
     <span><%= rotated_keys_note(rotations.size, rotations.first) %></span>

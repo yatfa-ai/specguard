@@ -38,7 +38,8 @@ class Api::V1::RepositoriesController < Api::BaseController
   # is the whole reason the assembly moved — see the class comment there. Nothing about this
   # response changed when it did.
   def show
-    render json: RepositoryOverview.new(repository: current_repository, params: params)
+    render json: RepositoryOverview.new(repository: current_repository, params: params,
+                                        requesting_credential: current_api_key)
                                    .body(api_key_block: serialized_api_key)
   end
 

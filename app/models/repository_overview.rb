@@ -264,9 +264,14 @@ class RepositoryOverview
   # tell an `sgk_` request from an `sgu_` one and has no business doing so — resolving the
   # repository and deciding the caller may open it are the CONTROLLERS' jobs, and they arrive at
   # it two different ways (a key that names one, versus `Repository.accessible_by(...).find_by`).
-  def initialize(repository:, params:)
+  # `requesting_credential:` is the key row that made this request, handed in (like `api_key_block:`)
+  # by the caller that holds it. It is read ONLY by `credential_health.connection`, which excludes
+  # it from its "last request" figures: `Api::BaseController` stamps its `last_used_at` before the
+  # body is built, so counting it would read "connected, just now" on every call.
+  def initialize(repository:, params:, requesting_credential: nil)
     @repository = repository
     @params = params
+    @requesting_credential = requesting_credential
   end
 
   # ⭐ `api_key_block:` IS AN INSERTION AT A POSITION, NOT A FLAG. Passing it serves the block
@@ -720,7 +725,38 @@ class RepositoryOverview
           revoked_at: api_key.revoked_at.iso8601,
           last_refused_at: api_key.last_refused_at.iso8601
         }
-      end
+      end,
+      connection: serialized_connection(partition)
+    }
+  end
+
+  # WHETHER ANYTHING ELSE HAS CONNECTED — the API twin of the repository page's connection
+  # indicator, and the only part of `credential_health` a view-only caller (no `keys.manage`) can
+  # use to tell "CI never wired" from "wired, key never used" from "authenticating". Derived by
+  # `RepositoryConnection`, the object the page's indicator reads, so the two cannot disagree.
+  #
+  # `state` is one of `connected` / `rotated_unused` / `not_connected`; the indicator's two error
+  # branches are `revoked_key_presented` above and `delivery_health.refusing`.
+  #
+  # ⚠️ THE REQUESTING CREDENTIAL IS EXCLUDED from both figures (`excludes_requesting_credential`):
+  # its `last_used_at` was stamped on the way in, so counting it would make every response read
+  # "connected, just now". A repository whose only authenticating credential is the caller's
+  # therefore reads `not_connected` — "no OTHER request" — never `connected`.
+  #
+  # ⚠️ `acceptance_reported_by` names the block that answers what this one cannot, on the same
+  # convention as `api_key.acceptance_reported_by`: `last_used_at` is stamped before the payload is
+  # read, so this means "did anything authenticate", never "was anything accepted".
+  def serialized_connection(partition)
+    credential = @requesting_credential
+    partition = partition.excluding(credential) if credential
+    connection = RepositoryConnection.for(repository, partition: partition, excluding_credential: credential)
+
+    {
+      state: connection.state,
+      last_request_at: connection.last_request_at&.iso8601,
+      last_live_request_at: connection.last_live_request_at&.iso8601,
+      excludes_requesting_credential: !credential.nil?,
+      acceptance_reported_by: "delivery_health"
     }
   end
 

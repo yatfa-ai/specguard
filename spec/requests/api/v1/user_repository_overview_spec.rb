@@ -452,7 +452,12 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # a second statement that carries no `token_digest` and would pass the example above.
     # @intent: { entity: "Authentication", action: "join the person", behavior: "the single credential statement also carries the users join so the principal is never re-read by id", layer: "request" }
     it "brings the person back in that same statement rather than re-reading them" do
+      # `credential_health.connection` (SPGD-2024) adds ONE payload aggregate —
+      # `SELECT MAX(last_used_at) FROM agent_api_keys INNER JOIN users` — which names `users` but
+      # resolves no credential, exactly as the `api_keys` payload read excluded above. It is
+      # filtered out by its `MAX(` shape so the count still measures authentication alone.
       statements = selects(/"users"/) { get "/api/v1/repositories/#{id}", headers: bearer(token) }
+                   .grep_v(/SELECT MAX\(/)
 
       expect(response).to have_http_status(:ok)
       expect(statements.size).to eq(1)

@@ -323,10 +323,10 @@ class RepositoryDashboard
     # rotated branch in the page header.
     @rotated_unused_api_keys = partition.stranded_rows
     # The two figures the connection indicator branches on, derived from the partition because they
-    # are computed FROM it — `@last_api_request_at` is the newest use across the LIVE rows
+    # are computed FROM it — `@connection.last_request_at` is the newest use across the LIVE rows
     # (restricted to live since the retirement split: letting a revoked row answer would render the
     # rotated branch over a repository whose every key was revoked and nothing was ever rotated
-    # into disuse), and `@last_live_api_request_at` the same figure restricted to keys whose
+    # into disuse), and `@connection.last_live_request_at` the same figure restricted to keys whose
     # `last_used_at` still describes the token they carry now. Their nils are load-bearing —
     # "nothing has ever connected" versus "something did, with a token that is gone" — and the
     # partition's own methods carry those readings in full.
@@ -341,9 +341,9 @@ class RepositoryDashboard
     # always describes the token it carries now, so it is never the "stranded" half the live
     # figure exists to exclude. ONE aggregate SELECT, issued for every viewer — the indicator is
     # ungated, so this read is too (it returns a timestamp, no key name, hint or count).
-    agent_last_used_at = AgentApiKey.carrying_ingest_for(@repository).maximum(:last_used_at)
-    @last_api_request_at = [partition.last_api_request_at, agent_last_used_at].compact.max
-    @last_live_api_request_at = [partition.last_live_api_request_at, agent_last_used_at].compact.max
+    # The derivation itself lives in `RepositoryConnection`, which the overview API's
+    # `credential_health.connection` reads too, so the page and the API share one answer.
+    @connection = RepositoryConnection.for(@repository, partition: partition)
     # THE RETIRED KEYS THE PLATFORM HAS SEEN BEING PRESENTED — a revoked token arriving and being
     # refused stamps `last_refused_at` on the row it names (`Api::BaseController`'s failure path),
     # and this is the set the connection indicator's revoked state is derived from. Restricted to
@@ -432,7 +432,7 @@ class RepositoryDashboard
     # The refused half of the same delivery stream the run above is the accepted half of, and the
     # verdict the page header's connection indicator needs in order to stop being wrong.
     #
-    # `@last_api_request_at` above is stamped by `Api::BaseController#authenticate_api_key!` on the
+    # `@connection.last_request_at` above is stamped by `Api::BaseController#authenticate_api_key!` on the
     # way IN, so it moves for a delivery that is then refused for its payload — which is how a
     # repository whose every run was being thrown away rendered `Connected` in success tone with a
     # hint saying the last request was two minutes ago. That column answers "did anything
