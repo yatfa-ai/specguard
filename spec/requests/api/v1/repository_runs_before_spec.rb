@@ -32,12 +32,6 @@ RSpec.describe "GET /api/v1/repository — ?runs_before= pages history", type: :
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def get_repository(query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def history_ids(body) = body["history"].map { |row| row["id"] }
 
   # `count` runs, one per minute, NEWEST FIRST (index 0 is the newest).

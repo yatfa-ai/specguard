@@ -37,15 +37,6 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
   let(:repository) { create_repository(user: @user) }
   let(:api_key) { repository.api_keys.create! }
 
-  # `query:` rather than a `spec_directory:` keyword, so an example can send the shapes a real
-  # client's malformed query string parses into — an Array, a nested hash — the same way it sends a
-  # path.
-  def get_repository(key: api_key, query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def block(**) = get_repository(**).dig("latest_run", "spec_directory_files")
 
   def ingest(repo, specs, commit_sha: "feedfacecafe0001", branch: "main", **attrs)

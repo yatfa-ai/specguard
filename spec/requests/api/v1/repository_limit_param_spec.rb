@@ -14,12 +14,6 @@ RSpec.describe "GET /api/v1/repository — limit parameter", type: :request do
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def get_repository(key: api_key, query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def spec_files = get_repository.dig("latest_run", "spec_files")
   def spec_directories = get_repository.dig("latest_run", "spec_directories")
 

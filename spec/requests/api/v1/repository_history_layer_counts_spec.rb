@@ -17,12 +17,6 @@ RSpec.describe "GET /api/v1/repository — history[].layer_counts", type: :reque
   let(:api_key) { repository.api_keys.create! }
   let(:layer_keys) { %w[unit integration request system undeclared] }
 
-  def get_repository(query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def ingest(specs, commit_sha:, branch: "main")
     payload = Ingest::Payload.new(
       { "commit_sha" => commit_sha, "branch" => branch, "duration_seconds" => 60.0,

@@ -32,12 +32,6 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def get_repository(key: api_key, query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def latest_run(**) = get_repository(**)["latest_run"]
 
   def readings(**) = get_repository(**).dig("latest_run", "intent_readings")

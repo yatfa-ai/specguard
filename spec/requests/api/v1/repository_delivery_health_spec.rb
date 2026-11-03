@@ -20,13 +20,6 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def get_repository(query: {})
-    get "/api/v1/repository", params: query,
-                              headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def delivery_health(**) = get_repository(**)["delivery_health"]
 
   # One refused delivery, through the production writer. `reasons` defaults to a single envelope

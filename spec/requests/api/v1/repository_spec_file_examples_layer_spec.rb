@@ -12,12 +12,6 @@ RSpec.describe "GET /api/v1/repository — ?layer= on spec_file_examples", type:
   let(:api_key) { repository.api_keys.create! }
   let(:file) { "spec/models/mixed_spec.rb" }
 
-  def get_repository(query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def latest_run(query: {}) = get_repository(query: query)["latest_run"]
 
   def block(query: {}) = latest_run(query: { spec_file: file }.merge(query))["spec_file_examples"]

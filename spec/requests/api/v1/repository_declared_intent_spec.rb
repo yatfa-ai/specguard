@@ -22,13 +22,6 @@ RSpec.describe "GET /api/v1/repository — declared_intent on the per-example bl
   let(:repository) { create_repository(user: @user) }
   let(:api_key) { repository.api_keys.create! }
 
-  def get_repository(query: {})
-    get "/api/v1/repository", params: query,
-                              headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def ingest(repo, specs)
     Ingest::RunRecorder.record(
       repo,

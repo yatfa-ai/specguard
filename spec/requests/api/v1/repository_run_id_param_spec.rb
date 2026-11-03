@@ -39,14 +39,6 @@ RSpec.describe "GET /api/v1/repository — ?run= names one run", type: :request 
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  # `query:` rather than named keywords, so an example can send the shapes a real client's malformed
-  # query string parses into — an Array, a nested hash — the same way it sends a path.
-  def get_repository(key: api_key, query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{key.raw_token}" }
-
-    response.parsed_body
-  end
-
   # The raw response bytes, for the byte-identity pins. Every call mints its own key, so no
   # `last_used_at` from an earlier request can leak into a later body; the calls inside one
   # byte-identity pin run under one frozen clock so the per-request auth stamp is the same

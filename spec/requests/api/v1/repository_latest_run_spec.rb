@@ -17,14 +17,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  # `query:` rather than a `branch:` keyword, so an example can send a non-String `branch` (an
-  # Array, a nested hash) the same way a real client's malformed query string would.
-  def get_repository(key: api_key, query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{key.raw_token}" }
-
-    response.parsed_body
-  end
-
   # `executed_sql` and `count_queries` come from spec/support/query_capture.rb. The cost blocks
   # below bound the endpoint on different axes — runs for a branch-scoped window, shards on one run
   # — but they must agree on what they are counting, so the `cached` / SCHEMA / TRANSACTION
