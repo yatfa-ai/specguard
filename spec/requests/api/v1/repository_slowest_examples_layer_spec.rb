@@ -15,12 +15,6 @@ RSpec.describe "GET /api/v1/repository — ?layer= on slowest_examples", type: :
   let(:api_key) { repository.api_keys.create! }
   let(:layer_keys) { %w[unit integration request system undeclared] }
 
-  def get_repository(query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def latest_run(query: {}) = get_repository(query: query)["latest_run"]
 
   def slowest(query: {}) = latest_run(query: query)["slowest_examples"]

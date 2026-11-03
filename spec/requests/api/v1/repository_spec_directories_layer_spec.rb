@@ -15,12 +15,6 @@ RSpec.describe "GET /api/v1/repository — ?layer= on spec_directories", type: :
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def get_repository(query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def latest_run(query: {}) = get_repository(query: query)["latest_run"]
 
   def spec_directories(query: {}) = latest_run(query: query)["spec_directories"]

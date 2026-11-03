@@ -33,14 +33,6 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  # `query:` rather than a keyword, so an example can send the shapes a real client's malformed query
-  # string parses into — an Array, a nested hash — the same way it sends the flag.
-  def get_repository(key: api_key, query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def latest_run(**) = get_repository(**)["latest_run"]
 
   def block(**) = get_repository(**).dig("latest_run", "unannotated_examples")

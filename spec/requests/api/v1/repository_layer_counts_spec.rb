@@ -17,12 +17,6 @@ RSpec.describe "GET /api/v1/repository — latest_run.layer_counts", type: :requ
   let(:api_key) { repository.api_keys.create! }
   let(:layer_keys) { %w[unit integration request system undeclared] }
 
-  def get_repository(key: api_key, query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def latest_run(**) = get_repository(**)["latest_run"]
 
   def layer_counts(**) = latest_run(**)["layer_counts"]

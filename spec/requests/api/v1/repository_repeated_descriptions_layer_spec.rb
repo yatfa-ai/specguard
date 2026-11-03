@@ -14,12 +14,6 @@ RSpec.describe "GET /api/v1/repository — ?layer= on repeated_descriptions", ty
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def get_repository(query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def latest_run(query: {}) = get_repository(query: query)["latest_run"]
 
   def repeated(query: {}) = latest_run(query: query)["repeated_descriptions"]

@@ -45,12 +45,6 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def get_repository(key: api_key, query: {})
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{key.raw_token}" }
-
-    response.parsed_body
-  end
-
   def block(**) = get_repository(**)["near_duplicates"]
 
   let(:ask) { { near_duplicates: "true" } }
