@@ -114,6 +114,13 @@ class RepositoryOverview
   # `RequestedUnstableTestParam`, which holds that reasoning in full.
   include RequestedUnstableTestParam
 
+  # `?runs_before=` read as a TestRun id naming the KEYSET CURSOR of the `history` array — the API
+  # twin of the console's "Recent runs" cursor (SPGD-1984), under the same guard (digits only,
+  # NUL-safe, positive, within `MAX_RUN_ID`) and not a second copy of it. It positions the
+  # `history` page and NOTHING ELSE: see `#history_page` for why the window-grain blocks do not
+  # follow it.
+  include RequestedRunsBeforeParam
+
   # `?unannotated_examples=` read as a request for the run's unannotated examples — the only
   # `Requested*Param` this controller reads that carries NO VALUE.
   #
@@ -243,7 +250,8 @@ class RepositoryOverview
   include RequestedLimitParam
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
-  # bound and not the first page of a pagination contract there is no cursor to continue.
+  # bound on ONE PAGE. Since SPGD-2020 the series continues past it with `?runs_before=`, whose
+  # cursor `history_window.next_runs_before` serves.
   HISTORY_LIMIT = 10
 
   # The bound when `?branch=` narrowed the window, which is DEEPER than the unfiltered one and is
@@ -1086,8 +1094,63 @@ class RepositoryOverview
       branch_scope: requested_branch ? "single_branch" : "all_branches",
       branch: requested_branch,
       limit: history_limit,
-      returned: history_runs.length
+      returned: history_page.length,
+      # THE KEYSET CURSOR (SPGD-2020), five keys beside the window's existing facts, all always
+      # present so a client tests one shape. `before` is the cursor the SERVER APPLIED — the
+      # resolved run's id, `null` when none was asked or the ask missed — and
+      # `requested_runs_before` is the guarded ask echoed back, so the pair says a miss out loud
+      # the way `run_anchor.requested_commit_sha` / `resolved` do: `runs_before_resolved` is FALSE
+      # in exactly one case (a cursor was asked and no run of THIS repository carries it — unknown
+      # and foreign ids are the same miss) and `true` on a call with no ask, so a client's
+      # `unless runs_before_resolved` warning fires only on a real fallback. A malformed ask is
+      # no ask at all (`requested_runs_before: null`), exactly as the guard reads it.
+      before: runs_before_cursor&.id,
+      requested_runs_before: requested_runs_before,
+      runs_before_resolved: requested_runs_before.nil? || !runs_before_cursor.nil?,
+      # The id to hand back as `?runs_before=` for the next (older) page: the OLDEST listed row of
+      # this page, `null` when the page was not full — a short page is the end of the series, and
+      # `returned == limit` is the only other signal a client would have drawn that from. A full
+      # page that happens to end exactly at the oldest run answers a non-null cursor whose next
+      # page is empty (and whose own `next_runs_before` is then `null`), so walking until `null`
+      # visits every run exactly once.
+      next_runs_before: next_runs_before,
+      # Runs in the SAME SCOPE as the window — this repository's, or this branch's under
+      # `?branch=` — whatever the cursor, so `total_count - (rows already walked)` is what remains.
+      # One COUNT per request, the only query this adds to a call that sends no cursor.
+      total_count: history_total_count,
+      # WHICH RUNS THE WINDOW-GRAIN BLOCKS READ, stated rather than left to be inferred. The
+      # cursor moves the `history` array only; `unstable_tests`, `directory_growth`, the
+      # `layer_*` window pair and the `slowest_tests` window keep reading the NEWEST window, as
+      # does `latest_run`, so a paged body is never a mix of anchors. `"newest_runs"` on every
+      # response, cursor or not.
+      window_blocks_anchor: "newest_runs"
     }
+  end
+
+  # The cursor RUN, or `nil` for no ask and for a miss. Resolved through `repository.test_runs`
+  # so a foreign repository's id finds no row and can never position this window on another
+  # repository's history. Memoized with `defined?` (nil — no ask — is the common answer) so the
+  # lookup is one query on a cursor call and none on a default one.
+  def runs_before_cursor
+    return @runs_before_cursor if defined?(@runs_before_cursor)
+
+    @runs_before_cursor = (repository.test_runs.find_by(id: requested_runs_before) if requested_runs_before)
+  end
+
+  def next_runs_before
+    page = history_page.newest_first
+    page.last.id if page.length >= history_limit
+  end
+
+  # COUNT of the runs the window is a slice of: the repository's, narrowed to the branch under
+  # `?branch=` — the same predicate `Repository#recent_test_runs` applies, minus the cursor and
+  # the limit. Memoized across a legitimate zero, which `||=` would re-query.
+  def history_total_count
+    return @history_total_count if defined?(@history_total_count)
+
+    scope = repository.test_runs
+    scope = scope.where(branch: requested_branch) if requested_branch.present?
+    @history_total_count = scope.count
   end
 
   # Which bound applies, decided in ONE place so the window's `limit` and the query's `LIMIT` cannot
@@ -1122,7 +1185,7 @@ class RepositoryOverview
     # `ingested_at_desc,ingest_sequence_desc`, and `newest_first` is that same statement at the
     # read. The window was BUILT newest first, so this is the memoized array itself — no copy, no
     # re-sort.
-    history_runs.newest_first.map { |run| serialized_history_row(run) }
+    history_page.newest_first.map { |run| serialized_history_row(run) }
   end
 
   # What the human panel's row carries, plus the composition facts that say whether the row may be
@@ -1271,6 +1334,34 @@ class RepositoryOverview
         )
       )
     )
+  end
+
+  # THE RUNS THE `history` ARRAY SERVES, which are `history_runs` unless a `?runs_before=` cursor
+  # resolved.
+  #
+  # THE DESIGN DECISION (SPGD-2020), made explicitly: the cursor moves the `history` PAGE only.
+  # `history_runs` is shared with the window-grain blocks (`unstable_tests`, `directory_growth`,
+  # the `layer_*` window pair, the `slowest_tests` window — everything that reads
+  # `history_runs.oldest_first` through `RepositoryGrowthSerializer` /
+  # `RepositoryWindowRankingSerializer`), and a cursor that moved it would silently re-anchor all of
+  # them to an older window while `latest_run` stayed the newest run: one body, two anchors. So with
+  # a cursor this is a SEPARATE, second query (same ordering, same preloads, built only when a
+  # cursor resolved) and the default call keeps returning the `history_runs` memo itself — no extra
+  # work and no copy. `history_window.window_blocks_anchor` says which window the blocks read.
+  def history_page
+    @history_page ||=
+      if runs_before_cursor
+        RunWindow.newest_first(
+          preload_layer_mix(
+            preload_shard_counts(
+              repository.recent_test_runs(limit: history_limit, branch: requested_branch,
+                                          before: runs_before_cursor).to_a
+            )
+          )
+        )
+      else
+        history_runs
+      end
   end
 
   # THE RUN THE CLIENT NAMED, or `nil` when it named none and `nil` when the one it named has no run
