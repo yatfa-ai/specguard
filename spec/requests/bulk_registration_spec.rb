@@ -1628,6 +1628,80 @@ RSpec.describe "Bulk organization registration", type: :request do
         expect(response.body).to include("Ask an administrator")
       end
 
+      # ── Number agreement and composition of the four clauses ───────────────────────────────────
+      #
+      # The examples above pin which BUCKET a name lands in and which claims are withheld. These pin
+      # the words around the names: each clause agrees in number with how many names it carries,
+      # the capitalisation bucket's tick instruction is actually printed, and several buckets in one
+      # render read in a fixed order as one run of sentences. Each is a whole-sentence assertion on
+      # purpose — the wording IS the observable here — and a mutant that flips a singular/plural
+      # arm, drops the instruction, or reorders the join changes exactly one of these strings.
+
+      # @intent: {"entity": "Repository", "action": "agree capitalisation clause in number", "behavior": "Two carried names that differ from the listing only by case are named with their listed spelling in a plural sentence ending Tick the matching rows below, and a single one gets the singular it has not been selected and Tick the matching row below.", "layer": "request"}
+      it "words the capitalisation clause in the plural and the singular, instruction included" do
+        picker_carrying(%w[Acme/API Acme/Web])
+
+        expect(response.body).to include(
+          "Acme/API (listed as acme/api) and Acme/Web (listed as acme/web) are listed under a " \
+          "different capitalisation, so they have not been selected. Tick the matching rows below."
+        )
+
+        picker_carrying(%w[Acme/API])
+
+        expect(response.body).to include(
+          "Acme/API (listed as acme/api) is listed under a different capitalisation, so it has " \
+          "not been selected. Tick the matching row below."
+        )
+      end
+
+      # @intent: {"entity": "Repository", "action": "agree withheld clause in number", "behavior": "Two carried names the viewer can see but does not administer are reported in the plural, they are not shown below, and the reader is asked to have an administrator of those repositories register them.", "layer": "request"}
+      it "words the withheld clause in the plural when two carried names are not administered" do
+        stub_github(repos: [github_repo("acme/api"), github_repo("acme/a", admin: false),
+                            github_repo("acme/b", admin: false)])
+
+        get bulk_repositories_path(organization: "acme", github_full_names: %w[acme/a acme/b])
+
+        expect(response.body).to include(
+          "acme/a and acme/b are connected to the SpecGuard GitHub App, but GitHub does not list " \
+          "you as an administrator of them, so they are not shown below. Ask an administrator of " \
+          "those repositories to register them."
+        )
+      end
+
+      # @intent: {"entity": "Repository", "action": "agree unconfirmed clause in number", "behavior": "Over an incomplete listing, two carried names the listing lacks are reported in the plural as not confirmed, not shown below and not selected, with the advice to try the page again shortly.", "layer": "request"}
+      it "words the unconfirmed clause in the plural when two carried names could not be confirmed" do
+        stub_github(repos: [github_repo("acme/api")], truncated: true)
+
+        get bulk_repositories_path(organization: "acme",
+                                   github_full_names: %w[acme/api acme/web acme/ledger])
+
+        expect(response.body).to include(
+          "SpecGuard could not confirm acme/web and acme/ledger just now \u2014 your repository " \
+          "list came back incomplete, so they are not shown below and have not been selected. " \
+          "This may resolve on its own; try this page again shortly."
+        )
+      end
+
+      # @intent: {"entity": "Repository", "action": "compose several shortfall clauses", "behavior": "A carry that is short in three ways at once prints the capitalisation, not-connected and administrator clauses in that order, separated by single spaces.", "layer": "request"}
+      it "joins the clauses of several buckets in one render, in a fixed order, by single spaces" do
+        stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"),
+                            github_repo("acme/locked", admin: false)])
+
+        get bulk_repositories_path(organization: "acme",
+                                   github_full_names: %w[Acme/API acme/gone acme/locked])
+
+        expect(response.body).to include(
+          "Acme/API (listed as acme/api) is listed under a different capitalisation, so it has " \
+          "not been selected. Tick the matching row below. " \
+          "acme/gone is still not connected to the SpecGuard GitHub App, so it is not listed " \
+          "below and has not been selected. Add it to the App on GitHub, then come back to this " \
+          "page. " \
+          "acme/locked is connected to the SpecGuard GitHub App, but GitHub does not list you as " \
+          "an administrator of it, so it is not shown below. Ask an administrator of that " \
+          "repository to register it."
+        )
+      end
+
       # ── Silence, where silence is correct ──────────────────────────────────────────────────────
 
       # Criterion 1. A carry in which EVERY name matched is not short, and a page that says so
