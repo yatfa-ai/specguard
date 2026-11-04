@@ -447,6 +447,27 @@ RSpec.describe "API v1 — GET /api/v1/repositories", type: :request do
       expect(block["duration_seconds"]).to be_nil
     end
 
+    # The tie-break `DeliveryHealthLookups#latest_test_runs_for` documents as repeating
+    # `Repository#latest_test_run`'s exactly (created_at desc, then id desc). `create_test_run`
+    # gives every run its own `created_at`, so no other list example reaches the `id: :desc` term;
+    # stamping both runs at one instant forces the tie, as `repository_latest_run_spec.rb` does for
+    # the singular surface. Flipping the term to `id: :asc` makes the list name the older run.
+    # @intent: { entity: "repository list latest_run", action: "break created_at ties", behavior: "two runs sharing a timestamp resolve to the higher id, the same winner as Repository#latest_test_run", layer: "request" }
+    it "names the higher-id run when two runs of a repository share created_at" do
+      stamp = 1.hour.ago
+      older = create_test_run(repository: owned, commit_sha: "older0", total_specs_count: 1)
+      newer = create_test_run(repository: owned, commit_sha: "newer0", total_specs_count: 2)
+      [older, newer].each { |run| run.update_columns(created_at: stamp) }
+
+      get_repositories
+
+      block = entry_for("acme/billing-service")["latest_run"]
+      expect(newer.id).to be > older.id
+      expect(owned.latest_test_run).to eq(newer)
+      expect(block["id"]).to eq(newer.id)
+      expect(block["commit_sha"]).to eq("newer0")
+    end
+
     # THE DRIFT GUARD, and the example the whole `LatestRunSerializer` extraction exists to make
     # pass forever: every fact the list serves about a run is compared, key for key and value for
     # value, against the SAME run's block on the detail route — the same comparison
