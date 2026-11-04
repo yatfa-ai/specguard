@@ -316,4 +316,56 @@ RSpec.describe AgentApiKey do
       expect(AgentApiKey.authenticating_on(mine)).to be_empty
     end
   end
+
+  # SPGD-2052 — the connection indicator's agent-key half (`RepositoryConnection.for`, and so
+  # `credential_health.connection`) reads off this scope. It is `authenticating_on` plus the
+  # `runs.ingest` grant; `.authenticating_on` above pins the first three limbs on the SIBLING
+  # scope only, so these examples are what notice `carrying_ingest_for` being rewritten to
+  # bypass it (to `live`, or to `live.covering`).
+  describe ".carrying_ingest_for" do
+    # @intent: { entity: "AgentApiKey", action: "select ingest carriers", behavior: "carrying_ingest_for(repository) contains a live key that covers the repository, holds runs.ingest and is owned by an active user", layer: "unit" }
+    it "contains the live, covering, ingest-holding key of an active owner" do
+      key, mine = owned_key(permissions: [RepositoryMembership::RUNS_INGEST])
+
+      expect(AgentApiKey.carrying_ingest_for(mine)).to contain_exactly(key)
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "exclude a non-covering key", behavior: "a key holding runs.ingest that covers only a second repository its owner has is not among carrying_ingest_for the first, so a key minted for a different repository cannot make this one read connected", layer: "unit" }
+    it "excludes an ingest-holding key that covers only a different repository" do
+      _key, mine = owned_key(permissions: [RepositoryMembership::RUNS_INGEST])
+      second = create_repository(user: mine.user, github_full_name: "acme/second")
+      elsewhere = create_agent_api_key(user: mine.user, repositories: [second], name: "Second only",
+                                       permissions: [RepositoryMembership::RUNS_INGEST])
+
+      expect(AgentApiKey.carrying_ingest_for(second)).to contain_exactly(elsewhere)
+      expect(AgentApiKey.carrying_ingest_for(mine)).not_to include(elsewhere)
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "exclude an archived owner's key", behavior: "a live, covering, ingest-holding key stops being among carrying_ingest_for once its owner is archived, because that token no longer authenticates", layer: "unit" }
+    it "drops an ingest-holding key whose owner is archived" do
+      key, mine = owned_key(permissions: [RepositoryMembership::RUNS_INGEST])
+      expect(AgentApiKey.carrying_ingest_for(mine)).to contain_exactly(key)
+
+      key.user.update_columns(archived_at: Time.current)
+
+      expect(AgentApiKey.live.covering(mine)).to contain_exactly(key)
+      expect(AgentApiKey.carrying_ingest_for(mine)).to be_empty
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "exclude a key without the ingest grant", behavior: "a live, covering key of an active owner whose permissions are empty is not among carrying_ingest_for, so the permission limb is independent of the authentication limbs", layer: "unit" }
+    it "excludes a live, covering key that does not hold runs.ingest" do
+      key, mine = owned_key(permissions: [])
+
+      expect(AgentApiKey.authenticating_on(mine)).to contain_exactly(key)
+      expect(AgentApiKey.carrying_ingest_for(mine)).to be_empty
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "exclude a revoked key", behavior: "a covering ingest-holding key of an active owner is not among carrying_ingest_for once revoked", layer: "unit" }
+    it "excludes a revoked ingest-holding key" do
+      key, mine = owned_key(permissions: [RepositoryMembership::RUNS_INGEST])
+      key.revoke!
+
+      expect(AgentApiKey.carrying_ingest_for(mine)).to be_empty
+    end
+  end
 end
