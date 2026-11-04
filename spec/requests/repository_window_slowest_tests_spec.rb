@@ -999,5 +999,41 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect([row_names, basis_line.text]).to eq(unasked)
       expect(basis_line).not_to have_text("Narrowed to")
     end
+
+    # SPGD-2056 — a layer-narrowed window that is ALSO capped. The candidate count under a layer is
+    # the LAYER's (`SlowestTests.rank` hands `layer:` to the candidate read), so without the
+    # "unit-layer" prefix the cap clause would state a layer-narrowed 11 as if it were the run's 13.
+    # 11 unit tests also makes the unexamined remainder exactly 1, the singular arm of is/are that
+    # the 14-test cap examples (remainder 4) never reach.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose layer cap", "behavior": "under layer=unit with 11 unit tests beside 2 system ones the caption counts 11 unit-layer durable tests, never the run's 13, and says the other 1 is not represented above", "layer": "request"}
+    it "scopes the cap clause to the layer and uses the singular for one unexamined test" do
+      repository = create_repository(user: @user)
+      2.times do |index|
+        unit = (1..11).map do |i|
+          annotated_spec(file_path: "spec/models/ledger_spec.rb", line_number: i, duration: i.to_f,
+                         name: "Ledger step #{i} settles the balance", layer: "unit")
+            .merge(intent: { entity: "Ledger", action: "settle #{i}", behavior: "settles step #{i}",
+                             layer: "unit" })
+        end
+        system = (1..2).map do |i|
+          annotated_spec(file_path: "spec/system/flow_spec.rb", line_number: i, duration: 0.5,
+                         name: "System flow #{i} completes", layer: "system")
+            .merge(intent: { entity: "Flow", action: "complete #{i}", behavior: "completes flow #{i}",
+                             layer: "system" })
+        end
+        ingest(repository, unit + system, commit_sha: "lcap#{index}sha#{format("%07d", index)}",
+                                          at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository), params: { layer: "unit" }
+
+      expect(rows.size).to eq(SpecObservation::SLOWEST_LIMIT)
+      expect(basis_line).to have_text("11 unit-layer durable tests that run resolved — more than " \
+                                      "this panel ranks at once — so the 10 slowest OF THOSE",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text("the other 1 is not represented above", normalize_ws: true)
+      expect(basis_line).to have_no_text("13 durable tests")
+      expect(basis_line).to have_no_text("the other 1 are")
+    end
   end
 end
