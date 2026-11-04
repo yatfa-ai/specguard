@@ -60,12 +60,6 @@ RSpec.describe "Repository spec directory file growth", type: :request do
 
   def area_action(path) = area_row(path).find("a", exact_text: "Which files moved", visible: :all)
 
-  def new_repository
-    @repository_seq = (@repository_seq || 0) + 1
-
-    create_repository(user: @user, github_full_name: "acme/service-#{@repository_seq}")
-  end
-
   # One row as a reader meets it: the file, both operands, and the movement between them.
   def rows
     panel.all("tbody tr").map do |row|

@@ -256,6 +256,16 @@ module RequestBuilders
 
     response.parsed_body
   end
+
+  # Mints a repository owned by the including group's `@user`, named `acme/service-<n>` with `n`
+  # counting up per example, so an example that builds several never meets the name twice
+  # (`github_full_name` is unique per owner). Assumes the including group sets `@user`
+  # (e.g. `before { @user = sign_in_via_github }`).
+  def new_repository
+    @repository_seq = (@repository_seq || 0) + 1
+
+    create_repository(user: @user, github_full_name: "acme/service-#{@repository_seq}")
+  end
 end
 
 RSpec.configure do |config|

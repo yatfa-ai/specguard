@@ -35,12 +35,6 @@ RSpec.describe "Repository previous-run comparison-basis links", type: :request 
 
   before { @user = sign_in_via_github }
 
-  def new_repository
-    @repository_seq = (@repository_seq || 0) + 1
-
-    create_repository(user: @user, github_full_name: "acme/service-#{@repository_seq}")
-  end
-
   # The expected destination of a basis link: the named run's page at the Summary. Recomputed from
   # the router, not from the view helper, on the documented reasoning of the window-slowest file.
   def expected_prev_href(repository, sha = PREV_SHA, **asks)
