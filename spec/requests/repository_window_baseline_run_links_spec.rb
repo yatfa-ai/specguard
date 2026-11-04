@@ -37,12 +37,6 @@ RSpec.describe "Repository window-panel baseline-run links", type: :request do
 
   before { @user = sign_in_via_github }
 
-  def new_repository
-    @repository_seq = (@repository_seq || 0) + 1
-
-    create_repository(user: @user, github_full_name: "acme/service-#{@repository_seq}")
-  end
-
   def page = Capybara.string(response.body)
 
   # The expected destination of a baseline link: the named run's page at the Summary. Recomputed

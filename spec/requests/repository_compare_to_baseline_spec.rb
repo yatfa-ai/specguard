@@ -30,12 +30,6 @@ RSpec.describe "Repository console — ?compare_to= explicit cross-branch baseli
 
   before { @user = sign_in_via_github }
 
-  def new_repository
-    @repository_seq = (@repository_seq || 0) + 1
-
-    create_repository(user: @user, github_full_name: "acme/service-#{@repository_seq}")
-  end
-
   def ingest(repository, commit_sha:, specs:, branch: "main", duration: 60.0, at: nil)
     run = Ingest::RunRecorder.record(
       repository,

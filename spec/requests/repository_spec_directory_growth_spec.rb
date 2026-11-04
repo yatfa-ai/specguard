@@ -51,13 +51,6 @@ RSpec.describe "Repository spec directory growth", type: :request do
 
   def empty_state_text = empty_state.text.gsub(/\s+/, " ").strip
 
-  # Several examples build more than one repository, and `github_full_name` is unique per owner.
-  def new_repository
-    @repository_seq = (@repository_seq || 0) + 1
-
-    create_repository(user: @user, github_full_name: "acme/service-#{@repository_seq}")
-  end
-
   # One row as a reader meets it: the area, both operands, and the movement between them.
   def rows
     panel.all("tbody tr").map do |row|

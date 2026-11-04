@@ -63,12 +63,6 @@ RSpec.describe "Repository spec directory window growth", type: :request do
 
   def row_for(path) = rows.find { |row| row[:path] == path }
 
-  def new_repository
-    @repository_seq = (@repository_seq || 0) + 1
-
-    create_repository(user: @user, github_full_name: "acme/service-#{@repository_seq}")
-  end
-
   # One run on the wire, stamped so the window's order is the fixture's order rather than the
   # order the rows happened to be inserted in. `specs:` omitted entirely — not `specs: []` — is the
   # client that reports totals and no per-example detail.
