@@ -17,19 +17,14 @@ require "rails_helper"
 # inserted by hand — the rule every sibling file states, and for the same reason: every state this
 # pair turns on is a state the recorder produces from what a real client sends.
 RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :request do
+  include FreshKeyRepositoryReads
+
   # Signed in as well as keyed, because one example reads the HTML panel and the JSON blocks off the
   # same data and compares them field for field.
   before { @user = sign_in_via_github }
 
   let(:repository) { create_repository(user: @user) }
   let(:api_key) { repository.api_keys.create! }
-
-  def get_repository(repo: repository, key: nil, query: {})
-    token = (key || repo.api_keys.create!).raw_token
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
-
-    response.parsed_body
-  end
 
   # The two keys under test, always read together: the contract block explains the rows block, and
   # reading either alone is how a `null` gets asserted without its reason.

@@ -11,17 +11,12 @@ require "rails_helper"
 # Rows are written by `Ingest::RunRecorder` (never inserted by hand), so every state is one the
 # recorder produces from what a real client sends.
 RSpec.describe "GET /api/v1/repository — layer_runtime_window_growth", type: :request do
+  include FreshKeyRepositoryReads
+
   before { @user = sign_in_via_github }
 
   let(:repository) { create_repository(user: @user) }
   let(:layers) { %w[unit integration request system undeclared] }
-
-  def get_repository(repo: repository, query: {})
-    token = repo.api_keys.create!.raw_token
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
-
-    response.parsed_body
-  end
 
   def blocks(query: { branch: "main" }, **)
     body = get_repository(query: query, **)

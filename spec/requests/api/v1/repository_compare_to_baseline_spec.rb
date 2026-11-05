@@ -30,6 +30,8 @@ require "rails_helper"
 #     an honoured ask costs exactly what a comparable same-branch response costs, and an
 #     un-asked response is untouched.
 RSpec.describe "GET /api/v1/repository — ?compare_to= explicit cross-branch baseline", type: :request do
+  include FreshKeyRepositoryReads
+
   include ActiveSupport::Testing::TimeHelpers
 
   API_MAIN_SHA = "main0000000001"
@@ -40,13 +42,6 @@ RSpec.describe "GET /api/v1/repository — ?compare_to= explicit cross-branch ba
   before { @user = sign_in_via_github }
 
   let(:repository) { create_repository(user: @user) }
-
-  def get_repository(repo: repository, query: {})
-    token = repo.api_keys.create!.raw_token
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
-
-    response.parsed_body
-  end
 
   # The raw response bytes, for the byte-identity pins. Every call mints its own key, so no
   # `last_used_at` from an earlier request can leak into a later body; the calls inside one

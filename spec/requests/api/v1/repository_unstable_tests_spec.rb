@@ -21,6 +21,8 @@ require "rails_helper"
 # table-driven loop. A hand-built fixture would be asserting against shapes nothing in production
 # writes.
 RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
+  include FreshKeyRepositoryReads
+
   # Signed in as well as keyed, because one example here reads the HTML panel and the JSON block
   # off the same data and compares them field for field. The owner is the same user in both, so
   # the two surfaces cannot be looking at two repositories.
@@ -28,13 +30,6 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
   let(:repository) { create_repository(user: @user) }
   let(:api_key) { repository.api_keys.create! }
-
-  def get_repository(repo: repository, key: nil, query: {})
-    token = (key || repo.api_keys.create!).raw_token
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
-
-    response.parsed_body
-  end
 
   # The two keys under test, always read together: the window block explains the rows block, and
   # reading either alone is how a `null` gets asserted without its reason.

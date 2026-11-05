@@ -22,6 +22,8 @@ require "rails_helper"
 # `duration` is a client reporting outcomes and no timings, which is the state this grain has and the
 # count grain cannot see.
 RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :request do
+  include FreshKeyRepositoryReads
+
   # Signed in as well as keyed, because one example reads the HTML panel and the JSON blocks off the
   # same data and compares them field for field. The owner is the same user on both surfaces, so the
   # two cannot be looking at two repositories.
@@ -29,13 +31,6 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
   let(:repository) { create_repository(user: @user) }
   let(:api_key) { repository.api_keys.create! }
-
-  def get_repository(repo: repository, key: nil, query: {})
-    token = (key || repo.api_keys.create!).raw_token
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
-
-    response.parsed_body
-  end
 
   # The two keys under test, always read together: the contract block explains the rows block, and
   # reading either alone is how a `null` gets asserted without its reason.

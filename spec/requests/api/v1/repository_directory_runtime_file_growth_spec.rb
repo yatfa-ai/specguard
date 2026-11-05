@@ -18,15 +18,10 @@ require "rails_helper"
 # on is a state the recorder produces from what a real client sends, including the untimed row, which
 # is what a reporter that omits `run_time` writes.
 RSpec.describe "GET /api/v1/repository — directory_runtime_file_growth", type: :request do
+  include FreshKeyRepositoryReads
+
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
-
-  def get_repository(repo: repository, key: nil, query: {})
-    token = (key || repo.api_keys.create!).raw_token
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
-
-    response.parsed_body
-  end
 
   # The two keys under test, always read together: the contract block explains the rows block, and
   # reading either alone is how a `null` gets asserted without its reason.
