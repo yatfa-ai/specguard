@@ -831,6 +831,41 @@ RSpec.describe "Repository near-duplicate clusters panel", type: :request do
     expect(queries_against("near_duplicate_censuses") { get repository_path(repository) }.size).to eq(1)
   end
 
+  # @intent: {"entity": "NearDuplicateCensus", "action": "refuse a mismatched on-page leader", "behavior": "a cross-layer leader whose rank sits on the stored page but whose descriptions do not lead with that page row's smallest member text, or whose rank is not an Integer, renders its caption phrase as plain text rather than a link to another group's drawer", "layer": "request"}
+  it "renders an on-page cross-layer leader whose descriptions do not match its page row as plain text" do
+    ingest(repository, pair_specs)
+    census = NearDuplicateCensus.find_by!(repository_id: repository.id)
+    page_cluster = census.payload["clusters"].sole
+    tally = { "cross_layer" => 4, "same_layer" => 2, "undeclared" => 1 }
+    leader = { "rank" => 1, "member_count" => page_cluster["member_count"],
+               "descriptions" => page_cluster["members"].map { it["text"] }.sort.first(3),
+               "files_seen" => ["spec/models/checkout_spec.rb"] }
+    caption = lambda do |stored_leader|
+      census.update!(payload: census.payload.merge(
+        "truncated" => true, "cluster_count" => 7, "layer_redundancy_counts" => tally,
+        "layer_redundancy_leaders" => { "cross_layer" => [stored_leader], "same_layer" => [], "undeclared" => [] }
+      ))
+      get repository_path(repository)
+      panel.find("#near-duplicate-clusters-page")
+    end
+
+    # positive control: the matching leader on the same page IS a link
+    expect(caption.call(leader)).to have_selector("a.rc-link")
+
+    # rank 1 is on the page, but the leader's first description is not that row's smallest member text
+    impostor = leader.merge("descriptions" => ["Aardvark rejects something else", "Zebra rejects something else"])
+    expect(page_cluster["members"].map { it["text"] }.min).not_to eq(impostor["descriptions"].first)
+    mismatched = caption.call(impostor)
+    expect(mismatched).not_to have_selector("a.rc-link")
+    expect(mismatched.text(normalize_ws: true))
+      .to include("Aardvark rejects something else ↔ Zebra rejects something else (spec/models/checkout_spec.rb)")
+
+    # a rank that is not an Integer is never anchored either
+    stringly = caption.call(leader.merge("rank" => "1"))
+    expect(stringly).not_to have_selector("a.rc-link")
+    expect(stringly.text(normalize_ws: true)).to include("Checkout rejects an expired card ↔ Checkout rejects an expired card outright")
+  end
+
   describe "the off-page leader drill (?near_duplicate_cluster=<rank>)" do
     let(:census) { NearDuplicateCensus.find_by!(repository_id: repository.id) }
     let(:page_cluster) { census.payload["clusters"].sole }
