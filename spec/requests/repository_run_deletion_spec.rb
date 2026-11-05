@@ -551,8 +551,6 @@ RSpec.describe "Deleting a test run", type: :request do
   end
 
   describe "the run, sha and comparison anchors on the delete round trip" do
-    def page = Capybara.string(response.body)
-
     # `nil` rather than a raise when the page said nothing about its anchor, so a no-ask example
     # can assert the ABSENCE — the same helper `repository_run_anchor_spec.rb` defines for the
     # same element.

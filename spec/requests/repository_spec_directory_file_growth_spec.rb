@@ -34,8 +34,6 @@ require "rails_helper"
 RSpec.describe "Repository spec directory file growth", type: :request do
   before { @user = sign_in_via_github }
 
-  def page = Capybara.string(response.body)
-
   def panel = page.find("#spec-directory-file-growth")
 
   def panel? = page.has_css?("#spec-directory-file-growth")

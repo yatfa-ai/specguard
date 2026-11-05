@@ -33,8 +33,6 @@ require "rails_helper"
 RSpec.describe "Repository unstable test runs", type: :request do
   before { @user = sign_in_via_github }
 
-  def page = Capybara.string(response.body)
-
   def panel = page.find("#unstable-test-runs")
 
   def panel? = page.has_css?("#unstable-test-runs")

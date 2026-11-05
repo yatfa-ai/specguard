@@ -10,8 +10,6 @@ RSpec.describe "Repository heaviest spec directories — ?layer=", type: :reques
 
   let(:repository) { create_repository(user: @user) }
 
-  def page = Capybara.string(response.body)
-
   def panel = page.find("#spec-directory-durations")
 
   def basis = panel.find("#spec-directory-durations-basis").text.gsub(/\s+/, " ").strip

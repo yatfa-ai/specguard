@@ -18,8 +18,6 @@ RSpec.describe "Repository recent runs keyset paging", type: :request do
   let(:default_runs) { RequestedRunsParam::DEFAULT_RUNS }
   let(:max_runs) { RequestedRunsParam::MAX_RUNS }
 
-  def page = Capybara.string(response.body)
-
   def runs_rows = page.find("#recent-runs table").all("tbody tr")
 
   # The seeded shas the rows list, in rendered order (newest first). The seeds use distinct

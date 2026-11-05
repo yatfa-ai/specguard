@@ -21,8 +21,6 @@ RSpec.describe "Repository recent runs branch narrowing", type: :request do
   let(:default_runs) { RequestedRunsParam::DEFAULT_RUNS }
   let(:max_runs) { RequestedRunsParam::MAX_RUNS }
 
-  def page = Capybara.string(response.body)
-
   def runs_rows = page.find("#recent-runs table").all("tbody tr")
 
   def run_row(commit) = page.find("#recent-runs table").find("tbody tr", text: commit)

@@ -10,8 +10,6 @@ RSpec.describe "Repository spec directory window growth — ?layer=", type: :req
 
   let(:repository) { create_repository(user: @user) }
 
-  def page = Capybara.string(response.body)
-
   def ingest(specs, commit_sha:, at:, total: nil)
     run = Ingest::RunRecorder.record(
       repository,

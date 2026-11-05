@@ -9,8 +9,6 @@ RSpec.describe "Repository slowest tests — ?layer=", type: :request do
 
   let(:repository) { create_repository(user: @user) }
 
-  def page = Capybara.string(response.body)
-
   def panel = page.find("#slowest-examples")
 
   def basis = panel.find("#slowest-examples-basis").text.gsub(/\s+/, " ").strip
