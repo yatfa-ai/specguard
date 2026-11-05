@@ -73,6 +73,33 @@ RSpec.describe "repository overview — credential_health.connection", type: :re
                                     "last_live_request_at" => other.reload.last_used_at.iso8601)
     end
 
+    # @intent: { entity: "credential_health.connection", action: "date last_request_at from an agent-only repository", behavior: "when the only authenticating credential is another ingest-carrying sga_ key, last_request_at carries that key's last use rather than null", layer: "request" }
+    it "dates last_request_at from an agent-only repository" do
+      agent = create_agent_api_key(user: person, repositories: [repository], permissions: [ingest_permission],
+                                   name: "Only agent")
+      agent.touch_last_used!
+
+      expect(connection).to include("state" => "connected",
+                                    "last_request_at" => agent.reload.last_used_at.iso8601,
+                                    "last_live_request_at" => agent.last_used_at.iso8601)
+    end
+
+    # @intent: { entity: "credential_health.connection", action: "lift a rotated sgk_ key with a newer agent key", behavior: "a newer ingest-carrying sga_ key beside a rotated sgk_ key makes the repository connected and dates both figures from the agent, the newest of the two sources", layer: "request" }
+    it "lets a newer agent key lift a rotated sgk_ key to connected and date both figures from the agent" do
+      rotated = repository.api_keys.create!(name: "CI")
+      rotated.touch_last_used!
+      rotated.update_columns(last_used_at: 2.hours.ago)
+      rotated.regenerate!
+      agent = create_agent_api_key(user: person, repositories: [repository], permissions: [ingest_permission],
+                                   name: "Newer agent")
+      agent.touch_last_used!
+
+      expect(rotated.reload.last_used_at).to be < agent.reload.last_used_at
+      expect(connection).to include("state" => "connected",
+                                    "last_request_at" => agent.last_used_at.iso8601,
+                                    "last_live_request_at" => agent.last_used_at.iso8601)
+    end
+
     # @intent: { entity: "credential_health.connection", action: "ignore an agent key without ingest", behavior: "an sga_ key lacking runs.ingest does not make the repository connected", layer: "request" }
     it "ignores another agent key that cannot carry ingest" do
       other = create_agent_api_key(user: person, repositories: [repository], permissions: [], name: "Reader")
