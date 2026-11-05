@@ -37,8 +37,6 @@ RSpec.describe "Repository window-panel baseline-run links", type: :request do
 
   before { @user = sign_in_via_github }
 
-  def page = Capybara.string(response.body)
-
   # The expected destination of a baseline link: the named run's page at the Summary. Recomputed
   # from the router, not from the view helper, on the reasoning the previous-run file records.
   def expected_base_href(repository, sha = BASE_SHA, **asks)

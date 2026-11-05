@@ -10,8 +10,6 @@ RSpec.describe "Repository run-over-run area panels — ?layer=", type: :request
 
   let(:repository) { create_repository(user: @user) }
 
-  def page = Capybara.string(response.body)
-
   def ingest(specs, commit_sha:, at:)
     run = Ingest::RunRecorder.record(
       repository,

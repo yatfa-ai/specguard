@@ -361,8 +361,6 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_window_growth", typ
   end
 
   describe "the panel" do
-    def page = Capybara.string(response.body)
-
     def panel = page.find("#spec-directory-window-runtime-growth")
 
     def panel_text = panel.text.gsub(/\s+/, " ").strip

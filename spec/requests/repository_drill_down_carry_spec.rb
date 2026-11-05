@@ -189,8 +189,6 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     unannotated_spec(file_path: file_path, line_number: line_number, duration: duration).merge(attrs)
   end
 
-  def page = Capybara.string(response.body)
-
   def open_every_ask
     get repository_path(drill_down_run, branch: branch_ask, commit_sha: run_ask, spec_file: file_ask,
                         spec_directory: area_ask, repeated_description: description_ask,

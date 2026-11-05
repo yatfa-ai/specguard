@@ -211,6 +211,9 @@ end
 # Builders that go through the app over HTTP rather than straight to the model, so they are only
 # meaningful where a request is available.
 module RequestBuilders
+  # The last response body parsed as HTML, for asserting on rendered console panels.
+  def page = Capybara.string(response.body)
+
   # The Authorization header for an `sgk_`/`sga_`/`sgu_` token, as request specs pass it via `headers:`.
   def bearer(token) = { "Authorization" => "Bearer #{token}" }
 

@@ -11,8 +11,6 @@ RSpec.describe "Repository repeated descriptions — ?layer=", type: :request do
 
   let(:repository) { create_repository(user: @user) }
 
-  def page = Capybara.string(response.body)
-
   def panel = page.find("#repeated-descriptions")
 
   def layer_note = panel.find("#repeated-descriptions-layer").text.gsub(/\s+/, " ").strip

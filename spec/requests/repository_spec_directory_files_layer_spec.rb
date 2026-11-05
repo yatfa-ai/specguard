@@ -12,8 +12,6 @@ RSpec.describe "Repository spec files in this directory — ?layer=", type: :req
   let(:repository) { create_repository(user: @user) }
   let(:area) { "spec/models" }
 
-  def page = Capybara.string(response.body)
-
   def drill = page.find("#spec-directory-files")
 
   def basis = drill.find("#spec-directory-files-basis").text.gsub(/\s+/, " ").strip

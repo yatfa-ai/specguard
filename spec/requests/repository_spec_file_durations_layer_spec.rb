@@ -10,8 +10,6 @@ RSpec.describe "Repository heaviest spec files — ?layer=", type: :request do
 
   let(:repository) { create_repository(user: @user) }
 
-  def page = Capybara.string(response.body)
-
   def panel = page.find("#spec-file-durations")
 
   def basis = panel.find("#spec-file-durations-basis").text.gsub(/\s+/, " ").strip

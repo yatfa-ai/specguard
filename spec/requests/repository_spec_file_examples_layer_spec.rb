@@ -13,8 +13,6 @@ RSpec.describe "Repository spec-file examples — ?layer=", type: :request do
 
   FILE = "spec/models/mixed_spec.rb"
 
-  def page = Capybara.string(response.body)
-
   def drill = page.find("#spec-file-examples")
 
   def basis = drill.find("#spec-file-examples-basis").text.gsub(/\s+/, " ").strip

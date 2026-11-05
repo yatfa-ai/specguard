@@ -24,8 +24,6 @@ RSpec.describe "Repository run anchor", type: :request do
   let(:repository) { create_repository(user: @user) }
   let(:api_key) { repository.api_keys.create! }
 
-  def page = Capybara.string(response.body)
-
   def panel(id) = page.find("##{id}")
 
   def overview_text = console_overview.text.squish

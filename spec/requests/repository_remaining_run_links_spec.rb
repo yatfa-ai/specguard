@@ -43,8 +43,6 @@ RSpec.describe "Repository remaining run links (Suite growth + :unrecorded)", ty
 
   before { @user = sign_in_via_github }
 
-  def page = Capybara.string(response.body)
-
   def trajectory_panel = page.find("#suite-trajectory")
 
   def basis_line = trajectory_panel.find("#suite-trajectory-basis")
