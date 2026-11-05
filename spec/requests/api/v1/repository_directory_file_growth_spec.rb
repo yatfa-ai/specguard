@@ -8,16 +8,11 @@ require "rails_helper"
 # `SpecDirectoryWindowFileGrowth`, off the window parent `directory_growth` is built from, so they are
 # asserted off one fixture.
 RSpec.describe "GET /api/v1/repository — directory_file_growth", type: :request do
+  include FreshKeyRepositoryReads
+
   before { @user = sign_in_via_github }
 
   let(:repository) { create_repository(user: @user) }
-
-  def get_repository(query: {})
-    token = repository.api_keys.create!.raw_token
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
-
-    response.parsed_body
-  end
 
   def blocks(query: { branch: "main", spec_directory: "spec/models" })
     body = get_repository(query: query)

@@ -7,16 +7,11 @@ require "rails_helper"
 # example's own `@intent` declared, never inferred from the path. Rows are written by
 # `Ingest::RunRecorder`, so every state is one a real client produces.
 RSpec.describe "GET /api/v1/repository — ?layer= on directory_growth", type: :request do
+  include FreshKeyRepositoryReads
+
   before { @user = sign_in_via_github }
 
   let(:repository) { create_repository(user: @user) }
-
-  def get_repository(query: {})
-    token = repository.api_keys.create!.raw_token
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
-
-    response.parsed_body
-  end
 
   def ingest(specs, commit_sha:, at:, total: nil, branch: "main")
     run = Ingest::RunRecorder.record(

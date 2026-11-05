@@ -22,16 +22,11 @@ require "rails_helper"
 # two states that must never serialize alike — `unresolved` and an honest empty ranking — both
 # unreachable, which is the one thing this file exists to pin.
 RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
+  include FreshKeyRepositoryReads
+
   before { @user = sign_in_via_github }
 
   let(:repository) { create_repository(user: @user) }
-
-  def get_repository(repo: repository, key: nil, query: {})
-    token = (key || repo.api_keys.create!).raw_token
-    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
-
-    response.parsed_body
-  end
 
   # The two keys under test, always read together: the window block explains the rows block, and
   # reading either alone is how a `null` gets asserted without its reason.

@@ -271,6 +271,23 @@ module RequestBuilders
   end
 end
 
+# GETs /api/v1/repository with a freshly minted key of `repo` and returns the parsed body.
+#
+# Deliberately NOT config-included: it is opted into per file with `include FreshKeyRepositoryReads`
+# by the groups that read as a named repository. It is separate from `RequestBuilders#get_repository`
+# because the default credential differs — a fresh key of `repo` here, the including group's
+# `api_key` there — and an `include` in the describe block precedes the config-level
+# `include RequestBuilders` in the ancestor chain, so this one wins in those groups.
+# Assumes the including group defines `repository`.
+module FreshKeyRepositoryReads
+  def get_repository(repo: repository, key: nil, query: {})
+    token = (key || repo.api_keys.create!).raw_token
+    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{token}" }
+
+    response.parsed_body
+  end
+end
+
 RSpec.configure do |config|
   config.include Builders
   config.include RequestBuilders, type: :request
