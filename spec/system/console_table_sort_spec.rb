@@ -12,22 +12,26 @@ require "rails_helper"
 # key parser branches on: a numeric `data-sort` (Tests), a text cell (Branch) and a cell reading
 # `not reported` (a run that reported no branch).
 RSpec.describe "Console table column sort", type: :system do
-  # Newest first, which is the order the server renders. Two runs tie on Tests (12), so the original
-  # DOM order is observable: `a1` precedes `c3` in the page and must precede it after every sort.
+  # Newest first, which is the order the server renders. Two runs tie on Tests (12) and two report no
+  # branch, so the original DOM order of equal keys is observable: `a1` precedes `c3` (a tie on
+  # Tests) and `c3` precedes `e5` (both "not reported") in the page, and must after every sort.
   # The test counts are chosen so that sorting them as TEXT ("12" < "40" < "7") disagrees with
   # sorting them as numbers (7 < 12 < 40).
-  RUNS = [
-    { commit_sha: "a1a1a1a1", branch: "main",  total_specs_count: 12, created_at: 1.hour.ago },
-    { commit_sha: "b2b2b2b2", branch: "zeta",  total_specs_count: 40, created_at: 2.hours.ago },
-    { commit_sha: "c3c3c3c3", branch: nil,     total_specs_count: 12, created_at: 3.hours.ago },
-    { commit_sha: "d4d4d4d4", branch: "alpha", total_specs_count: 7,  created_at: 4.hours.ago }
-  ].freeze
+  let(:runs) do
+    [
+      { commit_sha: "a1a1a1a1", branch: "main",  total_specs_count: 12, created_at: 1.hour.ago },
+      { commit_sha: "b2b2b2b2", branch: "zeta",  total_specs_count: 40, created_at: 2.hours.ago },
+      { commit_sha: "c3c3c3c3", branch: nil,     total_specs_count: 12, created_at: 3.hours.ago },
+      { commit_sha: "d4d4d4d4", branch: "alpha", total_specs_count: 7,  created_at: 4.hours.ago },
+      { commit_sha: "e5e5e5e5", branch: nil,     total_specs_count: 3,  created_at: 5.hours.ago }
+    ]
+  end
 
   before do
     stub_github
     user = sign_in_via_github_in_browser
     repository = create_repository(user: user)
-    RUNS.each { |attrs| create_test_run(repository: repository, **attrs) }
+    runs.each { |attrs| create_test_run(repository: repository, **attrs) }
     visit repository_path(repository)
   end
 
@@ -44,26 +48,26 @@ RSpec.describe "Console table column sort", type: :system do
 
   # @intent: { entity: "DatatableController", action: "click a numeric column header twice", behavior: "the rows order by the numeric data-sort ascending then descending, rows with an equal value keep their original relative order in both directions, and aria-sort names the direction on the clicked header", layer: "system" }
   it "sorts a numeric column by value, toggles direction, and keeps ties in their original order" do
-    expect(commits).to eq(%w[a1a1a1a b2b2b2b c3c3c3c d4d4d4d])
+    expect(commits).to eq(%w[a1a1a1a b2b2b2b c3c3c3c d4d4d4d e5e5e5e])
 
     sort_by("Tests")
     expect(aria_sorted).to eq([["Tests", "ascending"]])
-    expect(commits).to eq(%w[d4d4d4d a1a1a1a c3c3c3c b2b2b2b])
+    expect(commits).to eq(%w[e5e5e5e d4d4d4d a1a1a1a c3c3c3c b2b2b2b])
 
     sort_by("Tests")
     expect(aria_sorted).to eq([["Tests", "descending"]])
-    expect(commits).to eq(%w[b2b2b2b a1a1a1a c3c3c3c d4d4d4d])
+    expect(commits).to eq(%w[b2b2b2b a1a1a1a c3c3c3c d4d4d4d e5e5e5e])
   end
 
-  # @intent: { entity: "DatatableController", action: "click a text column header twice when one row has no value", behavior: "the row whose cell reads not reported sorts last in both directions while the reported values order ascending then descending", layer: "system" }
+  # @intent: { entity: "DatatableController", action: "click a text column header twice when one row has no value", behavior: "the rows whose cell reads not reported sort last in both directions, in their original relative order while the reported values order ascending then descending", layer: "system" }
   it "sorts a missing value last in both directions" do
     sort_by("Branch")
     expect(aria_sorted).to eq([["Branch", "ascending"]])
-    expect(commits).to eq(%w[d4d4d4d a1a1a1a b2b2b2b c3c3c3c])
+    expect(commits).to eq(%w[d4d4d4d a1a1a1a b2b2b2b c3c3c3c e5e5e5e])
 
     sort_by("Branch")
     expect(aria_sorted).to eq([["Branch", "descending"]])
-    expect(commits).to eq(%w[b2b2b2b a1a1a1a d4d4d4d c3c3c3c])
+    expect(commits).to eq(%w[b2b2b2b a1a1a1a d4d4d4d c3c3c3c e5e5e5e])
   end
 
   # @intent: { entity: "DatatableController", action: "click one column header after another", behavior: "only the most recently clicked header carries aria-sort", layer: "system" }
