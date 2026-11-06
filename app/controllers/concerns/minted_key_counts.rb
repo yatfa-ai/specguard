@@ -76,4 +76,12 @@ module MintedKeyCounts
 
     AgentApiKey.authenticating_on(repository).where(user_id: user_ids).group(:user_id).count
   end
+
+  # `[live sgk_ keys minted, live sga_ keys covering]` for ONE person, each 0 when the gate hands
+  # back `{}`. The single-person face of the two batch readers above, in their order (minted first,
+  # agent second) so the query-count examples keep seeing the same sequence.
+  def key_counts_left_behind_by(repository, user_id)
+    [keys_minted_by(repository, [user_id]).fetch(user_id, 0),
+     agent_keys_covering_by(repository, [user_id]).fetch(user_id, 0)]
+  end
 end

@@ -176,8 +176,7 @@ class MembershipsController < ApplicationController
     # Read before the row goes away. Destroying a membership does not touch an api_keys row — only
     # destroying the *user* nullifies `created_by_user_id` — so this count is stable either side of
     # the destroy. Taking it first keeps the notice's claim and the state it describes in one place.
-    keys_minted = keys_minted_by(repository, [membership.user_id]).fetch(membership.user_id, 0)
-    agent_keys = agent_keys_covering_by(repository, [membership.user_id]).fetch(membership.user_id, 0)
+    keys_minted, agent_keys = key_counts_left_behind_by(repository, membership.user_id)
 
     membership.destroy!
 
@@ -222,8 +221,7 @@ class MembershipsController < ApplicationController
     # Read before the row goes away, in `#destroy`'s order: destroying a membership touches no
     # api_keys row, so the count is stable either side — taking it first keeps the notice's claim
     # and the state it describes in one place.
-    keys_minted = keys_minted_by(repository, [membership.user_id]).fetch(membership.user_id, 0)
-    agent_keys = agent_keys_covering_by(repository, [membership.user_id]).fetch(membership.user_id, 0)
+    keys_minted, agent_keys = key_counts_left_behind_by(repository, membership.user_id)
 
     membership.destroy!
 
@@ -363,8 +361,7 @@ class MembershipsController < ApplicationController
     return unless editing_own_row?
     return unless @membership.permissions_was.to_a.include?(RepositoryMembership::KEYS_MANAGE)
 
-    @self_edit_keys_minted = keys_minted_by(@repository, [current_user.id]).fetch(current_user.id, 0)
-    @self_edit_agent_keys = agent_keys_covering_by(@repository, [current_user.id]).fetch(current_user.id, 0)
+    @self_edit_keys_minted, @self_edit_agent_keys = key_counts_left_behind_by(@repository, current_user.id)
   end
 
   # Re-renders the form with the reasons, and never with a redirect: the owner's typed handle and
