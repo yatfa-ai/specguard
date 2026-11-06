@@ -214,7 +214,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # two entry points open the same thing rather than two links that merely look alike.
     def spec_file_panel_rows
       Capybara.string(response.body).find("#spec-file-examples").all("tbody tr")
-              .map { |row| row.text.gsub(/\s+/, " ").strip }
+              .map { squished_text(it) }
     end
 
     # @intent: {"entity": "GET /repositories/:id", "action": "link file drill-down", "behavior": "the first row's run-in link href carries spec_file=spec/models/order_spec.rb and the #spec-file-examples fragment", "layer": "request"}

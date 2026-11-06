@@ -42,20 +42,20 @@ RSpec.describe "Repository spec directory growth", type: :request do
   # Whitespace-normalised, because the caption is a paragraph of ERB whose source line breaks are
   # not the sentence's — an assertion against the raw text would be pinning the template's
   # indentation rather than what it says.
-  def basis_text = basis_line.text.gsub(/\s+/, " ").strip
+  def basis_text = squished_text(basis_line)
 
   def basis? = panel.has_css?("#spec-directory-growth-basis")
 
   # The empty state's own text, so "the panel said why" can never be satisfied by the caption.
   def empty_state = panel.find("[class*='border-dashed']")
 
-  def empty_state_text = empty_state.text.gsub(/\s+/, " ").strip
+  def empty_state_text = squished_text(empty_state)
 
   # One row as a reader meets it: the area, both operands, and the movement between them.
   def rows
     panel.all("tbody tr").map do |row|
       # Four columns; a row's drawer detail is a trailing hidden cell in the document, not a column.
-      path, then_count, now_count, change = row.all("td").first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, then_count, now_count, change = row.all("td").first(4).map { squished_text(it) }
 
       { path: path, then: then_count, now: now_count, change: change,
         reading: row.all("td")[3]["aria-label"] }

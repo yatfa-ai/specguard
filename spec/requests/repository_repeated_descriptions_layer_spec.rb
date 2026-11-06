@@ -13,7 +13,7 @@ RSpec.describe "Repository repeated descriptions — ?layer=", type: :request do
 
   def panel = page.find("#repeated-descriptions")
 
-  def layer_note = panel.find("#repeated-descriptions-layer").text.gsub(/\s+/, " ").strip
+  def layer_note = squished_text(panel.find("#repeated-descriptions-layer"))
 
   def clear_link = page.first("#repeated-descriptions-clear-layer", minimum: 0)
 

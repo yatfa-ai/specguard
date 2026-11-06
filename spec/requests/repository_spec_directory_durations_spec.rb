@@ -39,7 +39,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   # distinct descriptions the examples behind it carry.
   def rows
     panel.all("tbody tr").map do |row|
-      path, coverage, duration, descriptions = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, coverage, duration, descriptions = row.all("td").map { squished_text(it) }
 
       { path: path, coverage: coverage, duration: duration, descriptions: descriptions }
     end
@@ -63,7 +63,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   def layer_cells
     panel.all("tbody tr").to_h do |row|
       cells = row.all("td").first(5)
-      [cells.first.text.gsub(/\s+/, " ").strip, layer_cell_text(cells.fifth)]
+      [squished_text(cells.first), layer_cell_text(cells.fifth)]
     end
   end
 
@@ -71,7 +71,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   # can be compared in the assertions that exist to prove they are two grains.
   def file_row_paths
     Capybara.string(response.body).find("#spec-file-durations").all("tbody tr").map do |row|
-      row.first("td").text.gsub(/\s+/, " ").strip
+      squished_text(row.first("td"))
     end
   end
 
@@ -712,7 +712,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
     def file_rows
       files_panel.all("tbody tr").map do |row|
-        path, coverage, duration = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+        path, coverage, duration = row.all("td").map { squished_text(it) }
 
         { path: path, coverage: coverage, duration: duration }
       end
@@ -917,7 +917,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       def layer_by_file
         files_panel.all("tbody tr").to_h do |row|
           cells = row.all("td").first(4)
-          [cells.first.text.gsub(/\s+/, " ").strip, layer_cell_text(cells.last)]
+          [squished_text(cells.first), layer_cell_text(cells.last)]
         end
       end
 

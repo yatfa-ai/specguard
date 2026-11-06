@@ -12,7 +12,7 @@ RSpec.describe "Repository heaviest spec files — ?layer=", type: :request do
 
   def panel = page.find("#spec-file-durations")
 
-  def basis = panel.find("#spec-file-durations-basis").text.gsub(/\s+/, " ").strip
+  def basis = squished_text(panel.find("#spec-file-durations-basis"))
 
   def clear_link = page.first("#spec-file-durations-clear-layer a", minimum: 0)
 

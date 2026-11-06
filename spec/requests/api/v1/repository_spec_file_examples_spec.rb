@@ -576,7 +576,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     def panel_rows
       panel = Capybara.string(response.body).find("#spec-file-examples")
       panel.all("tbody tr").map do |row|
-        test, layer, duration, outcome = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+        test, layer, duration, outcome = row.all("td").map { squished_text(it) }
 
         { "test" => test, "layer" => layer, "duration" => duration, "outcome" => outcome }
       end

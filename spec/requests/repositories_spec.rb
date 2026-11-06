@@ -4581,7 +4581,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     def registration_panel
       Capybara.string(response.body)
               .all(".rounded-card.border")
-              .map { |node| node.text.gsub(/\s+/, " ").strip }
+              .map { squished_text(it) }
               .find { |text| text.include?(lapsed_state) }
     end
 

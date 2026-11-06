@@ -29,7 +29,7 @@ RSpec.describe "Repository spec directory window growth — ?layer=", type: :req
     end
   end
 
-  def panel_text = page.find("#spec-directory-window-growth").text.gsub(/\s+/, " ").strip
+  def panel_text = squished_text(page.find("#spec-directory-window-growth"))
 
   def panel_html = page.find("#spec-directory-window-growth").native.to_html
 

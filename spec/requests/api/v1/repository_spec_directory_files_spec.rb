@@ -464,7 +464,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     def panel_rows
       panel = Capybara.string(response.body).find("#spec-directory-files")
       panel.all("tbody tr").map do |row|
-        path, coverage, duration, layers = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+        path, coverage, duration, layers = row.all("td").map { squished_text(it) }
 
         { "path" => path, "coverage" => coverage, "duration" => duration, "layers" => layers }
       end

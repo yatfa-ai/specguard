@@ -54,9 +54,9 @@ RSpec.describe "Repository unstable tests", type: :request do
       # The declared-layers line (marked `data-declared-layers`, and its nested `undeclared` word)
       # is its own key, never the files note and never part of the name.
       files = name_cell.all(:xpath, ".//span[not(ancestor-or-self::*[@data-declared-layers])]")
-                       .map { |span| span.text.gsub(/\s+/, " ").strip }.first
+                       .map { squished_text(it) }.first
       layers = name_cell.first("[data-declared-layers]")&.text&.gsub(/\s+/, " ")&.strip
-      name = name_cell.first(".row-open").text.gsub(/\s+/, " ").strip
+      name = squished_text(name_cell.first(".row-open"))
 
       # The failure cell is the rate with its fraction under it ("40% 2 of 5 runs"); the fraction is
       # the fact this file has always asserted, the rate is derived from it and asserted below.

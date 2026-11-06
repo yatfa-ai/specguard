@@ -70,7 +70,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
       # silently, against the wrong cell. That column has its own accessor below rather than a fourth
       # key here, because every `eq` in this file compares whole rows.
       { test: row_name(cells.first), defined_at: row_location(cells.first),
-        spec_file: cells[1].text.gsub(/\s+/, " ").strip }
+        spec_file: squished_text(cells[1]) }
     end
   end
 
@@ -78,7 +78,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # run together, or the sentence that says it read nothing.
   def row_readings
     # The third column; the row's drawer detail is a trailing hidden cell in the document, not a column.
-    worklist_rows_nodes.map { |row| row.all("td")[2].text.gsub(/\s+/, " ").strip }
+    worklist_rows_nodes.map { |row| squished_text(row.all("td")[2]) }
   end
 
   def row_names = rows.map { |row| row[:test] }

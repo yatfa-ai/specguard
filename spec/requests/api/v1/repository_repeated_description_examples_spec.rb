@@ -668,7 +668,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     def panel_rows
       panel = Capybara.string(response.body).find("#repeated-description-examples")
       panel.all("tbody tr").map do |row|
-        ran_in, defined_at, layer, duration, outcome = row.all("td").map { it.text.gsub(/\s+/, " ").strip }
+        ran_in, defined_at, layer, duration, outcome = row.all("td").map { squished_text(it) }
 
         { "ran_in" => ran_in, "defined_at" => defined_at,
           "layer" => layer, "duration" => duration, "outcome" => outcome }

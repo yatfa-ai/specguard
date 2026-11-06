@@ -384,7 +384,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_window_file_growth"
   describe "the panels" do
     def panel = page.find("#spec-directory-window-file-runtime-growth")
 
-    def panel_text = panel.text.gsub(/\s+/, " ").strip
+    def panel_text = squished_text(panel)
 
     # @intent: { entity: "GET /repositories/:id", action: "link the window time area row to its files", behavior: "each area row of the window time panel carries a primary Which files got slower or faster across the window action to ?spec_directory= carrying the branch, ending in #changes", layer: "request" }
     it "gives each window time area row a drill-in to its files" do

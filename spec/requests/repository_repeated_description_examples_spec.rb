@@ -44,7 +44,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
   # of the panel's shared-example-group reading, so they are read separately here too.
   def rows
     panel.all("tbody tr").map do |row|
-      ran_in, defined_at, layer, duration, outcome = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      ran_in, defined_at, layer, duration, outcome = row.all("td").map { squished_text(it) }
 
       { ran_in: ran_in, defined_at: defined_at, layer: layer, duration: duration, outcome: outcome }
     end

@@ -39,7 +39,7 @@ RSpec.describe "Repository spec file examples", type: :request do
   def rows
     panel.all("tbody tr").map do |row|
       cells = row.all("td")
-      test, layer, duration, outcome = cells.first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      test, layer, duration, outcome = cells.first(4).map { squished_text(it) }
 
       { test: test, name: row_name(cells.first), layer: layer, duration: duration, outcome: outcome }
     end

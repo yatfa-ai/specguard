@@ -80,7 +80,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
       notes = [fact_of(row, "Recorded under"), fact_of(row, "Also recorded as")].compact
       { name: label_of(test_cell), notes: notes, layers: layers, total: total_cell.text.strip,
         slowest: slowest_cell.text.strip, slowest_title: slowest_cell["title"], change: change_cell.text.strip,
-        change_sort: change_cell["data-sort"], seen: seen_cell.text.gsub(/\s+/, " ").strip,
+        change_sort: change_cell["data-sort"], seen: squished_text(seen_cell),
         repeated: fact_of(row, "Ran more than once in a run"), timed: timed_cell.text.strip }
     end
   end
@@ -524,7 +524,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect(response.body).not_to include("&lt;a")
       # The cell keeps a one-line note of where the test lives, with the others a count away; the
       # complete sentence is the drawer's "Recorded under" fact, which names every file.
-      expect(file_line("Checkout rejects an expired card").text.gsub(/\s+/, " ").strip)
+      expect(squished_text(file_line("Checkout rejects an expired card")))
         .to eq("spec/billing/checkout_spec.rb +1 more")
       expect(row_named("Checkout rejects an expired card")[:notes])
         .to eq(["spec/billing/checkout_spec.rb, spec/models/checkout_spec.rb"])

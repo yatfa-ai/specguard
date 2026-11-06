@@ -11,7 +11,7 @@ RSpec.describe "Repository slowest tests — ?layer=", type: :request do
 
   def panel = page.find("#slowest-examples")
 
-  def basis = panel.find("#slowest-examples-basis").text.gsub(/\s+/, " ").strip
+  def basis = squished_text(panel.find("#slowest-examples-basis"))
 
   def observe(run, line:, duration:, layer:, path: "spec/mixed/#{layer || 'none'}_spec.rb")
     run.spec_observations.create!(
