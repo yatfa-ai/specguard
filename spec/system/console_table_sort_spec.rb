@@ -15,8 +15,9 @@ RSpec.describe "Console table column sort", type: :system do
   # Newest first, which is the order the server renders. Two runs tie on Tests (12) and two report no
   # branch, so the original DOM order of equal keys is observable: `a1` precedes `c3` (a tie on
   # Tests) and `c3` precedes `e5` (both "not reported") in the page, and must after every sort.
-  # The test counts are chosen so that sorting them as TEXT ("12" < "40" < "7") disagrees with
-  # sorting them as numbers (7 < 12 < 40).
+  # The test counts (12, 40, 7) mix one- and two-digit values, so a plain lexical text sort
+  # ("12" < "40" < "7") would disagree with the numeric order (7 < 12 < 40). The controller's own
+  # text path is numeric-aware, so that is not a mutation this spec is claimed to catch.
   let(:runs) do
     [
       { commit_sha: "a1a1a1a1", branch: "main",  total_specs_count: 12, created_at: 1.hour.ago },
