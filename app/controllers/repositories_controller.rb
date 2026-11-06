@@ -151,9 +151,7 @@ class RepositoriesController < ApplicationController
     @viewer_keys_minted = 0
     @viewer_agent_keys_covering = 0
     unless repository_policy.can?(:owner)
-      @viewer_keys_minted = keys_minted_by(@repository, [current_user.id]).fetch(current_user.id, 0)
-      @viewer_agent_keys_covering =
-        agent_keys_covering_by(@repository, [current_user.id]).fetch(current_user.id, 0)
+      @viewer_keys_minted, @viewer_agent_keys_covering = key_counts_left_behind_by(@repository, current_user.id)
     end
     # What the Remove confirm tells the presser it will take with it (SPGD-1954). Built only for a
     # viewer who is shown the control (`repo_delete`), and the CI-key and agent-key counts are read
