@@ -95,8 +95,6 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
                  commit_sha: "anchor000001", branch: branch, at: 10.days.ago, repo: repo)
   end
 
-  def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
-
   describe "a branch-scoped window whose two ends recorded different areas" do
     before { asymmetric_window }
 

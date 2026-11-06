@@ -94,8 +94,6 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_file_growth", type:
            commit_sha: "latest000001", branch: branch, at: 10.days.ago)
   end
 
-  def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
-
   describe "an area named under ?spec_directory=" do
     before { adjacent_runs }
 

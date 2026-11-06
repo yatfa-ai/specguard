@@ -93,8 +93,6 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
                  commit_sha: "latest000001", branch: branch, at: 10.days.ago, repo: repo)
   end
 
-  def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
-
   # ⭐ CRITERION 1 — THE WHOLE POINT OF THE TICKET, AND THE ONE THING THE SIBLING PAIR CANNOT DO.
   describe "a plain unparameterised request" do
     before { adjacent_runs }

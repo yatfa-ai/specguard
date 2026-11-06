@@ -95,8 +95,6 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
                  commit_sha: "latest000001", branch: branch, at: 10.days.ago, repo: repo)
   end
 
-  def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
-
   # ⭐ CRITERION 1 — THE DEAD END THE PARENT PAIR LEFT AN AGENT AT.
   describe "an area named under ?spec_directory=" do
     before { adjacent_runs }
