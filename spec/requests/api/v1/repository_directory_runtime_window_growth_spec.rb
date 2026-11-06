@@ -425,6 +425,33 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_window_growth", typ
       expect(panel.all("tbody tr")).to be_empty
     end
 
+    # @intent: { entity: "GET /repositories/:id", action: "word a window whose newest run is untimed", behavior: "an untimed newest run renders the anchor-untimed refusal naming the recorded examples and the reporting gap, blaming neither the far-end run nor a missing detail, with no table", layer: "request" }
+    it "renders the newest-run-untimed refusal as a reporting gap and not a speedup" do
+      ingest(timed_areas("spec/models" => { layer: "unit", seconds: [2.0] }), commit_sha: "baseline0001", at: 30.days.ago)
+      ingest(timed_areas("spec/models" => { layer: "unit", seconds: [nil] }), commit_sha: "anchor000001", at: 10.days.ago)
+
+      get repository_path(repository, branch: "main")
+
+      expect(panel_text).to include("This run reported no timings")
+      expect(panel_text).to include("it recorded 1 examples and a duration for none of them")
+      expect(panel_text).to include("time disappearing, which is a reporting gap and not a speedup")
+      expect(panel_text).not_to include("recorded per-example detail")
+      expect(panel_text).not_to include("The run at the far end of this window (")
+      expect(panel.all("tbody tr")).to be_empty
+    end
+
+    # @intent: { entity: "GET /repositories/:id", action: "word a layer-narrowed window whose newest run is untimed", behavior: "?layer=request words the anchor-untimed refusal's recorded count as request-layer examples", layer: "request" }
+    it "words the newest-run-untimed refusal's count as request-layer examples under ?layer=" do
+      ingest(timed_areas("spec/models" => { layer: "request", seconds: [2.0] }), commit_sha: "baseline0001", at: 30.days.ago)
+      ingest(timed_areas("spec/models" => { layer: "request", seconds: [nil] }), commit_sha: "anchor000001", at: 10.days.ago)
+
+      get repository_path(repository, branch: "main", layer: "request")
+
+      expect(panel_text).to include("This run reported no timings")
+      expect(panel_text).to include("it recorded 1 request-layer examples and a duration for none of them")
+      expect(panel.all("tbody tr")).to be_empty
+    end
+
     # @intent: { entity: "GET /repositories/:id", action: "list the new title in the layer-scope hint", behavior: "the filter bar's narrowed-sections hint names the new panel title when a layer is asked", layer: "request" }
     it "names the panel in the narrowed-sections hint" do
       creeping_window
