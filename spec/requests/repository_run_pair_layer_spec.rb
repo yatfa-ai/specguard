@@ -29,7 +29,7 @@ RSpec.describe "Repository run-over-run area panels — ?layer=", type: :request
     end
   end
 
-  def panel_text(id) = page.find(id).text.gsub(/\s+/, " ").strip
+  def panel_text(id) = squished_text(page.find(id))
 
   def rows_of(id) = page.find(id).all("tbody tr").map { it.all("td").first.text.strip }
 

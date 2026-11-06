@@ -24,7 +24,7 @@ RSpec.describe "Repository verdict attention list", type: :request do
 
   def title = lead.find(".rc-verdict-title")
 
-  def title_text = title.text.gsub(/\s+/, " ").strip
+  def title_text = squished_text(title)
 
   # The tone token off the title's own dot — the `err`/`warn`/`ok` word the template derives from
   # the items, read as the one class that carries it.
@@ -43,7 +43,7 @@ RSpec.describe "Repository verdict attention list", type: :request do
       link = li.find("a")
       _dot, body, = link.all("span")
       { dot: link.first(".rc-dot")[:class].split.grep(/\Arc-dot-/).first,
-        text: body.text.gsub(/\s+/, " ").strip, href: link[:href] }
+        text: squished_text(body), href: link[:href] }
     end
   end
 

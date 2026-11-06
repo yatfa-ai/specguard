@@ -35,16 +35,16 @@ RSpec.describe "Repository spec directory window growth", type: :request do
   # ELEMENT-scoped, never panel-scoped. Eight states render inside this panel and seven of them are
   # sentences sharing most of their words ("no comparison to draw", "this window"), so a
   # panel-level `have_text` passes for the wrong state with the deciding branch deleted.
-  def basis_text = panel.find("#spec-directory-window-growth-basis").text.gsub(/\s+/, " ").strip
+  def basis_text = squished_text(panel.find("#spec-directory-window-growth-basis"))
 
-  def empty_state_text = panel.find("[class*='border-dashed']").text.gsub(/\s+/, " ").strip
+  def empty_state_text = squished_text(panel.find("[class*='border-dashed']"))
 
   # The panel BESIDE this one — the last-push comparison. Read here so the examples can assert that
   # the two panels answer differently over the same fixture, which is the whole claim of shipping a
   # second one.
   def push_rows
     Capybara.string(response.body).find("#spec-directory-growth").all("tbody tr").to_h do |row|
-      cells = row.all("td").first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      cells = row.all("td").first(4).map { squished_text(it) }
 
       [cells.first, cells.last]
     end
@@ -52,7 +52,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
 
   def rows
     panel.all("tbody tr").map do |row|
-      path, baseline, now, change = row.all("td").first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, baseline, now, change = row.all("td").first(4).map { squished_text(it) }
 
       { path: path, baseline: baseline, now: now, change: change,
         reading: row.all("td")[3]["aria-label"] }

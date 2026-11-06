@@ -358,7 +358,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_window_growth", typ
   describe "the panel" do
     def panel = page.find("#spec-directory-window-runtime-growth")
 
-    def panel_text = panel.text.gsub(/\s+/, " ").strip
+    def panel_text = squished_text(panel)
 
     # @intent: { entity: "GET /repositories/:id", action: "render the area time window panel", behavior: "a window whose area crept lists spec/models first with a +1m 10s change, worded as the window's two ends compared and never the run wall clock", layer: "request" }
     it "lists the area that crept, worded as the window's two ends" do

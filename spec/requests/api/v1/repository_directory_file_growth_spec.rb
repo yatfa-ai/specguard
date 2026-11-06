@@ -309,7 +309,7 @@ RSpec.describe "GET /api/v1/repository — directory_file_growth", type: :reques
   describe "the panel" do
     def panel = page.find("#spec-directory-window-file-growth")
 
-    def panel_text = panel.text.gsub(/\s+/, " ").strip
+    def panel_text = squished_text(panel)
 
     # @intent: { entity: "GET /repositories/:id", action: "link the window area row to its files", behavior: "each area row of the window panel carries a primary Which files moved across the window action to ?spec_directory= carrying the branch", layer: "request" }
     it "gives each window area row a drill-in to its files" do

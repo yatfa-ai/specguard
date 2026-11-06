@@ -214,6 +214,9 @@ module RequestBuilders
   # The last response body parsed as HTML, for asserting on rendered console panels.
   def page = Capybara.string(response.body)
 
+  # A rendered node's text as a reader sees it: layout whitespace collapsed to single spaces.
+  def squished_text(node) = node.text.gsub(/\s+/, " ").strip
+
   # The Authorization header for an `sgk_`/`sga_`/`sgu_` token, as request specs pass it via `headers:`.
   def bearer(token) = { "Authorization" => "Bearer #{token}" }
 

@@ -62,7 +62,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
   def reading_rows
     panel.all("tbody tr").map do |row|
       path, authored, derived, unreadable, recorded =
-        row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+        row.all("td").map { squished_text(it) }
 
       { path: path, authored: authored, derived: derived, unreadable: unreadable,
         recorded: recorded }

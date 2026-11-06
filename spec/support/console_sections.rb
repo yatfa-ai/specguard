@@ -31,8 +31,8 @@ RSpec.configure { |config| config.include ConsoleSections, type: :request }
 # declared nothing at all) reads as its plain text.
 module ConsoleLayerCells
   def layer_cell_text(cell)
-    parts = cell.all(".rc-key li").map { |item| item.text.gsub(/\s+/, " ").strip }
-    parts.any? ? parts.join(" · ") : cell.text.gsub(/\s+/, " ").strip
+    parts = cell.all(".rc-key li").map { squished_text(it) }
+    parts.any? ? parts.join(" · ") : squished_text(cell)
   end
 end
 RSpec.configure { |config| config.include ConsoleLayerCells, type: :request }

@@ -33,7 +33,7 @@ RSpec.describe "Repository recent runs", type: :request do
   # composition sentence beneath it — and ERB indentation would otherwise be part of every
   # assertion on it. `Capybara::Node::Simple#text` does no normalising of its own. Every other cell
   # holds a single token, so collapsing changes nothing about what they assert.
-  def run_cells(commit) = run_row(commit).all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+  def run_cells(commit) = run_row(commit).all("td").map { squished_text(it) }
 
   def runs_panel = Capybara.string(response.body).find("#recent-runs", visible: :all)
 

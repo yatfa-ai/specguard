@@ -70,7 +70,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
   def rows
     panel.all("tbody tr").map do |row|
       commit, definition_site, branch, ingested, duration, outcome =
-        [row.all("td")[0].first("a.rc-ext").text] + row.all("td")[1..].map { |cell| cell.text.gsub(/\s+/, " ").strip }
+        [row.all("td")[0].first("a.rc-ext").text] + row.all("td")[1..].map { squished_text(it) }
 
       { commit: commit, definition_site: definition_site, branch: branch, ingested: ingested,
         duration: duration, outcome: outcome }

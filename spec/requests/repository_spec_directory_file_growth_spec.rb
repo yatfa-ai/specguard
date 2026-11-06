@@ -41,9 +41,9 @@ RSpec.describe "Repository spec directory file growth", type: :request do
   # ELEMENT-scoped, never panel-scoped, for the reason the sibling spec states: several states
   # render inside this panel and they share most of their words, so a panel-level `have_text`
   # passes for the wrong state with the deciding branch deleted.
-  def basis_text = panel.find("#spec-directory-file-growth-basis").text.gsub(/\s+/, " ").strip
+  def basis_text = squished_text(panel.find("#spec-directory-file-growth-basis"))
 
-  def empty_state_text = panel.find("[class*='border-dashed']").text.gsub(/\s+/, " ").strip
+  def empty_state_text = squished_text(panel.find("[class*='border-dashed']"))
 
   # The area panel this drills out of, scoped by id — its rows carry the same path strings the
   # "Heaviest spec directories" panel does, and a page-scoped lookup would silently assert about
@@ -61,7 +61,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
   # One row as a reader meets it: the file, both operands, and the movement between them.
   def rows
     panel.all("tbody tr").map do |row|
-      path, then_count, now_count, change = row.all("td").first(4).map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, then_count, now_count, change = row.all("td").first(4).map { squished_text(it) }
 
       { path: path, then: then_count, now: now_count, change: change,
         reading: row.all("td")[3]["aria-label"] }

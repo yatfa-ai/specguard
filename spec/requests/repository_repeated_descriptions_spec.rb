@@ -37,7 +37,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
   # it, what the total was summed over, and the total.
   def rows
     panel.all("tbody tr").map do |row|
-      description, examples, coverage, duration = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      description, examples, coverage, duration = row.all("td").map { squished_text(it) }
 
       { description: description, examples: examples, coverage: coverage, duration: duration }
     end
@@ -47,17 +47,17 @@ RSpec.describe "Repository repeated descriptions", type: :request do
   # four-cell row assertions keep stating exactly what they stated.
   def layer_cells
     panel.all("tbody tr").to_h do |row|
-      cells = row.all("td").first(5).map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      cells = row.all("td").first(5).map { squished_text(it) }
       # The layer cell is a stacked bar with a key: "unit 1request 1undeclared 1". Read as the old
       # sentence ("unit 1 · request 1 · undeclared 1") from the key items, which are its parts.
-      key = row.all("td")[4].all(".rc-key li").map { |item| item.text.gsub(/\s+/, " ").strip }.join(" · ")
+      key = row.all("td")[4].all(".rc-key li").map { squished_text(it) }.join(" · ")
       [cells.first.split(" in spec/").first, key.presence || cells.fifth]
     end
   end
 
   # The description alone, without the file line rendered under it.
   def row_names
-    panel.all("tbody tr").map { |row| row.first("td").text.gsub(/\s+/, " ").strip.split(" in spec/").first }
+    panel.all("tbody tr").map { |row| squished_text(row.first("td")).split(" in spec/").first }
   end
 
   def ingest(repository, specs, commit_sha: "feedfacecafe0001", **attrs)

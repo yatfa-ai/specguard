@@ -15,7 +15,7 @@ RSpec.describe "Repository spec-file examples — ?layer=", type: :request do
 
   def drill = page.find("#spec-file-examples")
 
-  def basis = drill.find("#spec-file-examples-basis").text.gsub(/\s+/, " ").strip
+  def basis = squished_text(drill.find("#spec-file-examples-basis"))
 
   def drill_rows = drill.all("tbody tr", visible: :all)
 

@@ -34,7 +34,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   # One row as a reader meets it: the file, what its total was summed over, and the total.
   def rows
     panel.all("tbody tr").map do |row|
-      path, coverage, duration = row.all("td").first(3).map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, coverage, duration = row.all("td").first(3).map { squished_text(it) }
 
       { path: path, coverage: coverage, duration: duration }
     end
@@ -47,7 +47,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   def layer_cells
     panel.all("tbody tr").to_h do |row|
       cells = row.all("td").first(4)
-      [cells.first.text.gsub(/\s+/, " ").strip, layer_cell_text(cells.fourth)]
+      [squished_text(cells.first), layer_cell_text(cells.fourth)]
     end
   end
 
