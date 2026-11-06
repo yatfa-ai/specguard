@@ -99,8 +99,6 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
                  commit_sha: "latest000001", branch: branch, at: 10.days.ago, repo: repo)
   end
 
-  def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
-
   # ⭐ CRITERION 1 — A PLAIN `GET` WITH NO PARAMETERS CARRIES THE BLOCK.
   describe "a plain unparameterised request" do
     before { adjacent_runs }

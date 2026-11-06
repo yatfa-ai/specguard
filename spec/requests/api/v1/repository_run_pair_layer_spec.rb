@@ -47,8 +47,6 @@ RSpec.describe "GET /api/v1/repository — ?layer= on the run-over-run area bloc
     ingest(examples(latest), commit_sha: "latest000001", at: 10.days.ago)
   end
 
-  def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
-
   # spec/models: +5 request, -5 unit (±0 unasked). spec/jobs: +2 request. spec/services: unit only, -1.
   # Request time: spec/models 1×2s → 6×3s; spec/jobs 0 → 2×1s.
   def moving_runs

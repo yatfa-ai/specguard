@@ -51,8 +51,6 @@ RSpec.describe "GET /api/v1/repository — ?layer= on directory_growth", type: :
     [body["directory_growth_window"], body["directory_growth"], body]
   end
 
-  def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
-
   describe "a layer both ends of the window have examples of" do
     before do
       # spec/models: +5 request, -5 unit (±0 unasked). spec/jobs: +2 request. spec/services: unit only, -1.
