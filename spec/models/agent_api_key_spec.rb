@@ -171,73 +171,15 @@ RSpec.describe AgentApiKey do
     end
   end
 
-  describe "#revoke!" do
-    # First revocation wins: a replayed revoke reaches the row (the /account destroy looks the
-    # key up without `live`) and must not re-stamp — the FIRST stamp is the offboarding date.
-    it "stamps revoked_at on the first revoke and never re-stamps on a replay" do
-      key, _repository = owned_key
-
-      key.revoke!
-      stamped_at = key.reload.revoked_at
-      key.revoke!
-
-      expect(stamped_at).to be_present
-      expect(key.reload.revoked_at).to eq(stamped_at)
-      expect(key).to be_revoked
-      expect(AgentApiKey.exists?(key.id)).to be(true)
-    end
-
-    # First revocation wins: a replayed revoke (the /account destroy looks the row up without
-    # `live`) must not move `revoked_at` past `last_refused_at`.
-    # @intent: { entity: "AgentApiKey", action: "keep the first revocation stamp", behavior: "a replayed revoke! after a refused presentation is a no-op: revoked_at is unchanged and stays at or before last_refused_at", layer: "unit" }
-    it "keeps the first revocation stamp when revoke! is replayed after a refusal" do
-      key, _repository = owned_key
-      first_day = Time.utc(2026, 10, 1, 9, 0, 0)
-
-      travel_to(first_day) { key.revoke! }
-      stamped_at = key.reload.revoked_at
-      travel_to(first_day + 1.day) { key.touch_last_refused! }
-      travel_to(first_day + 2.days) { expect(key.revoke!).to eq(key) }
-
-      expect(key.reload.revoked_at).to eq(stamped_at)
-      expect(key.revoked_at).to be <= key.last_refused_at
-    end
-  end
-
-  # SPGD-991 — the port of `ApiKey`'s pair (`revoked_and_still_presented?` / `touch_last_refused!`),
-  # four cases: the predicate is false for live keys and for revoked-never-refused keys (nothing is
-  # synthesized), true only for revoked-with-refusal, and a refusal stamp on a live key — which the
-  # failure path structurally cannot produce (it only runs after resolution returned nil, and a live
-  # token resolves) — still reads false, so a rogue writer cannot make a live key read as retired.
-  describe "the refusal evidence pair" do
-    # @intent: { entity: "AgentApiKey", action: "attribute a refusal", behavior: "touch_last_refused! stamps last_refused_at, and revoked_and_still_presented? is false before it and true after", layer: "unit" }
-    it "reports a refused presentation only once one has been stamped" do
-      key, _repository = owned_key
-      key.revoke!
-
-      # A revoked key nobody has presented again is NOT a finding — nothing is synthesized for it.
-      expect(key).not_to be_revoked_and_still_presented
-      expect(key.reload.last_refused_at).to be_nil
-
-      key.touch_last_refused!
-
-      expect(key.reload.last_refused_at).to be_present
-      expect(key).to be_revoked_and_still_presented
-    end
-
-    # @intent: { entity: "AgentApiKey", action: "keep predicates apart", behavior: "a live key never reads revoked-and-presented, even stamped, and a revoked-never-refused key never invents a presentation", layer: "unit" }
-    it "keeps a live key from reading as presented-revoked however it is stamped" do
-      live, _repository = owned_key
-      live.touch_last_used!
-      expect(live).not_to be_revoked_and_still_presented
-
-      # Structurally unreachable through the failure path — `attribute_refused_revocation` only
-      # runs after a live-scoped resolution returned nil — but pinned so the predicate's answer
-      # does not depend on how the column got its value.
-      live.update_column(:last_refused_at, Time.current)
-      expect(live.reload).not_to be_revoked_and_still_presented
-    end
-  end
+  # SPGD-991 ported `ApiKey`'s refusal evidence pair here; the retirement contract it belongs to
+  # (scopes, first-revocation-wins, the refusal pair) is now shared with the other key models and
+  # pinned once for each of them in `spec/support/shared_examples/retirable_credential.rb`. The
+  # builder shares ONE owner and repository across calls (`owned_key` makes a fresh default user
+  # each time, and the group builds more than one key per example).
+  let(:retirement_owner) { create_user }
+  let(:retirement_repository) { create_repository(user: retirement_owner) }
+  it_behaves_like "a retirable credential",
+                  build: -> { create_agent_api_key(user: retirement_owner, repositories: [retirement_repository]) }
 
   describe "#token_hint" do
     it "carries this class's prefix and the digest tail" do

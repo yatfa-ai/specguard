@@ -307,56 +307,17 @@ RSpec.describe ApiKey do
       expect(described_class.find(api_key.id)).to be_revoked
     end
 
-    # The retention does not leak into the resolution scopes: `live` and `revoked` partition the
-    # table, and every scoping consumer (the minted-count badge, the failure-path lookup) stands on
-    # exactly one side.
-    # @intent: { entity: "ApiKey", action: "partition live and revoked", behavior: "the live and revoked scopes split the table exactly, with no row in both and no row in neither", layer: "unit" }
-    it "partitions the table into live and revoked rows" do
-      live_key = repository.api_keys.create!
-      revoked_key = repository.api_keys.create!.tap(&:revoke!)
+    # The retirement contract itself (scopes, first-revocation-wins, the refusal pair) is shared
+    # with the other key models and pinned once for each of them in
+    # `spec/support/shared_examples/retirable_credential.rb`.
+    it_behaves_like "a retirable credential", build: -> { repository.api_keys.create! }
 
-      expect(repository.api_keys.live).to contain_exactly(live_key)
-      expect(repository.api_keys.revoked).to contain_exactly(revoked_key)
-    end
-
-    # @intent: { entity: "ApiKey", action: "attribute a refusal", behavior: "touch_last_refused! stamps last_refused_at, and revoked_and_still_presented? is false before it and true after", layer: "unit" }
-    it "reports a refused presentation only once one has been stamped" do
-      api_key = repository.api_keys.create!.tap(&:revoke!)
-
-      # A revoked key nobody has presented again is NOT a finding — nothing is synthesized for it.
-      expect(api_key).not_to be_revoked_and_still_presented
-
-      api_key.touch_last_refused!
-
-      expect(api_key.reload.last_refused_at).to be_present
-      expect(api_key).to be_revoked_and_still_presented
-    end
-
-    # First revocation wins: a replayed revoke (the API and web destroy actions look the row up
-    # without `live`) must not move `revoked_at` past `last_refused_at`.
-    # @intent: { entity: "ApiKey", action: "keep the first revocation stamp", behavior: "a replayed revoke! after a refused presentation is a no-op: revoked_at is unchanged and stays at or before last_refused_at", layer: "unit" }
-    it "keeps the first revocation stamp when revoke! is replayed after a refusal" do
-      api_key = repository.api_keys.create!
-      first_day = Time.utc(2026, 10, 1, 9, 0, 0)
-
-      travel_to(first_day) { api_key.revoke! }
-      stamped_at = api_key.reload.revoked_at
-      travel_to(first_day + 1.day) { api_key.touch_last_refused! }
-      travel_to(first_day + 2.days) { expect(api_key.revoke!).to eq(api_key) }
-
-      expect(api_key.reload.revoked_at).to eq(stamped_at)
-      expect(api_key.revoked_at).to be <= api_key.last_refused_at
-    end
-
-    # @intent: { entity: "ApiKey", action: "keep predicates apart", behavior: "a live key never reads revoked-and-presented however often it is refused-stamped, and a revoked never-presented key never reads rotated-and-unused", layer: "unit" }
-    it "keeps the retirement predicates from crossing into each other's states" do
-      # A live key has no revocation to be "still presented" despite — `revoke!` is the only writer
-      # of `revoked_at`, so the pair is structurally ordered; this pins it.
-      live = repository.api_keys.create!.tap(&:touch_last_used!)
-      expect(live).not_to be_revoked_and_still_presented
-
+    # @intent: { entity: "ApiKey", action: "keep predicates apart", behavior: "a rotated-and-revoked key reads revoked and rotated-and-unused without inventing a still-presented finding", layer: "unit" }
+    it "keeps the rotation and retirement predicates from crossing" do
       # The rotated-AND-revoked key: both stamps present, and the newer fact wins — it reads
-      # revoked, and `rotated_and_unused?` must not fire for it on any live-keys surface.
+      # revoked, and `rotated_and_unused?` must not fire for it on any live-keys surface. (The
+      # live key's half of this crossing is pinned for every credential class in
+      # `spec/support/shared_examples/retirable_credential.rb`.)
       both = repository.api_keys.create!.tap do |k|
         k.touch_last_used!
         k.regenerate!
