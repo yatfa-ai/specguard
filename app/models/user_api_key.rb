@@ -53,13 +53,11 @@ class UserApiKey < ApplicationRecord
 
   belongs_to :user
 
-  # The retirement split, named once and used everywhere a caller needs one side of it — the same
-  # scopes `ApiKey` carries, and the same NO `default_scope` rule (stated where `ApiKey` names its
-  # own): the distinction exists precisely so each reader can pick a side and say so, and a default
-  # would silently flip `authenticate` and every future reader without any of them naming the
-  # choice. `revoked_at` is written by `revoke!` and never cleared: a revoked key cannot come back.
-  scope :live, -> { where(revoked_at: nil) }
-  scope :revoked, -> { where.not(revoked_at: nil) }
+  # The retirement half — the `live`/`revoked` scopes, `revoke!`, `revoked?`,
+  # `revoked_and_still_presented?` and `touch_last_refused!` — is shared with the other key
+  # models; see `CredentialRetirement` for the rationale (including the NO `default_scope` rule,
+  # stated there once).
+  include CredentialRetirement
 
   # Populated by the request that minted this row, and `nil` on every record loaded from the
   # database — the same shape as `ApiKey#raw_token`, for the same reason.
@@ -128,55 +126,6 @@ class UserApiKey < ApplicationRecord
 
   def touch_last_used!
     update_column(:last_used_at, Time.current)
-  end
-
-  # Retire this key: the token stops authenticating, and the ROW STAYS — the `destroy!` this
-  # method retired is exactly the move that made the two promises in this file's header false.
-  # The reason for retention is attribution, the same reason `ApiKey#revoke!` gives: a hard delete
-  # made a revoked token's 401 unreportable — `authenticate` resolving nothing leaves nothing to
-  # attach a record to, so a revoked key presented by an agent or an MCP client read, at best,
-  # "this was never a key". Keeping the row keeps the artifact the failure path needs (see
-  # `Api::BaseController#attribute_refused_revocation`, which stamps `last_refused_at` on exactly
-  # this row), and is what finally makes "an audit trail that says which was retired when" true.
-  #
-  # `update_column` rather than `save!`, exactly as `touch_last_used!` and `ApiKey#revoke!` both
-  # do: revocation is a stamp on the row's existing state, not a validation event, and it must not
-  # be able to fail on a validation this gesture does not carry. Idempotent — FIRST REVOCATION
-  # WINS: a replayed revoke is a no-op and never re-stamps `revoked_at`. A replay is reachable
-  # (`UserApiKeysController#destroy` finds the row without the `live` scope), and a re-stamp would
-  # make `revoked_at` newer than `last_refused_at`, contradicting the "refusal stamp always
-  # postdates revocation" reading and losing the offboarding date.
-  #
-  # `revoked_at` is never cleared by anything: there is no un-revoke, and a token that was retired
-  # once can never authenticate again (`authenticate` filters to `live`).
-  def revoke!
-    update_column(:revoked_at, Time.current) unless revoked?
-    self
-  end
-
-  # Whether THIS row has been retired. Read by the account page, which must show retired rows AS
-  # retired (and offer no Revoke on them), via this predicate once the rows are loaded and the
-  # `live`/`revoked` scopes at the SQL layer.
-  def revoked?
-    revoked_at.present?
-  end
-
-  # Whether a client is STILL PRESENTING this retired token — the platform has seen the digest it
-  # carries arrive and be refused since `revoke!` stamped the retirement. The epistemics are
-  # `ApiKey#revoked_and_still_presented?`'s verbatim: there is no ordering question (a refusal can
-  # only be stamped on an already-revoked row, so the stamp always postdates the revocation) and
-  # no recovery — a revoked token never authenticates again, so the state has no window to clear
-  # and no threshold to cross. What the pair cannot prove is that a client is presenting the token
-  # AT THIS MOMENT: `last_refused_at` is the last time the platform saw it, so a client that gave
-  # up hours ago reads the same as one presenting right now. Every surface that renders this state
-  # serves the recency beside it rather than letting the badge claim a present tense the data does
-  # not carry.
-  def revoked_and_still_presented?
-    revoked? && last_refused_at.present?
-  end
-
-  def touch_last_refused!
-    update_column(:last_refused_at, Time.current)
   end
 
   # Safe to show anywhere: identifies the key without revealing it. Same construction as

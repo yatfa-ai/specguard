@@ -49,13 +49,11 @@ class ApiKey < ApplicationRecord
   # minted before this column existed, or through any non-UI path, legitimately have no creator.
   belongs_to :created_by_user, class_name: "User", optional: true
 
-  # The retirement split, named once and used everywhere a caller needs one side of it. NO
-  # `default_scope` — the distinction exists precisely so each reader can pick a side and say so,
-  # and a default would silently flip `authenticate`, `MintedKeyCounts#keys_minted_by` and
-  # every future reader without any of them naming the choice. `revoked_at` is written by `revoke!`
-  # and never cleared: a revoked key cannot come back.
-  scope :live, -> { where(revoked_at: nil) }
-  scope :revoked, -> { where.not(revoked_at: nil) }
+  # The retirement half — the `live`/`revoked` scopes, `revoke!`, `revoked?`,
+  # `revoked_and_still_presented?` and `touch_last_refused!` — is shared with the other key
+  # models; see `CredentialRetirement` for the rationale. Consumers that load ONE side only read it
+  # at the SQL layer through the scopes (the "minted N keys" badge is the standing example).
+  include CredentialRetirement
 
   # Populated by whichever request minted the current token — `create`, or `regenerate!`. `nil` on
   # every record loaded from the database.
@@ -207,64 +205,16 @@ class ApiKey < ApplicationRecord
     update_column(:last_used_at, Time.current)
   end
 
-  # Retire this key: the token stops authenticating, and the ROW STAYS. The replacement for the
-  # `destroy!` this method retired, and the reason it exists is attribution: a hard delete made a
-  # revoked token's 401 unreportable — `authenticate` resolving nothing leaves nothing to attach a
-  # record to, so a pipeline presenting the dead token read "Not connected yet" on a page that had
-  # no way to know why. Keeping the row keeps the artifact the failure path needs (see
-  # `Api::BaseController`, which stamps `last_refused_at` on exactly this row), and keeps the
-  # repository's key history truthful instead of amputated.
-  #
-  # `update_column` rather than `save!`, exactly as `touch_last_used!` does: revocation is a stamp
-  # on the row's existing state, not a validation event, and it must not be able to fail on a
-  # validation this gesture does not carry. Idempotent — FIRST REVOCATION WINS: a replayed revoke
-  # is a no-op and never re-stamps `revoked_at`. A replay IS reachable (the API and web destroy
-  # actions look the row up without the `live` scope, and a retried DELETE answers 204 by design),
-  # and a re-stamp would make `revoked_at` newer than `last_refused_at`, contradicting
-  # `revoked_and_still_presented?`'s "refusal stamp always postdates revocation" and losing the
-  # offboarding date.
-  #
-  # `revoked_at` is never cleared by anything: there is no un-revoke, and a token that was retired
-  # once can never authenticate again (`authenticate` filters to `live`).
-  def revoke!
-    update_column(:revoked_at, Time.current) unless revoked?
-    self
-  end
-
-  # Whether THIS row has been retired. Consumers that load ONE side only read it at the SQL layer
-  # through the `live`/`revoked` scopes — the "minted N keys" badge is the standing example —
-  # while every surface that needs BOTH halves loads the rows and reads the split through
-  # `ApiKeyPartition`, the seam that owns the live/revoked/stranded/presented-revoked partition
-  # built from this predicate. `RepositoriesController#show` and
+  # Every surface that needs BOTH halves of the live/revoked split loads the rows and reads it
+  # through `ApiKeyPartition`, the seam that owns the live/revoked/stranded/presented-revoked
+  # partition built from `revoked?` (see `CredentialRetirement`). `RepositoriesController#show` and
   # `RepositoryOverview#serialized_credential_health` load ALL of a repository's rows, and the
   # repositories grid loads both halves for its page's repositories through `api_key_rows`,
   # grouped per repository by `ApiKeyPartition.grouped_by_repository` — all precisely so that
-  # partition can serve the presented-revoked half, which a `WHERE revoked_at IS NULL` here would
-  # have filtered out before it could be seen — and each reaches the split through the seam
-  # rather than spelling it at its own site. `spec/models/api_key_partition_spec.rb` holds the
-  # repo-wide property that they still do.
-  def revoked?
-    revoked_at.present?
-  end
-
-  # Whether a client is STILL PRESENTING this retired token — the platform has seen the digest it
-  # carries arrive and be refused since `revoke!` stamped the retirement.
-  #
-  # The epistemics are the same as `rotated_and_unused?`'s, read in the other direction: there is
-  # no ordering question here (a refusal can only be stamped on an already-revoked row, so the
-  # stamp always postdates the revocation) and there is no recovery — a revoked token never
-  # authenticates again, so the state has no window to clear and no threshold to cross. What the
-  # pair cannot prove is that a client is presenting the token AT THIS MOMENT: `last_refused_at` is
-  # the last time the platform saw it, so a pipeline that gave up hours ago reads the same as one
-  # presenting right now. Every surface that renders this state serves the recency beside it rather
-  # than letting the badge claim a present tense the data does not carry.
-  def revoked_and_still_presented?
-    revoked? && last_refused_at.present?
-  end
-
-  def touch_last_refused!
-    update_column(:last_refused_at, Time.current)
-  end
+  # partition can serve the presented-revoked half, which a `WHERE revoked_at IS NULL` would have
+  # filtered out before it could be seen — and each reaches the split through the seam rather than
+  # spelling it at its own site. `spec/models/api_key_partition_spec.rb` holds the repo-wide
+  # property that they still do.
 
   # WHETHER THIS KEY'S `last_used_at` WAS STAMPED BY A TOKEN THAT NO LONGER EXISTS — the key has
   # been rotated, and nothing has authenticated with the replacement since.

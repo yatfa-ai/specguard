@@ -153,46 +153,10 @@ RSpec.describe UserApiKey do
       expect(described_class.find(user_api_key.id)).to be_revoked
     end
 
-    # The retention does not leak into the resolution scopes: `live` and `revoked` partition the
-    # table, every scoping consumer stands on exactly one side, and NO default scope decides for
-    # them — the rule `ApiKey` states where it names its own scopes.
-    # @intent: { entity: "UserApiKey", action: "partition live and revoked", behavior: "the live and revoked scopes split the table exactly, with no row in both, none in neither, and no default scope hiding either side", layer: "unit" }
-    it "partitions the table into live and revoked rows, deciding for nobody" do
-      live_key = create_user_api_key(user: user, name: "Live")
-      revoked_key = create_user_api_key(user: user, name: "Retired").tap(&:revoke!)
-
-      expect(described_class.count).to eq(2)
-      expect(described_class.live).to contain_exactly(live_key)
-      expect(described_class.revoked).to contain_exactly(revoked_key)
-    end
-
-    # @intent: { entity: "UserApiKey", action: "attribute a refusal", behavior: "touch_last_refused! stamps last_refused_at, and revoked_and_still_presented? is false before it and true after", layer: "unit" }
-    it "reports a refused presentation only once one has been stamped" do
-      user_api_key = create_user_api_key(user: user).tap(&:revoke!)
-
-      # A revoked key nobody has presented again is NOT a finding — nothing is synthesized for it.
-      expect(user_api_key).not_to be_revoked_and_still_presented
-
-      user_api_key.touch_last_refused!
-
-      expect(user_api_key.reload.last_refused_at).to be_present
-      expect(user_api_key).to be_revoked_and_still_presented
-    end
-
-    # First revocation wins: a replayed revoke must not move `revoked_at` past `last_refused_at`.
-    # @intent: { entity: "UserApiKey", action: "keep the first revocation stamp", behavior: "a replayed revoke! after a refused presentation is a no-op: revoked_at is unchanged and stays at or before last_refused_at", layer: "unit" }
-    it "keeps the first revocation stamp when revoke! is replayed after a refusal" do
-      user_api_key = create_user_api_key(user: user)
-      first_day = Time.utc(2026, 10, 1, 9, 0, 0)
-
-      travel_to(first_day) { user_api_key.revoke! }
-      stamped_at = user_api_key.reload.revoked_at
-      travel_to(first_day + 1.day) { user_api_key.touch_last_refused! }
-      travel_to(first_day + 2.days) { expect(user_api_key.revoke!).to eq(user_api_key) }
-
-      expect(user_api_key.reload.revoked_at).to eq(stamped_at)
-      expect(user_api_key.revoked_at).to be <= user_api_key.last_refused_at
-    end
+    # The retirement contract itself (scopes, first-revocation-wins, the refusal pair) is shared
+    # with the other key models and pinned once for each of them in
+    # `spec/support/shared_examples/retirable_credential.rb`.
+    it_behaves_like "a retirable credential", build: -> { create_user_api_key(user: user) }
 
     # The two grounds on which a token is refused are INDEPENDENTLY sufficient, and this pairs with
     # the archived-owner examples above (live key, archived owner) so neither filter can silently

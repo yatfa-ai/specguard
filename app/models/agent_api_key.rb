@@ -102,10 +102,11 @@ class AgentApiKey < ApplicationRecord
   validate :repositories_are_reachable_by_the_owner
   validate :owner_holds_every_granted_permission
 
-  # The retirement split, named once, on `ApiKey`'s rule: NO `default_scope` — each reader picks a
-  # side and says so. `revoked_at` is written by `revoke!` and never cleared.
-  scope :live, -> { where(revoked_at: nil) }
-  scope :revoked, -> { where.not(revoked_at: nil) }
+  # The retirement half — the `live`/`revoked` scopes, `revoke!`, `revoked?`,
+  # `revoked_and_still_presented?` and `touch_last_refused!` — is shared with the other key
+  # models; see `CredentialRetirement` for the rationale (including the NO `default_scope` rule,
+  # stated there once).
+  include CredentialRetirement
 
   # The LISTING boundary a repository-side reader asks (SPGD-989): the rows whose stored set names
   # this repository. The SQL half of `covers?` — same column, same question, one containment
@@ -194,47 +195,6 @@ class AgentApiKey < ApplicationRecord
 
   def touch_last_used!
     update_column(:last_used_at, Time.current)
-  end
-
-  # Retire this key: the token stops authenticating, and the ROW STAYS — the retirement pattern
-  # `ApiKey#revoke!` established and its comment argues for (a hard delete made a revoked token's
-  # 401 unreportable; keeping the row keeps the artifact the failure path needs). `update_column`
-  # rather than `save!` for the same reason: a stamp on existing state, not a validation event.
-  # Idempotent — FIRST REVOCATION WINS: a replayed revoke is a no-op and never re-stamps
-  # `revoked_at`. A replay IS reachable (the `/account` destroy looks the row up without the
-  # `live` scope), and a re-stamp would make `revoked_at` newer than `last_refused_at`,
-  # contradicting `revoked_and_still_presented?`'s "refusal stamp always postdates revocation"
-  # and losing the offboarding date.
-  def revoke!
-    update_column(:revoked_at, Time.current) unless revoked?
-    self
-  end
-
-  def revoked?
-    revoked_at.present?
-  end
-
-  # Whether a client is STILL PRESENTING this retired token — the pair `ApiKey` carries (SPGD-804's
-  # evidence half), ported so the third credential's refused presentations are attributable too:
-  # the failure path stamps the row the digest names, and this predicate says a stamp exists.
-  #
-  # The epistemics are the same as on `ApiKey`, read in the same direction: there is no ordering
-  # question here (a refusal can only be stamped on an already-revoked row, so the stamp always
-  # postdates the revocation) and there is no recovery — a revoked token never authenticates
-  # again, so the state has no window to clear and no threshold to cross. What the pair cannot
-  # prove is that a client is presenting the token AT THIS MOMENT: `last_refused_at` is the last
-  # time the platform saw it, so a decommissioned agent that gave up hours ago reads the same as
-  # one presenting right now. Every surface that renders this state serves the recency beside it
-  # rather than letting the badge claim a present tense the data does not carry.
-  def revoked_and_still_presented?
-    revoked? && last_refused_at.present?
-  end
-
-  # A stamp on existing state, not a validation event — `update_column`, the spelling `ApiKey`'s
-  # writer and this model's own `revoke!` both give for it. The failure path pays this, at most
-  # once per refused presentation.
-  def touch_last_refused!
-    update_column(:last_refused_at, Time.current)
   end
 
   # Safe to show anywhere: identifies the key without revealing it. Same construction as both
