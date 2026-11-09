@@ -140,6 +140,63 @@ RSpec.describe AgentApiKey do
     end
   end
 
+  # SPGD-2139 — the token-secrecy half the `ApiKey` and `UserApiKey` specs carry and this one
+  # lacked. Each example compares against an INDEPENDENT oracle (`OpenSSL::Digest` directly, the
+  # decoded byte length), never against `AgentApiKey.digest` or `token_digest.last(6)`, which a
+  # mutated digest function would satisfy by agreeing with itself.
+  describe "token secrecy" do
+    # @intent: { entity: "AgentApiKey", action: "store only the token digest", behavior: "a minted key persists the SHA-256 hex digest of its sga_ token in token_digest, never the token itself, and the table has no raw token column", layer: "unit" }
+    it "stores the SHA-256 hex digest of the token, never the token itself" do
+      key, _repository = owned_key
+
+      expect(key.raw_token).to start_with("sga_")
+      expect(key.token_digest).to eq(OpenSSL::Digest::SHA256.hexdigest(key.raw_token))
+      expect(key.token_digest).not_to include(key.raw_token)
+      expect(described_class.column_names).not_to include("token")
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "reveal the token once", behavior: "a key reloaded from the database by its digest has no raw_token, so the secret cannot be recovered after the mint response", layer: "unit" }
+    it "reveals the token once: a row reloaded by digest has no raw_token" do
+      raw = owned_key.first.raw_token
+      reloaded = described_class.find_by(token_digest: OpenSSL::Digest::SHA256.hexdigest(raw))
+
+      expect(reloaded).to be_present
+      expect(reloaded.raw_token).to be_nil
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "keep the hint from leaking the secret", behavior: "token_hint never contains the last six characters of the raw token, so the hint cannot expose the tail of a live secret", layer: "unit" }
+    it "does not let the hint carry the tail of the raw token" do
+      key, _repository = owned_key
+
+      expect(key.token_hint).not_to include(key.raw_token.last(6))
+    end
+
+    # @intent: { entity: "AgentApiKey", action: "mint token entropy", behavior: "the token body after the sga_ prefix decodes to exactly TOKEN_BYTES random bytes, so the entropy of a minted credential is pinned", layer: "unit" }
+    it "mints TOKEN_BYTES of entropy after the prefix" do
+      body = owned_key.first.raw_token.delete_prefix("sga_")
+
+      # The literal 24 is the independent oracle: comparing only against the constant would agree
+      # with a mutated TOKEN_BYTES, since the minter and the example would shrink together.
+      expect(described_class::TOKEN_BYTES).to eq(24)
+      expect(Base64.urlsafe_decode64(body).bytesize).to eq(24)
+    end
+
+    # The `||=` in `assign_token`: a `valid?` before `save` must not swap the token under someone
+    # who already read `raw_token`.
+    # @intent: { entity: "AgentApiKey", action: "keep the revealed token stable", behavior: "calling valid? before save! does not replace the token a caller already read, so the revealed token is the one that authenticates", layer: "unit" }
+    it "keeps the revealed token stable across a valid? before save" do
+      user = create_user
+      repository = create_repository(user: user)
+      key = user.agent_api_keys.new(name: "k", repository_ids: [repository.id], permissions: [])
+      key.valid?
+      first = key.raw_token
+      key.save!
+
+      expect(key.raw_token).to eq(first)
+      expect(described_class.authenticate(first)).to eq(key)
+    end
+  end
+
   describe ".authenticate" do
     it "resolves a live token to its key" do
       key, _repository = owned_key
@@ -149,6 +206,12 @@ RSpec.describe AgentApiKey do
 
     it "answers nil for a blank token" do
       expect(AgentApiKey.authenticate("")).to be_nil
+    end
+
+    it "refuses an unknown non-blank token" do
+      owned_key
+
+      expect(AgentApiKey.authenticate("sga_nope")).to be_nil
     end
 
     # The security half of retirement: `revoke!` keeps the row, so the filter has to keep the
